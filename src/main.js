@@ -6761,6 +6761,14 @@
       if (G.followShip && G.ship) G.cam.target = V.clone(G.ship.pos);
       return;
     }
+    /* Route this system's station berths ahead of any arrival, 3 ms a frame
+     * (Sim.warmTransfers): the first routed arrival at a berth used to pay
+     * its whole route search in the frame the rail first asked. The port
+     * she has targeted goes first. */
+    if (global.Sim && Sim.warmTransfers && G.sys) {
+      var navP = G.navTarget && G.navTarget.kind === 'body' && G.sys.byId ? G.sys.byId[G.navTarget.id] : null;
+      Sim.warmTransfers(G.sys, 3, navP && navP.docking ? navP : null);
+    }
 
     /* On foot: the walker takes the held keys; the world keeps running
      * with them hidden from the flight controls, so W is a step and not a

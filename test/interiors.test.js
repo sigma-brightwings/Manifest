@@ -164,8 +164,17 @@ console.log('--- the legs inside the station ---');
   console.log('  ' + berths + ' berths, ' + bad.length + ' with an inner leg through something, ' +
               blocked + ' with a leg no open route was found for');
   bad.forEach(function (s) { console.log('    ' + s); });
-  check('the berths with an inner leg through something are no more than the 55 measured 2026-11-03',
-        bad.length <= 55, bad.length + '');
+  /* 52 since the second pass (2026-11-03): the cylinders' arm bores whole
+   * again (glb2hulls clipBores had cut armBoreC away and opened the hub to
+   * space, so no cylinder bay could be routed and all of them were bridged
+   * in a straight line), each route riding its arm's car; and a transfer
+   * routed round the shut blast doors of bays it does not belong to
+   * (Render.routeDoors). What is left is listed above: the arm bores' hub
+   * ends, which open into the hub only through structure at the fleet's
+   * width, the skimmers' hoists, the yards' tracks, two spine-l berths and
+   * four cradle berths. */
+  check('the berths with an inner leg through something are no more than the 52 measured 2026-11-03 (55 before the second pass)',
+        bad.length <= 52, bad.length + '');
   check('no ring, refinery or small/medium spine berth has an inner leg through anything',
         !bad.some(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }),
         bad.filter(function (s) { return /^(ring|refinery)/.test(s) || /^spine-[ms] /.test(s); }).join('; '));
@@ -240,12 +249,19 @@ console.log('--- the lifts ---');
   check('an inclined car\'s deck lies under its box top', tilted.length > 0 && tilted.every(function (d) { return d > 0; }),
         tilted.map(function (d) { return d.toFixed(3); }).join(' '));
 
-  var cars = 0, notFlush = [], plated = [], pit = [], hatchBad = [], decorative = [];
+  /* EVERY car now (item 3, 2026-11-03), not only the ring's: the skimmer's
+   * sort lift and the spine's hub lift stopped 0.115 and 0.044-0.07 radii
+   * short of the deck above them and stood a car's thickness proud of the
+   * one below. Render.fitCarRuns refits each run to its decks (the car
+   * definitions as fitted are portDoors(id).cars); carShafts cuts both decks
+   * across the run, caps the lower end and puts a hatch in the upper one. */
+  var cars = 0, notFlush = [], plated = [], pit = [], hatchBad = [], fits = [];
   ORBITAL.forEach(function (id) {
     var raw = global.PortLib[id];
     if (!raw.cars || /-(navy|syn)-/.test(id)) return;
     var d = Render.portDoors(id);
-    raw.cars.forEach(function (c) {
+    fits.push(id + ': ' + (d.carFit || []).join(', '));
+    (d.cars || raw.cars).forEach(function (c) {
       cars++;
       var cx = (c.min[0] + c.max[0]) / 2, cy = (c.min[1] + c.max[1]) / 2;
       var w = c.max[0] - c.min[0], h = c.max[1] - c.min[1];
@@ -261,36 +277,72 @@ console.log('--- the lifts ---');
       }
       var tol = 0.004;
       var bR = beside(rest), bF = beside(far);
-      /* Only the cars something rides: the ring's. The skimmer's sort lift
-       * and the spine's hub lift are never ridden and stop 0.09-0.12 radii
-       * short of the deck above them (printed, left for the art). */
-      var ridden = /^ring/.test(id);
-      if (!ridden) { decorative.push(id + ' ' + c.node + ' far end ' + bF.toFixed(3) + ' off'); return; }
-      if (Math.abs(bR) > tol || Math.abs(bF) > tol) notFlush.push(id + ' rest ' + bR.toFixed(4) + ' far ' + bF.toFixed(4));
+      if (Math.abs(bR) > tol || Math.abs(bF) > tol) notFlush.push(id + ' ' + c.node + ' rest ' + bR.toFixed(4) + ' far ' + bF.toFixed(4));
       var inShaft = column([d.hull], cx, cy).filter(function (z) { return z > Math.min(rest, far) - 0.001 && z < Math.max(rest, far) + 0.001; });
-      if (inShaft.length) plated.push(id + ' ' + inShaft.length + ' surfaces across the run');
-      /* Nothing in the shaft under the cap: the old pit's walls and floor
-       * are gone for a run's tenth below it (the hull's own underside, a
+      if (inShaft.length) plated.push(id + ' ' + c.node + ' ' + inShaft.length + ' surfaces across the run');
+      /* The lower end: nothing in the shaft for a tenth of a run under the
+       * car's underside there but its cap (the hull's own underside, a
        * plate that spans far past the shaft, may lie further down). */
-      var capZ = Math.min(c.min[2], c.min[2] + c.d[2]);
+      var capZ = c.d[2] < 0 ? c.min[2] + c.d[2] : c.min[2];
       var below = column([d.hull], cx, cy).filter(function (z) { return z < capZ - 0.001 && z > capZ - Math.abs(c.d[2]) * 0.1; });
       var cap = d.leaves.filter(function (l) { return l.fixed && l.node === c.node + 'PitFloor'; }).length;
-      if (c.d[2] < 0 && (below.length || !cap)) pit.push(id + ' ' + below.length + ' under the far end, cap ' + cap);
-      d.leaves.filter(function (l) { return l.hatch && l.overCar === c.node; }).forEach(function (l) {
-        var home = Render.partState(l, { car: { node: c.node, f: 0 } }).hidden;
+      if (below.length || !cap) pit.push(id + ' ' + c.node + ' ' + below.length + ' under the lower end, cap ' + cap);
+      /* The hatch over the upper end: gone with the car at that end, shut
+       * with it anywhere else, and with no car pose at all (at rest). */
+      var hatches = d.leaves.filter(function (l) { return l.hatch && l.overCar === c.node; });
+      if (!hatches.length) hatchBad.push(id + ' ' + c.node + ' has no hatch over its upper end');
+      hatches.forEach(function (l) {
+        var end = l.hatchEnd || 0;
+        var there = Render.partState(l, { car: { node: c.node, f: end } }).hidden;
         var away = Render.partState(l, { car: { node: c.node, f: 0.5 } }).hidden;
         var noCar = Render.partState(l, {}).hidden;
-        if (!home || away || !noCar) hatchBad.push(id + ' ' + l.node);
+        if (!there || away || noCar !== (end === 0)) hatchBad.push(id + ' ' + l.node);
       });
     });
   });
   Render.assignPort(role, null);
   st.radius = R0;
-  console.log('  ' + cars + ' cars; never ridden: ' + decorative.join('; '));
-  check('a ridden car is flush with the deck beside its shaft at both ends', notFlush.length === 0, notFlush.join('; '));
-  check('nothing plates across a ridden car\'s run', plated.length === 0, plated.join('; '));
-  check('the pit under a downward run is cut away and capped flush', pit.length === 0, pit.join('; '));
-  check('the hatch over a shaft is gone with the car home and shut with it away', hatchBad.length === 0, hatchBad.join('; '));
+  console.log('  ' + cars + ' cars; fitted: ' + fits.join('; '));
+  check('every car is flush with the deck beside its shaft at both ends', cars >= 9 && notFlush.length === 0, notFlush.join('; '));
+  check('nothing plates across any car\'s run', plated.length === 0, plated.join('; '));
+  check('the lower end of every run is cut away and capped flush', pit.length === 0, pit.join('; '));
+  check('the hatch over every shaft\'s upper end is gone with the car there and shut with it away', hatchBad.length === 0, hatchBad.join('; '));
+})();
+
+/* ---- THE INCLINED BORES ARE WHOLE, AND END ON WHAT THEY MEET (items 1-2) ---
+ * glb2hulls clipBores cut a bore where its own centreline first "saw" open
+ * space, which on a cylinder is a third of the way along every arm: armBoreC
+ * kept 3 faces of ~140 between the hub and its pod, the hub's hole for it
+ * opened onto space, and no cylinder bay could be routed. Each bore end is
+ * now cut on the plane of the surface its walls cross there (the pod roof
+ * armBoreA used to hang 0.053 radii through). Every inclined car's bore has
+ * walls all along its run, in tenths. */
+console.log('--- the inclined bores are whole ---');
+(function () {
+  var broken = [], n = 0;
+  PLAIN.forEach(function (id) {
+    var lib = Render.libPort(id);
+    (lib.movers || []).forEach(function (m) {
+      if (!m.axis || !(Math.abs(m.axis[2]) > 0.3 && Math.abs(m.axis[2]) < 0.95) || !/^armBore/.test(m.node)) return;
+      n++;
+      /* Across the bore from its axis, four ways, at tenths of the run: a
+       * wall within 0.06 radii on at least three sides. */
+      var ax = m.axis, la = Math.abs(ax[2]) < 0.9 ? [ax[1], -ax[0], 0] : [1, 0, 0];
+      var ll = Math.sqrt(la[0] * la[0] + la[1] * la[1] + la[2] * la[2]);
+      la = [la[0] / ll, la[1] / ll, la[2] / ll];
+      var lb = [ax[1] * la[2] - ax[2] * la[1], ax[2] * la[0] - ax[0] * la[2], ax[0] * la[1] - ax[1] * la[0]];
+      var bins = [], r0 = m.range[0], r1 = m.range[1], ONLY = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+      for (var u = 0.15; u < 0.9; u += 0.1) {
+        var sv = r0 + (r1 - r0) * u, o = [m.mid[0] + ax[0] * sv, m.mid[1] + ax[1] * sv, m.mid[2] + ax[2] * sv], walls = 0;
+        [la, lb, [-la[0], -la[1], -la[2]], [-lb[0], -lb[1], -lb[2]]].forEach(function (d) {
+          if (Render.portSegmentHit(id, o, [o[0] + d[0] * 0.06, o[1] + d[1] * 0.06, o[2] + d[2] * 0.06], ONLY)) walls++;
+        });
+        bins.push(walls);
+      }
+      if (bins.some(function (w) { return w < 3; })) broken.push(id + ' ' + m.node + ' [' + bins.join(' ') + ']');
+    });
+  });
+  check('every arm bore has walls the whole length of its car\'s run', n >= 8 && broken.length === 0, n + ' bores; ' + broken.join('; '));
 })();
 
 /* ---- F: THE BLAST DOORS BETWEEN THE BERTHS AND THE STATION ----------------
@@ -439,6 +491,54 @@ console.log('--- no walls or floors drawn as sheets ---');
   });
   console.log('  ' + total + ' walls and floors thickened across ' + PLAIN.length + ' models');
   check('no wall or floor in any station mesh is a sheet', bad.length === 0, bad.join('; '));
+})();
+
+/* ---- ROUTED BEFORE SHE ARRIVES (item 10, 2026-11-03) -----------------------
+ * The first arrival at a routed berth paid its whole route search in one
+ * frame (0.1-1.1 s a berth in node, up to 4.4 s on a loaded box).
+ * Sim.warmTransfers routes a system's berths a few milliseconds a frame:
+ * the answer must be the one the cold path finds, nothing may be routed
+ * cold after it, and the work must actually come in slices. */
+console.log('--- routes warmed in slices ---');
+(function () {
+  var wsys = Gen.generateSystem('warm-sweep');
+  var ports = wsys.ports.filter(function (p) {
+    var r = Render.portModelFor(p);
+    return !p.surface && p.docking && r && global.PortLib[r] && /^(cylinder|cradle|spine)/.test(r);
+  }).slice(0, 2);
+  if (!ports.length) { check('a cylinder or cradle to warm', false); return; }
+  /* The cold answer first, then forgotten, so the warm-up has to find it. */
+  var cold = {}, routed = 0;
+  ports.forEach(function (p) {
+    var nb = Math.max(1, Gen.bayGeometry(p).berths);
+    for (var i = 0; i < nb; i++) {
+      if (!Gen.berthRoute(p, i)) continue;
+      routed++;
+      cold[p.id + '#' + i] = JSON.stringify(Sim.arrivalPath(p, i).through);
+    }
+    Sim.forgetTransfers(p);
+  });
+  var before = Sim.transferStats.cold, s0 = Sim.transferStats.slices, w0 = Sim.transferStats.warmed;
+  var frames = 0, worst = 0, two = { ports: ports };
+  for (;;) {
+    var t0 = Date.now(), left = Sim.warmTransfers(two, 3);
+    worst = Math.max(worst, Date.now() - t0);
+    frames++;
+    if (!left || frames > 100000) break;
+  }
+  var same = 0;
+  Object.keys(cold).forEach(function (k) {
+    var p = ports.filter(function (q) { return k.indexOf(q.id + '#') === 0; })[0], i = +k.split('#')[1];
+    if (JSON.stringify(Sim.arrivalPath(p, i).through) === cold[k]) same++;
+  });
+  console.log('  ' + routed + ' routed berths at ' + ports.map(function (p) { return p.name; }).join(', ') +
+              ': ' + frames + ' frames, ' + (Sim.transferStats.slices - s0) + ' slices, worst frame ' + worst + ' ms');
+  check('every routed berth is warmed', Sim.transferStats.warmed - w0 === routed, (Sim.transferStats.warmed - w0) + ' of ' + routed);
+  check('a warmed route is the route the cold path finds', same === routed, same + ' of ' + routed);
+  check('nothing is routed cold once the system is warm', Sim.transferStats.cold - before === 0,
+        (Sim.transferStats.cold - before) + ' cold');
+  check('the work comes in slices, many per route', Sim.transferStats.slices - s0 > routed * 20,
+        (Sim.transferStats.slices - s0) + ' slices');
 })();
 
 console.log('');

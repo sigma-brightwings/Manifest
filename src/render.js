@@ -7355,17 +7355,26 @@
   function openBucket(role, key) {
     var ck = role + '#' + key;
     if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];
+    return drainJob(openBucketJob(role, key));
+  }
+  /* In slices for Sim.warmTransfers (the triangle index asks for it). Not
+   * stored until it is finished, so a sync caller meanwhile builds its own. */
+  function* openBucketJob(role, key) {
+    var ck = role + '#' + key;
+    if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];
     var lib = libPort(role);
     var mesh = lib && lib[key];
     var d = portDoors(role);
     var apertures = d && d.apertures;
-    OPEN_BUCKET[ck] = mesh || null;
     if (!mesh || !mesh.f || !mesh.f.length || !apertures || !apertures.length) {
+      OPEN_BUCKET[ck] = mesh || null;
       return OPEN_BUCKET[ck];
     }
     var f = [], c = [], cut = 0;
     var cboxes = corridorBoxes(apertures, true);
+    yield 0;
     for (var i = 0; i < mesh.f.length; i++) {
+      if ((i & 1023) === 1023) yield 0;
       var face = mesh.f[i], x = 0, y = 0, z = 0;
       for (var k = 0; k < face.length; k++) {
         var v = mesh.v[face[k]]; x += v[0]; y += v[1]; z += v[2];
@@ -7377,10 +7386,18 @@
       f.push(face);
       if (mesh.c) c.push(mesh.c[i]);
     }
-    if (!cut) return OPEN_BUCKET[ck];
+    if (OPEN_BUCKET[ck] !== undefined) return OPEN_BUCKET[ck];   // built meanwhile
+    if (!cut) { OPEN_BUCKET[ck] = mesh; return mesh; }
     CUT_COUNT[role] = (CUT_COUNT[role] || 0) + cut;
     OPEN_BUCKET[ck] = { v: mesh.v, f: f, c: mesh.c ? c : mesh.c };
     return OPEN_BUCKET[ck];
+  }
+
+  /* Has the renderer already built this model's library and doors? Asked by
+   * Sim.warmTransfers, which routes only stations that are this far along,
+   * so that warming the routes never pays the model's own build as well. */
+  function portReady(role) {
+    return !!(role && PORT_CACHE[role] && PORT_DOORS[role] !== undefined);
   }
 
   function portDoors(role) {
@@ -7655,6 +7672,8 @@
     }
 
     if (!out.length) return null;
+    var fitted = fitCarRuns(shell, hullF, out, carDefs);
+    carDefs = fitted.defs;
     hullF = carShafts(shell, hullF, hullC, out, carDefs);
     hullC = hullF.c; hullF = hullF.f;
     /* ---- AND THE DOORWAY IS A HOLE ------------------------------------
@@ -7794,7 +7813,10 @@
     PORT_DOORS[role] = {
       hull: { v: shell.v, f: hullF, c: hullC },
       leaves: out,
-      apertures: apertures
+      apertures: apertures,
+      /* The cars' runs as fitted to their decks (fitCarRuns), and why any
+       * was left alone. */
+      cars: carDefs, carFit: fitted.report
     };
     return PORT_DOORS[role];
   }
@@ -7828,6 +7850,182 @@
    * Returns { f, c }, the hull's faces with the cut made. */
   var SHAFT_INSET = 0.03;              // of the car's footprint, so the shaft walls stay
   var SHAFT_CAP = 0.003;               // radii: the new pit floor's own thickness
+
+  /* ---- EVERY CAR'S RUN ENDS ON A DECK (2026-11-03) ----------------------
+   *
+   * The ring's lift ran deck to deck; the skimmer's sort lift and the
+   * spine's hub lift did not. The art's `motion` stops each of them in
+   * mid-air: the sort lift's car rises 34 m up its guides and stops 0.115
+   * radii (18 m at skimmer-m) under the sort hall's roof, the hub lift's
+   * 22 m up from the hub floor and 0.09 radii under the hub's crown — a
+   * platform hanging at the top of a frame, going nowhere. And both cars
+   * stand ON their floor, a car's thickness proud of it, where the ring's
+   * sits IN its deck.
+   *
+   * So each declared car's run is refitted to the decks beside its shaft,
+   * measured, not assumed: four columns just outside the car's footprint,
+   * the horizontal surfaces in each. The LOWER end's car top is put level
+   * with the deck it stands in (the surface nearest it), and the UPPER
+   * end's level with the TOP of the first plate above the run — the deck
+   * over the shaft, which the car rises into and becomes the floor of.
+   * Both are the median of the columns that found one, and a change is
+   * taken only if it is small against the run (the plate has to be there
+   * on at least two sides). The ring's run already ends on both decks, and
+   * is unchanged by this to a hundred-thousandth.
+   *
+   * carShafts then cuts both decks across the run, caps the lower end at
+   * the car's underside, and a hatch is built into the upper deck's
+   * aperture wherever the art has none, shut while the car is away from
+   * that end (`hatchEnd`, see partState). Returns fitted COPIES of the
+   * car definitions: PortLib's own are never written. */
+  var CAR_FIT_MAX = 0.2;               // radii: the most a run end may move
+  function fitCarRuns(shell, hullF, out, carDefs) {
+    var defs = [], report = [];
+    /* Horizontal faces only, with their boxes, once. */
+    var flat = [];
+    for (var f = 0; f < hullF.length; f++) {
+      var fc = hullF[f];
+      if (fc.length < 3) continue;
+      var a = shell.v[fc[0]], b = shell.v[fc[1]], c = shell.v[fc[2]];
+      var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+      var nx = e1[1] * e2[2] - e1[2] * e2[1], ny = e1[2] * e2[0] - e1[0] * e2[2], nz = e1[0] * e2[1] - e1[1] * e2[0];
+      var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+      if (Math.abs(nz / nl) < 0.9) continue;
+      flat.push(fc);
+    }
+    function column(x, y) {
+      var zs = [];
+      for (var q = 0; q < flat.length; q++) {
+        var t = flat[q];
+        for (var j = 1; j + 1 < t.length; j++) {
+          var A = shell.v[t[0]], B = shell.v[t[j]], C = shell.v[t[j + 1]];
+          if (Math.max(A[0], B[0], C[0]) < x || Math.min(A[0], B[0], C[0]) > x ||
+              Math.max(A[1], B[1], C[1]) < y || Math.min(A[1], B[1], C[1]) > y) continue;
+          var d0 = (B[0] - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (B[1] - A[1]);
+          if (Math.abs(d0) < 1e-14) continue;
+          var u = ((x - A[0]) * (C[1] - A[1]) - (C[0] - A[0]) * (y - A[1])) / d0;
+          var v = ((B[0] - A[0]) * (y - A[1]) - (x - A[0]) * (B[1] - A[1])) / d0;
+          if (u < 0 || v < 0 || u + v > 1) continue;
+          zs.push(A[2] + u * (B[2] - A[2]) + v * (C[2] - A[2]));
+        }
+      }
+      return zs.sort(function (p, q) { return p - q; });
+    }
+    function median(list) {
+      if (list.length < 2) return null;
+      list.sort(function (p, q) { return p - q; });
+      return list[(list.length - 1) >> 1];
+    }
+    for (var i = 0; i < carDefs.length; i++) {
+      var cd = carDefs[i];
+      var cp = { node: cd.node, key: cd.key, min: cd.min && cd.min.slice(), max: cd.max && cd.max.slice(),
+                 mid: cd.mid && cd.mid.slice(), d: cd.d && cd.d.slice() };
+      defs.push(cp);
+      if (!cp.min || !cp.max || !cp.d || Math.abs(cp.d[0]) + Math.abs(cp.d[1]) > 1e-9 || !cp.d[2]) continue;
+      /* A car the art already gave a hatch is a run the art fitted (the
+       * ring's: ridden by every routed ring arrival, its stops measured and
+       * held by Sim.liftRide). Left exactly as drawn. Measured, its top
+       * sits 0.002-0.003 radii under the top of the deck plate it rests in
+       * - inside the plate, not proud of it. */
+      var artHatch = false;
+      for (var hq = 0; hq < out.length; hq++) {
+        var hl0 = out[hq];
+        if (!hl0.hatch || !hl0.mesh) continue;
+        var hx0 = 0, hy0 = 0, hn0 = 0;
+        hl0.mesh.f.forEach(function (face) { face.forEach(function (k) { var v = hl0.mesh.v[k]; if (v) { hx0 += v[0]; hy0 += v[1]; hn0++; } }); });
+        if (hn0 && hx0 / hn0 >= cp.min[0] && hx0 / hn0 <= cp.max[0] && hy0 / hn0 >= cp.min[1] && hy0 / hn0 <= cp.max[1]) artHatch = true;
+      }
+      if (artHatch) { report.push(cd.node + ' as the art has it (its own hatch)'); continue; }
+      var w = cp.max[0] - cp.min[0], h = cp.max[1] - cp.min[1], cx = (cp.min[0] + cp.max[0]) / 2,
+          cy = (cp.min[1] + cp.max[1]) / 2, thick = cp.max[2] - cp.min[2], run = Math.abs(cp.d[2]);
+      var cols = [[cp.min[0] - w * 0.15, cy], [cp.max[0] + w * 0.15, cy], [cx, cp.min[1] - h * 0.15], [cx, cp.max[1] + h * 0.15]]
+        .map(function (pt) { return column(pt[0], pt[1]); });
+      var restTop = cp.max[2], farTop = cp.max[2] + cp.d[2];
+      var up = cp.d[2] > 0, lowTop = up ? restTop : farTop, highTop = up ? farTop : restTop;
+      /* The lower end: the surface nearest the car's top. */
+      var lows = [], highs = [], plate = [];
+      cols.forEach(function (zs) {
+        var best = null;
+        zs.forEach(function (z) { if (Math.abs(z - lowTop) < Math.max(0.01, thick * 3) && (best === null || Math.abs(z - lowTop) < Math.abs(best - lowTop))) best = z; });
+        if (best !== null) lows.push(best);
+        /* The upper end: the first plate above the top of the run (or AT
+         * it, within a car's thickness), and that plate's top. */
+        for (var k = 0; k < zs.length; k++) {
+          if (zs[k] < highTop - Math.max(1e-4, thick * 0.5)) continue;
+          if (zs[k] - highTop > CAR_FIT_MAX) break;
+          var top = zs[k];
+          for (var k2 = k + 1; k2 < zs.length && zs[k2] - zs[k] < 0.008; k2++) top = zs[k2];
+          highs.push(top); plate.push(top - zs[k]);
+          break;
+        }
+      });
+      var lowDeck = median(lows), highDeck = median(highs), plateT = median(plate);
+      if (lowDeck === null || highDeck === null || !(highDeck > lowDeck)) {
+        report.push(cd.node + ' left as it is (no deck on two sides of both ends)');
+        continue;
+      }
+      var shift = (up ? lowDeck : highDeck) - restTop;          // the rest pose moves by this
+      var newD = (up ? highDeck : lowDeck) - (restTop + shift);
+      if (Math.abs(shift) > CAR_FIT_MAX || Math.abs(newD - cp.d[2]) > CAR_FIT_MAX || newD * cp.d[2] <= 0) {
+        report.push(cd.node + ' left as it is (the decks are too far from its run)');
+        continue;
+      }
+      cp.min[2] += shift; cp.max[2] += shift; cp.mid[2] += shift; cp.d[2] = newD;
+      cp.restShift = shift; cp.upperDeck = highDeck; cp.plate = Math.max(plateT || 0, 0.0015);
+      cp.hatchEnd = up ? 1 : 0;
+      report.push(cd.node + ' rest ' + (shift >= 0 ? '+' : '') + shift.toFixed(4) + ', run ' + cd.d[2].toFixed(4) + ' -> ' + newD.toFixed(4));
+      /* The car's own leaf: its travel, and its rest pose moved by `shift`
+       * into vertices of its own (a leaf's array is the whole shell's). */
+      for (var o = 0; o < out.length; o++) {
+        var lf = out[o];
+        if (!lf.car || lf.node !== cd.node) continue;
+        lf.axis = [0, 0, newD > 0 ? 1 : -1];
+        lf.travel = Math.abs(newD);
+        if (Math.abs(shift) > 1e-9) {
+          var nv = [], map = {};
+          lf.mesh.f = lf.mesh.f.map(function (face) {
+            return face.map(function (k) {
+              if (map[k] === undefined) { var p = shell.v[k]; map[k] = nv.length; nv.push([p[0], p[1], p[2] + shift]); }
+              return map[k];
+            });
+          });
+          lf.mesh.v = nv;
+        }
+      }
+    }
+    return { defs: defs, report: report };
+  }
+
+  /* A flat convex polygon minus an axis-aligned rectangle, as up to four
+   * convex pieces: the plane outside the rectangle is the strips x < x0 and
+   * x > x1, and between them y < y0 and y > y1. Each is a clip by two or
+   * three half-planes (Sutherland-Hodgman); z is carried by interpolation. */
+  function clipHalf(poly, ax, k, keepBelow) {
+    var outp = [];
+    for (var i = 0; i < poly.length; i++) {
+      var A = poly[i], B = poly[(i + 1) % poly.length];
+      var ia = keepBelow ? A[ax] <= k : A[ax] >= k, ib = keepBelow ? B[ax] <= k : B[ax] >= k;
+      if (ia) outp.push(A);
+      if (ia !== ib) {
+        var t = (k - A[ax]) / (B[ax] - A[ax]);
+        outp.push([A[0] + (B[0] - A[0]) * t, A[1] + (B[1] - A[1]) * t, A[2] + (B[2] - A[2]) * t]);
+      }
+    }
+    return outp;
+  }
+  function outsideRect(poly, x0, x1, y0, y1) {
+    var pieces = [clipHalf(poly, 0, x0, true), clipHalf(poly, 0, x1, false)];
+    var mid = clipHalf(clipHalf(poly, 0, x0, false), 0, x1, true);
+    pieces.push(clipHalf(mid, 1, y0, true), clipHalf(mid, 1, y1, false));
+    return pieces.filter(function (pc) {
+      if (pc.length < 3) return false;
+      var ar = 0;
+      for (var i = 1; i + 1 < pc.length; i++) {
+        ar += Math.abs((pc[i][0] - pc[0][0]) * (pc[i + 1][1] - pc[0][1]) - (pc[i + 1][0] - pc[0][0]) * (pc[i][1] - pc[0][1]));
+      }
+      return ar > 1e-12;
+    });
+  }
 
   function carShafts(shell, hullF, hullC, out, carDefs) {
     var cars = [];
@@ -7879,17 +8077,50 @@
           continue;
         }
         if (flat && pz > T.lo - 0.002 && pz < T.hi + 0.002) cut = true;          // plating across the run
+        if (cut) break;
         if (T.down && isFinite(T.pitLo) && pz < T.farBot - 1e-4 && pz > T.pitLo - SHAFT_CAP * 2) cut = true;
       }
       if (cut) continue;
+      /* A DECK DRAWN AS ONE BIG PLATE (the sort hall's floor and roof, the
+       * hub's floor and crown: one quad from wall to wall) has its middle
+       * out of the shaft, so the centroid test above keeps it whole and the
+       * car runs through it. Such a face is cut round the shaft instead:
+       * what lies outside the footprint is kept, as new triangles on new
+       * vertices (appended: the vertex array is shared with every leaf). */
+      if (flat) {
+        var hole = null;
+        for (var s4 = 0; s4 < shafts.length && !hole; s4++) {
+          var W = shafts[s4];
+          if (pz < W.lo - 0.002 || pz > W.hi + 0.002) continue;
+          var bx0 = Infinity, bx1 = -Infinity, by0 = Infinity, by1 = -Infinity;
+          for (var kq = 0; kq < fc.length; kq++) {
+            var vq = shell.v[fc[kq]];
+            bx0 = Math.min(bx0, vq[0]); bx1 = Math.max(bx1, vq[0]); by0 = Math.min(by0, vq[1]); by1 = Math.max(by1, vq[1]);
+          }
+          if (bx1 > W.x0 && bx0 < W.x1 && by1 > W.y0 && by0 < W.y1) hole = W;
+        }
+        if (hole) {
+          var poly = fc.map(function (k) { return shell.v[k]; });
+          outsideRect(poly, hole.x0, hole.x1, hole.y0, hole.y1).forEach(function (pc) {
+            if (pc.length < 3) return;
+            var base = shell.v.length;
+            pc.forEach(function (pt) { shell.v.push(pt); });
+            for (var tk = 1; tk + 1 < pc.length; tk++) { keepF.push([base, base + tk, base + tk + 1]); keepC.push(hullC[f]); }
+          });
+          continue;
+        }
+      }
       keepF.push(fc); keepC.push(hullC[f]);
     }
     /* The new floor under a run downward: a slab at the car's own
-     * underside, the shaft's footprint, SHAFT_CAP thick. */
+     * underside, the shaft's footprint, SHAFT_CAP thick. And under a run
+     * UPWARD, at the car's underside at rest: the deck it stands in is cut
+     * across the run (plating above), so without a cap the hole would go
+     * on down through the deck (the sort lift, the hub lift). */
     shafts.forEach(function (S) {
-      if (!S.down || !isFinite(S.pitLo)) return;
+      if (S.down ? !isFinite(S.pitLo) : !(S.c.restShift !== undefined)) return;
       var c = S.c, m = { v: [], f: [], c: [] };
-      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, S.farBot - SHAFT_CAP / 2];
+      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, (S.down ? S.farBot : c.min[2]) - SHAFT_CAP / 2];
       pushBox(m, o, [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0, SHAFT_CAP / 2,
               (c.max[0] - c.min[0]) * 0.53, (c.max[1] - c.min[1]) * 0.53, '#3b434d');
       out.push({ node: c.node + 'PitFloor', mesh: m, box: null, axis: [0, 0, 0], travel: 0,
@@ -7914,6 +8145,25 @@
         if (hx >= U.min[0] && hx <= U.max[0] && hy >= U.min[1] && hy <= U.max[1]) hl.overCar = U.node;
       }
     }
+    /* A hatch in the upper deck where the art drew none (fitCarRuns): the
+     * aperture's footprint, the plate's thickness, its top flush with the
+     * deck, shut while the car is away from that end. */
+    shafts.forEach(function (S) {
+      var c = S.c;
+      if (typeof c.upperDeck !== 'number') return;
+      for (var q = 0; q < out.length; q++) if (out[q].hatch && out[q].overCar === c.node) return;
+      var m = { v: [], f: [], c: [] }, th = c.plate;
+      var o = [(c.min[0] + c.max[0]) / 2, (c.min[1] + c.max[1]) / 2, c.upperDeck - th / 2];
+      pushBox(m, o, [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0, th / 2,
+              (c.max[0] - c.min[0]) * 0.5, (c.max[1] - c.min[1]) * 0.5, '#4a525c');
+      /* Caution bands across it, so a shut hatch reads as a hatch. */
+      for (var bnd = -2; bnd <= 2; bnd += 2) {
+        pushBox(m, [o[0], o[1] + (c.max[1] - c.min[1]) * 0.2 * bnd, o[2]], [0, 0, 1], [1, 0, 0], [0, 1, 0], 0, 0, 0,
+                th * 0.52, (c.max[0] - c.min[0]) * 0.46, (c.max[1] - c.min[1]) * 0.04, '#d9a92a');
+      }
+      out.push({ node: c.node + 'Hatch', mesh: m, box: null, axis: [0, 0, 0], travel: 0, field: false,
+                 berthMid: null, built: true, hatch: true, overCar: c.node, hatchEnd: c.hatchEnd });
+    });
     return { f: keepF, c: keepC };
   }
 
@@ -9055,8 +9305,12 @@
        * in it, shut once the car has left. The same `car.f` the car is
        * drawn at, so the two are driven by one number and a car can never
        * come up through a shut hatch. Closed-form, by the rail's legs. */
+      /* `hatchEnd`: which end of the run the hatch is at, 0 the car's rest
+       * (the ring's, in the deck it starts in) or 1 the far end (a lift
+       * whose upper deck is where it goes to). */
       var cc = doors && doors.car;
-      var away = (cc && cc.node === lf.overCar) ? cc.f : 0;
+      var at = (cc && cc.node === lf.overCar) ? Math.max(0, Math.min(1, cc.f)) : 0;
+      var away = Math.abs(at - (lf.hatchEnd || 0));
       return { f: 0, hidden: !(away > HATCH_SHUT_AT) };
     }
     if (lf.hatch) {
@@ -9310,8 +9564,9 @@
 
   /* Every triangle of every bucket that could possibly be within reach of
    * the park point, flattened once so the 144 rays share the work. */
-  function boomTris(lib, o) {
-    var out = [], keys = ['shell', 'interior', 'spin'];
+  function boomTris(lib, o) { return drainJob(boomTrisJob(lib, o)); }
+  function* boomTrisJob(lib, o) {
+    var out = [], keys = ['shell', 'interior', 'spin'], work = 0;
     for (var k = 0; k < keys.length; k++) {
       /* The boom takes the shell WHOLE, doors included at their modelled
        * place. A camera should stand back from a doorway whether the leaf
@@ -9319,6 +9574,7 @@
       var m = lib[keys[k]];
       if (!m || !m.f) continue;
       for (var i = 0; i < m.f.length; i++) {
+        if (++work > 15000) { work = 0; yield 0; }
         var tri = m.f[i];
         for (var j = 1; j + 1 < tri.length; j++) {
           var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
@@ -9383,7 +9639,20 @@
    * the box; nothing else in the library is further out than that. */
   var DECK_UNDER_BOX = 0.03, DECK_UNDER_PLATE = 0.004;
 
+  /* Run in slices by Sim.warmTransfers (2026-11-03): 162 casts down and up
+   * a big model's triangles is 40-170 ms for one berth, paid in the frame
+   * that first asked where the berth's deck is. berthDeck drains it at once. */
   function berthDeck(role, i) {
+    var job = berthDeckJob(role, i);
+    return drainJob(job);
+  }
+  function berthDeckReady(role, i) {
+    var lib = libPort(role), mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return true;
+    var k = ((i % mb.length) + mb.length) % mb.length;
+    return DECK[role + '#' + k] !== undefined;
+  }
+  function* berthDeckJob(role, i) {
     var lib = libPort(role);
     var mb = lib && lib.anchors && lib.anchors.berths;
     if (!mb || !mb.length) return null;
@@ -9400,7 +9669,8 @@
     /* Start a hair under the box's own ceiling so the cast begins in the
      * open air of the alcove rather than on the lid of the box. */
     var o = [b.mid[0], b.mid[1], b.max[2] - 1e-4];
-    var T = boomTris(lib, o);
+    var T = yield* boomTrisJob(lib, o);
+    yield 0;
     /* NINE CASTS, NOT ONE, and the MEDIAN of what they hit (24-09). The
      * centreline alone fell through the hole a lift platform leaves in the
      * ring's decks and read the plate under it as the floor, which parked
@@ -9473,6 +9743,7 @@
         var floorPick = null, floorRoom = -1;
         for (var st = 0; st <= STEPS; st++) {
           var sz = TOP - (TOP - b.min[2]) * st / STEPS;
+          yield 0;
           var dn = castZ([cx, cy, sz], -1);
           if (!isFinite(dn)) continue;
           var zc = sz - dn;
@@ -9490,6 +9761,7 @@
           var kz = zc.toFixed(5);
           if (seen[kz]) continue;
           seen[kz] = true;
+          yield 0;
           var up = castZ([cx, cy, zc + 1e-4], 1);
           if (!isFinite(up)) up = 1;
           if (up > room + 1e-6) { room = up; pick = zc; }
@@ -9747,11 +10019,20 @@
   var TRI_N = 32;
   var TRIDEX = {};
 
+  /* Built in slices too (Sim.warmTransfers, 2026-11-03): 30-150 ms for a
+   * big model, which the warm-up must not pay in one frame. portTriangles
+   * drains the same job at once; a job half-done by the warm-up is simply
+   * finished. */
+  var TRI_JOBS = {};
   function portTriangles(role) {
     if (TRIDEX[role] !== undefined) return TRIDEX[role];
-    TRIDEX[role] = null;
+    return drainJob(TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
+  }
+  function* trianglesJob(role) {
+    if (TRIDEX[role] !== undefined) return TRIDEX[role];
     var lib = libPort(role);
-    if (!lib) return null;
+    if (!lib) { TRIDEX[role] = null; delete TRI_JOBS[role]; return null; }
+    var work = 0;
 
     /* THE HULL WITHOUT ITS DOOR LEAVES. They used to be in here, baked at
      * their CLOSED position, which made a shut door solid by accident and
@@ -9761,10 +10042,14 @@
     var d0 = portDoors(role);
     var tri = [], keys = ['shell', 'interior', 'spin'];
     var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    var runs = [];                       // which bucket each run of tri is (a sweep's question)
     for (var k = 0; k < keys.length; k++) {
-      var m = (keys[k] === 'shell' && d0) ? d0.hull : openBucket(role, keys[k]);
+      var m = (keys[k] === 'shell' && d0) ? d0.hull : (yield* openBucketJob(role, keys[k]));
       if (!m || !m.v || !m.f) continue;
+      runs.push({ key: keys[k], from: tri.length });
+      yield 0;
       for (var i = 0; i < m.f.length; i++) {
+        if (++work > 3000) { work = 0; yield 0; }
         var f = m.f[i];
         for (var j = 1; j + 1 < f.length; j++) {
           var a = m.v[f[0]], b = m.v[f[j]], c = m.v[f[j + 1]];
@@ -9778,7 +10063,8 @@
         }
       }
     }
-    if (!tri.length) return null;
+    if (!tri.length) { TRIDEX[role] = null; delete TRI_JOBS[role]; return null; }
+    yield 0;
 
     var N = TRI_N, size = [0, 0, 0], inv = [0, 0, 0];
     for (var ax2 = 0; ax2 < 3; ax2++) {
@@ -9796,6 +10082,9 @@
         c0[ax3] = clamp(Math.floor((Math.min(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
         c1[ax3] = clamp(Math.floor((Math.max(p0[ax3], p1[ax3], p2[ax3]) - lo[ax3]) * inv[ax3]));
       }
+      /* Counted in bins touched: one big plate can sit in thousands. */
+      work += 4 + (c1[0] - c0[0] + 1) * (c1[1] - c0[1] + 1) * (c1[2] - c0[2] + 1);
+      if (work > 6000) { work = 0; yield 0; }
       for (var x = c0[0]; x <= c1[0]; x++) {
         for (var y = c0[1]; y <= c1[1]; y++) {
           for (var z = c0[2]; z <= c1[2]; z++) {
@@ -9806,8 +10095,9 @@
         }
       }
     }
-    TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0,
+    TRIDEX[role] = { n: N, lo: lo, inv: inv, tri: tri, bins: bins, mark: 0, runs: runs,
                      seen: new Int32Array(tri.length / 3) };
+    delete TRI_JOBS[role];
     return TRIDEX[role];
   }
 
@@ -9901,8 +10191,10 @@
       if (lf.inner) {
         /* A blast door between a berth and the station: shut unless this is
          * the berth whose airlock is cycling, then as far as its inner gate
-         * is (innerGateLeaves). Not part of any one doorway's question. */
-        if (doors && doors.onlyMine) continue;
+         * is (innerGateLeaves). Not part of any one doorway's question -
+         * except a route's (`routeInner`, routeDoors): the bays a transfer
+         * does not belong to keep theirs shut, and it must go round. */
+        if (doors && doors.onlyMine && !doors.routeInner) continue;
         f = innerLeafOpen(lf, doors);
       } else if (lf.car || lf.hatch) {
         /* Neither is a door leaf, so a question about one doorway leaves
@@ -9946,7 +10238,10 @@
         var face = m.f[fi];
         for (var j = 1; j + 1 < face.length; j++) {
           var h = segTri(a2, b2, m.v[face[0]], m.v[face[j]], m.v[face[j + 1]]);
-          if (h && (!best || h.t < best.t)) best = h;
+          /* Which part was hit, for a sweep that has to say what is in the
+           * way (a car, a hatch, a neighbour's leaf) and not just that
+           * something is. */
+          if (h && (!best || h.t < best.t)) { best = h; best.part = lf.node; }
         }
       }
     }
@@ -9979,7 +10274,7 @@
      * once, without clearing an array of 32768 bins between calls. */
     ix.mark++;
     var mark = ix.mark, seen = ix.seen;
-    var best = Infinity, bn = null;
+    var best = Infinity, bn = null, bt = -1;
     for (var x = c0[0]; x <= c1[0]; x++) {
       for (var y = c0[1]; y <= c1[1]; y++) {
         for (var z = c0[2]; z <= c1[2]; z++) {
@@ -10008,7 +10303,7 @@
             if (vv < -1e-6 || u + vv > 1 + 1e-6) continue;
             var tt = (e2x * qx + e2y * qy + e2z * qz) * f;
             if (tt < 0 || tt > 1 || tt >= best) continue;
-            best = tt;
+            best = tt; bt = t0;
             var nx = e1y * e2z - e1z * e2y,
                 ny = e1z * e2x - e1x * e2z,
                 nz = e1x * e2y - e1y * e2x;
@@ -10022,7 +10317,9 @@
         }
       }
     }
-    var hull = bn ? { t: best, normal: bn } : null;
+    /* `tri`: which triangle (an index into ix.tri), so a sweep can name the
+     * bucket and the place it hit rather than only that something is there. */
+    var hull = bn ? { t: best, normal: bn, tri: bt } : null;
     /* AND THE DOORS, which the index cannot hold because they move. Nearest
      * of the two wins, so a leaf sliding shut in front of you stops you
      * before the wall behind it does. */
@@ -10059,6 +10356,17 @@
    * new polyline, ends unchanged, and `.blocked`, the number of legs that
    * could not be cleared (kept as they were). */
   var ROUTE_DOORS = { open: 1, inner: 1, onlyMine: true, berthMid: [9, 9, 9] };
+  /* A transfer's doors (2026-11-03): every outer door, car and hatch out of
+   * the question as before, and the blast doors of the two bays it runs
+   * between open - every OTHER bay's shut, which is how the airlock poses
+   * them on the way through. A route through a third bay's hall used to be
+   * found through its blast door (cradle-s, once its hoist bore was whole
+   * again: the leg from berthLBeta's side ran through its shut inner gate). */
+  function routeDoors(entryMid, destMid) {
+    if (!entryMid && !destMid) return ROUTE_DOORS;
+    return { open: 1, inner: 1, onlyMine: true, routeInner: true, berthMid: entryMid || [9, 9, 9],
+             innerTo: 1, innerToMid: destMid || null };
+  }
   var ROUTE_CELLS = 6e5;               // the most cells one leg's grid may have
 
   function routeOffsets(a, b, half) {
@@ -10077,19 +10385,34 @@
             [u[0] * h, u[1] * h, u[2] * h], [-u[0] * h * 0.6, -u[1] * h * 0.6, -u[2] * h * 0.6]];
   }
 
-  function routeLegClear(role, a, b, half) {
+  function routeLegClear(role, a, b, half, doors) {
     var offs = routeOffsets(a, b, half);
     for (var i = 0; i < offs.length; i++) {
       var o = offs[i];
       if (portSegmentHit(role, [a[0] + o[0], a[1] + o[1], a[2] + o[2]],
-                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], ROUTE_DOORS)) return false;
+                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], doors || ROUTE_DOORS)) return false;
     }
     return true;
   }
 
-  function routeLeg(role, a, b, half, grow, tight) {
+  /* IN SLICES (2026-11-03). A leg's grid search is 0.3-2 s at a big station
+   * (measured in node: cylinder-s at 5.99 km, 2.1 s of routeLeg over four
+   * berths), which was paid in one frame the first time a hull was routed to
+   * a berth. So the search is a generator that yields every ROUTE_SLICE units
+   * of work: clearRoute drains it at once as before, and Sim.warmTransfers
+   * drains it a few milliseconds a frame after system entry. Same answer
+   * either way - nothing here depends on when it is run. */
+  var ROUTE_SLICE = 6000;
+  function drainJob(gen) {
+    var r;
+    do { r = gen.next(); } while (!r.done);
+    return r.value;
+  }
+  function routeLeg(role, a, b, half, grow, tight, doors) { return drainJob(routeLegJob(role, a, b, half, grow, tight, doors)); }
+  function* routeLegJob(role, a, b, half, grow, tight, doors) {
     var ix = portTriangles(role);
     if (!ix) return null;
+    var work = 0;
     var span = Math.max(half.w, half.h);
     var len = Math.sqrt(Math.pow(b[0] - a[0], 2) + Math.pow(b[1] - a[1], 2) + Math.pow(b[2] - a[2], 2));
     var margin = Math.max(span * 12, len * (grow || 0.35));
@@ -10131,6 +10454,8 @@
           e = Math.max(e, Math.abs(p1[k] - p0[k]), Math.abs(p2[k] - p0[k]), Math.abs(p2[k] - p1[k]));
         }
         var ns = Math.min(512, Math.max(1, Math.ceil(e * inv * 2)));
+        work += ns * ns / 2 + 8;
+        if (work > ROUTE_SLICE) { work = 0; yield 0; }
         for (var i = 0; i <= ns; i++) {
           for (var j = 0; i + j <= ns; j++) {
             var u = i / ns, v = j / ns;
@@ -10144,11 +10469,39 @@
       }
     }
 
+    /* And the shut blast doors of other bays, when the route is asked with
+     * them (routeDoors): walls like any other. */
+    var dd = doors && doors.routeInner ? portDoors(role) : null;
+    for (var li = 0; dd && li < dd.leaves.length; li++) {
+      var lfr = dd.leaves[li];
+      if (!lfr.inner || innerLeafOpen(lfr, doors) >= 0.5) continue;
+      var lm = lfr.mesh;
+      for (var lfi = 0; lfi < lm.f.length; lfi++) {
+        var lface = lm.f[lfi];
+        for (var lj = 1; lj + 1 < lface.length; lj++) {
+          var q0 = lm.v[lface[0]], q1 = lm.v[lface[lj]], q2 = lm.v[lface[lj + 1]];
+          var le = 0;
+          for (var lk = 0; lk < 3; lk++) le = Math.max(le, Math.abs(q1[lk] - q0[lk]), Math.abs(q2[lk] - q0[lk]), Math.abs(q2[lk] - q1[lk]));
+          var lns = Math.min(512, Math.max(1, Math.ceil(le * inv * 2)));
+          for (var li2 = 0; li2 <= lns; li2++) for (var lj2 = 0; li2 + lj2 <= lns; lj2++) {
+            var lu = li2 / lns, lv = lj2 / lns;
+            var lx = Math.floor((q0[0] + (q1[0] - q0[0]) * lu + (q2[0] - q0[0]) * lv - lo[0]) * inv);
+            var ly = Math.floor((q0[1] + (q1[1] - q0[1]) * lu + (q2[1] - q0[1]) * lv - lo[1]) * inv);
+            var lz = Math.floor((q0[2] + (q1[2] - q0[2]) * lu + (q2[2] - q0[2]) * lv - lo[2]) * inv);
+            if (lx >= 0 && ly >= 0 && lz >= 0 && lx < NX && ly < NY && lz < NZ) wall[at(lx, ly, lz)] = 1;
+          }
+        }
+      }
+      yield 0;
+    }
+
     /* Grown by her half-extent: steps to the nearest surface, out to `grow`. */
     var reach = tight ? 0 : Math.max(1, Math.ceil(span * inv));
     var dist = new Uint8Array(NN).fill(255), qu = new Int32Array(NN), qh = 0, qt = 0;
     for (var w0 = 0; w0 < NN; w0++) if (wall[w0]) { dist[w0] = 0; qu[qt++] = w0; }
+    work += NN / 8;
     while (qh < qt) {
+      if (++work > ROUTE_SLICE) { work = 0; yield 0; }
       var c = qu[qh++], dn = dist[c] + 1;
       if (dn > reach + 3) continue;
       var cz = (c / NXY) | 0, cr = c - cz * NXY, cy = (cr / NX) | 0, cx = cr - cy * NX;
@@ -10217,6 +10570,7 @@
     push(sq, hcost(ca[0], ca[1], ca[2]));
     var found = false, steps = 0;
     while (heap.length && steps < ROUTE_CELLS) {
+      if ((work += 30) > ROUTE_SLICE) { work = 0; yield 0; }
       var cq = pop();
       if (closed[cq]) continue;
       closed[cq] = 1; steps++;
@@ -10250,16 +10604,18 @@
     var outp = [pts[0]], i5 = 0;
     while (i5 < pts.length - 1) {
       var loI = i5 + 1, hiI = pts.length - 1, bestI = i5 + 1;
-      if (routeLegClear(role, pts[i5], pts[hiI], half)) bestI = hiI;
+      if (routeLegClear(role, pts[i5], pts[hiI], half, doors)) bestI = hiI;
       else {
         while (loI <= hiI) {
+          yield 0;
           var mid = (loI + hiI) >> 1;
-          if (routeLegClear(role, pts[i5], pts[mid], half)) { bestI = mid; loI = mid + 1; }
+          if (routeLegClear(role, pts[i5], pts[mid], half, doors)) { bestI = mid; loI = mid + 1; }
           else hiI = mid - 1;
         }
       }
       outp.push(pts[bestI]);
       i5 = bestI;
+      yield 0;
     }
     return outp;
   }
@@ -10269,7 +10625,7 @@
    * the way round it is one of the six axis-ordered dog-legs between the
    * two ends (along x then y then z, and the other five orders), or that
    * again on either half. Tried shortest first, each judged exactly. */
-  function dogLeg(role, a, b, half, depth) {
+  function* dogLegJob(role, a, b, half, depth, doors) {
     var orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
     var tries = [];
     for (var o = 0; o < orders.length; o++) {
@@ -10285,7 +10641,10 @@
     }
     for (var t = 0; t < tries.length; t++) {
       var ok = true;
-      for (var k = 1; k < tries[t].length && ok; k++) ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half);
+      for (var k = 1; k < tries[t].length && ok; k++) {
+        ok = routeLegClear(role, tries[t][k - 1], tries[t][k], half, doors);
+        yield 0;
+      }
       if (ok) return tries[t];
     }
     if (depth > 0) {
@@ -10293,27 +10652,34 @@
       var mids = [[(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, a[2]], [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, b[2]],
                   [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2, (a[2] + b[2]) / 2]];
       for (var m = 0; m < mids.length; m++) {
-        var h1 = routeLegClear(role, a, mids[m], half) ? [a, mids[m]] : dogLeg(role, a, mids[m], half, depth - 1);
+        var h1 = routeLegClear(role, a, mids[m], half, doors) ? [a, mids[m]] : (yield* dogLegJob(role, a, mids[m], half, depth - 1, doors));
+        yield 0;
         if (!h1) continue;
-        var h2 = routeLegClear(role, mids[m], b, half) ? [mids[m], b] : dogLeg(role, mids[m], b, half, depth - 1);
+        var h2 = routeLegClear(role, mids[m], b, half, doors) ? [mids[m], b] : (yield* dogLegJob(role, mids[m], b, half, depth - 1, doors));
+        yield 0;
         if (h2) return h1.concat(h2.slice(1));
       }
     }
     return null;
   }
 
-  function clearRoute(role, pts, half) {
+  function clearRoute(role, pts, half, doors) { return drainJob(clearRouteJob(role, pts, half, doors)); }
+  function* clearRouteJob(role, pts, half, doors) {
     if (!pts || pts.length < 2 || !half) return pts;
     var out = [pts[0]], blocked = 0;
     for (var i = 1; i < pts.length; i++) {
       var a = pts[i - 1], b = pts[i];
-      if (routeLegClear(role, a, b, half)) { out.push(b); continue; }
+      yield 0;
+      if (routeLegClear(role, a, b, half, doors)) { out.push(b); continue; }
       /* Her clearance first; failing that a wider box; failing that the
        * bare surfaces, with the exact pull still the judge. */
-      var leg = dogLeg(role, a, b, half, 1) || routeLeg(role, a, b, half, 0.35);
+      var leg = yield* dogLegJob(role, a, b, half, 1, doors);
+      yield 0;
+      if (!leg) leg = yield* routeLegJob(role, a, b, half, 0.35, false, doors);
       if (leg) {
         for (var c = 1; c < leg.length; c++) {
-          if (!routeLegClear(role, leg[c - 1], leg[c], half)) { leg = null; break; }
+          yield 0;
+          if (!routeLegClear(role, leg[c - 1], leg[c], half, doors)) { leg = null; break; }
         }
       }
       if (!leg) { blocked++; out.push(b); continue; }
@@ -16636,6 +17002,9 @@
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
+    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, trianglesJob: function (role) {
+      return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
+    },
     portSections: portSections,
     leafHit: leafHit,
     sectionAt: sectionAt,

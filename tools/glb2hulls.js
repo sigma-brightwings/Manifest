@@ -738,6 +738,28 @@ function interiorRoutes(buckets, berths, carried, doors) {
     if (z0 > 0) seed(q0 - NN); if (z0 < N - 1) seed(q0 + NN);
   }
 
+  if (process.env.ROUTE_PROBE) {
+    JSON.parse(process.env.ROUTE_PROBE).forEach(function (pt) {
+      var c = cellOf(pt), q = idx(c[0], c[1], c[2]);
+      console.log('    probe ' + pt + ': out ' + out[q] + ' closed ' + closed[q] + ' open ' + open[q]);
+      if (!out[q] || !process.env.ROUTE_LEAK) return;
+      /* The way out: BFS through unclosed cells to the border, then the
+       * path's last few cells before it leaves the model's extent. */
+      var par = new Int32Array(NNN).fill(-2), Q = new Int32Array(NNN), h = 0, t = 0, end = -1;
+      par[q] = -1; Q[t++] = q;
+      while (h < t && end < 0) {
+        var c0 = Q[h++], z = (c0 / NN) | 0, r = c0 - z * NN, y = (r / N) | 0, x = r - y * N;
+        if (x === 0 || y === 0 || z === 0 || x === N - 1 || y === N - 1 || z === N - 1) { end = c0; break; }
+        [1, -1, N, -N, NN, -NN].forEach(function (o) { var n2 = c0 + o; if (!closed[n2] && par[n2] === -2) { par[n2] = c0; Q[t++] = n2; } });
+      }
+      var path = [];
+      for (var e = end; e >= 0; e = par[e]) path.push(e);
+      path.reverse();
+      /* The first cell whose 3x3x3 neighbourhood is mostly empty: where it is outside the hull. */
+      var pts = path.map(function (c1) { var z = (c1 / NN) | 0, r = c1 - z * NN, y = (r / N) | 0, x = r - y * N; return [lo + (x + 0.5) * cell, lo + (y + 0.5) * cell, lo + (z + 0.5) * cell].map(function (v) { return v.toFixed(3); }).join(','); });
+      console.log('      leak path (' + path.length + '): ' + pts.filter(function (_, i) { return i % Math.max(1, Math.floor(pts.length / 25)) === 0; }).join(' | '));
+    });
+  }
   /* Clearance: steps to the nearest open-grid wall, capped at 4. */
   var dist = new Uint8Array(NNN).fill(4);
   var qd = new Int32Array(NNN), qh = 0, qt = 0;
@@ -1182,9 +1204,11 @@ function interiorRoutes(buckets, berths, carried, doors) {
       var lift = (c.hz || 0) + 2 * cell;
       var A = [c.a[0], c.a[1], c.a[2] + lift], B = [c.b[0], c.b[1], c.b[2] + lift];
       var qa = nearestPassable(A), qb = nearestPassable(B);
+      if (process.env.ROUTE_DEBUG) console.log('    ride debug ' + c.key + ' A ' + A.map(r3) + ' -> ' + qa + ', B ' + B.map(r3) + ' -> ' + qb);
       if (qa < 0 || qb < 0) return;
       [[A, qa, B, qb], [B, qb, A, qa]].forEach(function (o) {
         var tail = astar(o[3], gq);
+        if (process.env.ROUTE_DEBUG) console.log('      tail from ' + o[2].map(r3) + ': ' + (tail ? 'found' : 'none'));
         if (!tail) return;
         heavy.forEach(function (h0) {
           var sq = nearestPassable(berths[h0].mid);
@@ -1669,43 +1693,9 @@ function standUp(berths) {
  *
  * Orbital stations only; a ground site's incline is meant to reach the
  * surface. A bore that never leaves the hull is left exactly as it was. */
-var CLIP_N = 128;
 function clipBores(buckets, bores, file) {
-  var N = CLIP_N, lo = -1.06, cell = 2.12 / N, inv = 1 / cell;
-  var solid = new Uint8Array(N * N * N);
-  function idx(x, y, z) { return (z * N + y) * N + x; }
-  function cellOf(p) { return [Math.floor((p[0] - lo) * inv), Math.floor((p[1] - lo) * inv), Math.floor((p[2] - lo) * inv)]; }
-  function inGrid(c) { return c[0] >= 0 && c[1] >= 0 && c[2] >= 0 && c[0] < N && c[1] < N && c[2] < N; }
-  buckets.forEach(function (bk) {
-    for (var fi = 0; fi < bk.f.length; fi++) {
-      if (bk.bo[fi] >= 0) continue;
-      var a = bk.v[bk.f[fi][0]], b = bk.v[bk.f[fi][1]], c = bk.v[bk.f[fi][2]];
-      if (!a || !b || !c) continue;
-      var e = 0;
-      for (var k = 0; k < 3; k++) e = Math.max(e, Math.abs(b[k] - a[k]), Math.abs(c[k] - a[k]), Math.abs(c[k] - b[k]));
-      var n = Math.min(400, Math.max(1, Math.ceil(e * inv * 2)));
-      for (var i = 0; i <= n; i++) for (var jj = 0; i + jj <= n; jj++) {
-        var u = i / n, w = jj / n;
-        var q = cellOf([a[0] + (b[0] - a[0]) * u + (c[0] - a[0]) * w, a[1] + (b[1] - a[1]) * u + (c[1] - a[1]) * w,
-                        a[2] + (b[2] - a[2]) * u + (c[2] - a[2]) * w]);
-        if (inGrid(q)) solid[idx(q[0], q[1], q[2])] = 1;
-      }
-    }
-  });
-  var DIRS = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
-  function escapeDirs(p) {
-    var c0 = cellOf(p), outd = [];
-    if (!inGrid(c0)) return DIRS.slice();
-    DIRS.forEach(function (d) {
-      var c = [c0[0] + d[0], c0[1] + d[1], c0[2] + d[2]];
-      while (inGrid(c)) {
-        if (solid[idx(c[0], c[1], c[2])]) return;
-        c[0] += d[0]; c[1] += d[1]; c[2] += d[2];
-      }
-      outd.push(d);
-    });
-    return outd;
-  }
+  /* (The voxel grid and the escape test of the first version are gone with
+   * it: see EACH END ON THE SURFACE ITS WALLS CROSS below.) */
   function dot(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
   var clippedTotal = 0;
   bores.forEach(function (bore, bi) {
@@ -1736,49 +1726,130 @@ function clipBores(buckets, bores, file) {
       var lat = [d[0] - ax[0] * s, d[1] - ax[1] * s, d[2] - ax[2] * s];
       rad = Math.max(rad, Math.sqrt(dot(lat, lat)));
     });
+    /* EACH END ON THE SURFACE ITS WALLS CROSS (2026-11-03). Astra, at
+     * Halden Dock: "why is the shaft protruding from the wall at the top
+     * and bottom of the shaft? It should be cut flush with the wall."
+     *
+     * The first version (above, 2026-10-16) walked out along the centreline
+     * to the first point that could see open space down two axes and cut
+     * there. Two things were wrong with that:
+     *
+     *   - A cylinder's arm bore IS the arm: from the hub it runs through
+     *     open space to its pod, so its own centreline (its walls left out of
+     *     the grid) sees space a third of the way along. armBoreC was cut on
+     *     a plane at the hub that kept almost none of it (3 faces of 140
+     *     left between the hub and the pod), the hub's hole for it opened
+     *     onto space, the converter's route grid flooded the whole hub as
+     *     OUTSIDE, and not one S/M bay of any cylinder could be routed
+     *     through it: they were all "joined by elevator" in a straight line
+     *     through the structure (item 1).
+     *   - Where nothing was cut, each end was left square to the bore, as
+     *     the builder stopped it, so an inclined bore that meets a level
+     *     deck stands proud of it by up to its own width on one side.
+     *
+     * So each END is taken on its own. Lines parallel to the bore just
+     * outside each of its four walls are walked in from the end; the first
+     * surface (not the bore's own) that at least three of them cross within
+     * the end's last stretch is the one the bore meets there - the deck it
+     * opens onto, the pod roof it comes down through, the hull wall it
+     * leaves by - and the bore is cut on that surface's own plane, keeping
+     * the side toward its middle. A bore whose end meets nothing is left
+     * as it is. */
+    var lat1 = Math.abs(ax[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+    var la = [ax[1] * lat1[2] - ax[2] * lat1[1], ax[2] * lat1[0] - ax[0] * lat1[2], ax[0] * lat1[1] - ax[1] * lat1[0]];
+    var lal = Math.sqrt(dot(la, la)); la = [la[0] / lal, la[1] / lal, la[2] / lal];
+    var lb = [ax[1] * la[2] - ax[2] * la[1], ax[2] * la[0] - ax[0] * la[2], ax[0] * la[1] - ax[1] * la[0]];
+    /* The walls' half-extents across, each way: the cross-section is a
+     * box, not a circle, so the four lines sit just outside each wall. */
+    var ea = 0, eb = 0;
+    pts.forEach(function (p) {
+      var d = [p[0] - cen[0], p[1] - cen[1], p[2] - cen[2]];
+      ea = Math.max(ea, Math.abs(dot(d, la))); eb = Math.max(eb, Math.abs(dot(d, lb)));
+    });
+    var len = sMax - sMin, STRETCH = Math.max(0.03, len * 0.2);
     [1, -1].forEach(function (sg) {
-      var end = sg > 0 ? sMax : -sMin, exitS = null;
-      for (var s = 0; s <= end; s += cell * 0.5) {
-        var p = [cen[0] + ax[0] * sg * s, cen[1] + ax[1] * sg * s, cen[2] + ax[2] * sg * s];
-        if (escapeDirs(p).length >= 2) { exitS = s; break; }
-      }
-      if (exitS === null) return;
-      var dirA = [ax[0] * sg, ax[1] * sg, ax[2] * sg];
-      var pe = [cen[0] + dirA[0] * (exitS + cell), cen[1] + dirA[1] * (exitS + cell), cen[2] + dirA[2] * (exitS + cell)];
-      var esc = escapeDirs(pe), n = null, best = 0.2;
-      esc.forEach(function (d) { var k = dot(d, dirA); if (k > best) { best = k; n = d; } });
-      if (!n) return;
-      /* The wall: back along -n from the escape point to the first solid
-       * cell, then the exact plane from the hull's own faces facing n. */
-      var c = cellOf(pe), steps = 0;
-      while (inGrid(c) && !solid[idx(c[0], c[1], c[2])] && steps++ < N) { c[0] -= n[0]; c[1] -= n[1]; c[2] -= n[2]; }
-      if (!inGrid(c) || !solid[idx(c[0], c[1], c[2])]) return;
-      var cc = [lo + (c[0] + 0.5) * cell, lo + (c[1] + 0.5) * cell, lo + (c[2] + 0.5) * cell];
-      var d0 = dot(cc, n) + cell * 0.5, d = -Infinity;
+      var endS = sg > 0 ? sMax : sMin;
+      var endP = [cen[0] + ax[0] * endS, cen[1] + ax[1] * endS, cen[2] + ax[2] * endS];
+      var inward = [-ax[0] * sg, -ax[1] * sg, -ax[2] * sg];
+      /* Candidate triangles: not this bore's, near this end. */
+      var reach = STRETCH + Math.max(ea, eb) * 2;
+      var tris = [];
       buckets.forEach(function (bk) {
         for (var fi = 0; fi < bk.f.length; fi++) {
-          if (bk.bo[fi] >= 0) continue;
-          var a = bk.v[bk.f[fi][0]], b = bk.v[bk.f[fi][1]], q = bk.v[bk.f[fi][2]];
-          var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [q[0] - a[0], q[1] - a[1], q[2] - a[2]];
-          var nn = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
-          var nl = Math.sqrt(dot(nn, nn));
-          if (nl < 1e-12 || Math.abs(dot(nn, n)) / nl < 0.95) continue;
-          var mid = [(a[0] + b[0] + q[0]) / 3, (a[1] + b[1] + q[1]) / 3, (a[2] + b[2] + q[2]) / 3];
-          var off = dot(mid, n);
-          if (off < d0 - 3 * cell || off > d0 + cell) continue;
-          var lat = [mid[0] - pe[0], mid[1] - pe[1], mid[2] - pe[2]], along = dot(lat, n);
-          lat = [lat[0] - n[0] * along, lat[1] - n[1] * along, lat[2] - n[2] * along];
-          if (Math.sqrt(dot(lat, lat)) > rad * 4 + 2 * cell) continue;
-          if (off > d) d = off;
+          if (bk.bo[fi] === bi) continue;
+          var A = bk.v[bk.f[fi][0]], B = bk.v[bk.f[fi][1]], Cq = bk.v[bk.f[fi][2]];
+          if (!A || !B || !Cq) continue;
+          var far = false;
+          for (var k = 0; k < 3 && !far; k++) {
+            if (Math.min(A[k], B[k], Cq[k]) > endP[k] + reach || Math.max(A[k], B[k], Cq[k]) < endP[k] - reach) far = true;
+          }
+          if (!far) tris.push([A, B, Cq]);
         }
       });
-      if (!isFinite(d)) d = d0;
-      clippedTotal += clipBucketFaces(buckets, bi, n, d);
-      console.log('    clipped ' + bore.node + ' at its wall (' + (n[0] ? (n[0] > 0 ? '+x' : '-x') : n[1] ? (n[1] > 0 ? '+y' : '-y') : (n[2] > 0 ? '+z' : '-z')) +
-                  ' ' + d.toFixed(3) + ')');
+      var hits = [];
+      [[1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (o) {
+        var off = [la[0] * o[0] * ea * 1.15 + lb[0] * o[1] * eb * 1.15, la[1] * o[0] * ea * 1.15 + lb[1] * o[1] * eb * 1.15,
+                   la[2] * o[0] * ea * 1.15 + lb[2] * o[1] * eb * 1.15];
+        /* From a little beyond the end (a square end may stop just short
+         * of the surface on its low side) in along the bore. */
+        var o0 = [endP[0] + off[0] - inward[0] * Math.max(ea, eb), endP[1] + off[1] - inward[1] * Math.max(ea, eb),
+                  endP[2] + off[2] - inward[2] * Math.max(ea, eb)];
+        var lim = STRETCH + Math.max(ea, eb), best = null;
+        tris.forEach(function (T) {
+          var t = rayTri(o0, inward, T[0], T[1], T[2]);
+          if (t >= 0 && t <= lim && (!best || t < best.t)) best = { t: t, tri: T };
+        });
+        if (best) hits.push({ p: [o0[0] + inward[0] * best.t, o0[1] + inward[1] * best.t, o0[2] + inward[2] * best.t], tri: best.tri });
+      });
+      if (process.env.CLIP_DEBUG) {
+        var zx = -Infinity, zn = Infinity;
+        pts.forEach(function (p) { zx = Math.max(zx, p[2]); zn = Math.min(zn, p[2]); });
+        console.log('      ' + bore.node + ' end ' + endP.map(function (v) { return v.toFixed(3); }) + ': ' + hits.length + ' of 4 lines meet a surface; bore z ' + zn.toFixed(3) + '..' + zx.toFixed(3) + ' half ' + ea.toFixed(3) + ',' + eb.toFixed(3));
+      }
+      if (hits.length < 3) return;
+      /* One surface: the normals agree. Its plane through the hits, put
+       * where the furthest-out of them lies so nothing of the bore is left
+       * standing proud of it. */
+      var nrm = function (T) {
+        var e1 = [T[1][0] - T[0][0], T[1][1] - T[0][1], T[1][2] - T[0][2]], e2 = [T[2][0] - T[0][0], T[2][1] - T[0][1], T[2][2] - T[0][2]];
+        var nn = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+        var l = Math.sqrt(dot(nn, nn)) || 1;
+        nn = [nn[0] / l, nn[1] / l, nn[2] / l];
+        if (dot(nn, inward) > 0) nn = [-nn[0], -nn[1], -nn[2]];   // facing out of the bore's end
+        return nn;
+      };
+      var n = nrm(hits[0].tri), agree = hits.filter(function (h) { return dot(nrm(h.tri), n) > 0.98; });
+      if (agree.length < 3) return;
+      /* A wall the bore runs along is not one it ends on. */
+      if (Math.abs(dot(n, inward)) < 0.2) return;
+      var dpl = -Infinity;
+      agree.forEach(function (h) { dpl = Math.max(dpl, dot(h.p, n)); });
+      /* Nothing to cut: the end is already at or inside the surface. */
+      var proud = -Infinity;
+      pts.forEach(function (p) { proud = Math.max(proud, dot(p, n) - dpl); });
+      if (!(proud > 1e-5)) return;
+      clippedTotal += clipBucketFaces(buckets, bi, n, dpl);
+      console.log('    cut ' + bore.node + ' at its end by ' + endP.map(function (v) { return v.toFixed(3); }).join(',') +
+                  ' flush with the surface it meets (normal ' + n.map(function (v) { return v.toFixed(2); }).join(',') +
+                  '), ' + (proud * 1000).toFixed(1) + ' thousandths of a radius proud before');
     });
   });
   return clippedTotal;
+}
+/* Moller-Trumbore, both-sided: distance along d (unit) to triangle abc, or -1. */
+function rayTri(o, d, a, b, c) {
+  var e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
+  var p = [d[1] * e2[2] - d[2] * e2[1], d[2] * e2[0] - d[0] * e2[2], d[0] * e2[1] - d[1] * e2[0]];
+  var det = e1[0] * p[0] + e1[1] * p[1] + e1[2] * p[2];
+  if (Math.abs(det) < 1e-14) return -1;
+  var inv = 1 / det, t0 = [o[0] - a[0], o[1] - a[1], o[2] - a[2]];
+  var u = (t0[0] * p[0] + t0[1] * p[1] + t0[2] * p[2]) * inv;
+  if (u < 0 || u > 1) return -1;
+  var q = [t0[1] * e1[2] - t0[2] * e1[1], t0[2] * e1[0] - t0[0] * e1[2], t0[0] * e1[1] - t0[1] * e1[0]];
+  var v = (d[0] * q[0] + d[1] * q[1] + d[2] * q[2]) * inv;
+  if (v < 0 || u + v > 1) return -1;
+  var t = (e2[0] * q[0] + e2[1] * q[1] + e2[2] * q[2]) * inv;
+  return t >= 0 ? t : -1;
 }
 /* ---- FLUSH PANELS, LIFTED (2026-10-16) -----------------------------------
  * The rest of the flicker after the five-place fix is in the art itself: a

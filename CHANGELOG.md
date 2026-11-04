@@ -40,6 +40,77 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-03, station geometry, second pass: the cylinders' arms, flush bores, every lift deck to deck, routes ready before you arrive)
+
+Astra, of the station reports still open: "let's do all the still open stuff".
+
+- **The cylinders' arms are whole again, and the small bays ride them.** The
+  converter trimmed each inclined bore where its own centreline first "saw"
+  open space, to stop the cradle's hoist hanging out of its block. A
+  cylinder's arm bore *is* the arm: it runs from the hub through open space to
+  its pod, so it saw space a third of the way along. Arm C (to the arm bay)
+  kept 3 faces of about 140 between the hub and its pod. The hub's hole for it
+  opened straight onto space, the route-finder's grid flooded the whole hub as
+  outside, and no cylinder bay could be routed through it. Every one of them
+  was "joined by elevator" in a straight line through the structure: at Halden
+  Dock that was the hull out through the hub's underside and across open space
+  to the pod. Now every arm bore has walls along its whole run, and every
+  cylinder bay's route rides its arm's car down the bore.
+- **The bores end flush with what they meet.** Each end of an inclined bore is
+  now cut on the plane of the surface its walls cross there (the pod roof, the
+  deck, the block wall), not left square or cut by box. Halden Dock's arm A
+  stood 0.053 radii (260 m) down through its pod's roof; the cradles' hoists
+  stood 0.04 radii (about 190 m) proud of the deck at the top. 27 models
+  re-converted (the cradles, cylinders and spines, all liveries).
+- **Every lift runs deck to deck.** The skimmer's sort lift stopped 18 m (at
+  skimmer-m) under the sort hall's roof, and the spine's hub lift stopped 0.09
+  radii under the hub's crown. Both stood a car's thickness proud of the floor
+  they start on. Each car's run is now refitted to the decks beside its shaft,
+  measured and not assumed. The car sits in its floor, its run ends flush with
+  the top of the deck above, both decks are cut round the shaft (they were
+  single wall-to-wall plates, which the old cut kept whole), the lower end is
+  capped at the car's underside, and a hatch with caution bands closes the
+  upper deck's aperture while the car is away. The ring's lift, which the art
+  already fits, is unchanged.
+- **Transfers go round the other bays' blast doors.** A route through a third
+  bay's hall was found straight through its shut inner gate (cradle-s, once
+  its hoist bore was whole). The route search now treats every bay's blast
+  doors as shut except the two the transfer runs between.
+- **No stall the first time you are routed to a berth.** Finding a berth's
+  route through a station took 0.1 to 1.1 s in one frame (measured in node;
+  up to 4.4 s on a loaded machine; 10.7 s across one system's 58 berths). The
+  first arrival at the berth paid it at the docking clamp. Now each system's
+  station berths are routed after you arrive in it, 3 ms a frame, the port you
+  have targeted first, into the same cache. The same goes for the station's
+  collision index and each berth's deck. Measured over cut-sweep's stations:
+  2,770 frames, 2,501 of them under 4 ms, 3 over 33 ms (garbage collection on
+  a loaded box). Every route found this way is the one the cold search finds
+  (58 of 58 compared). After that, the worst first ask for a berth's path is
+  2 ms.
+- **Each station size carves its own doorways.** The occupancy grid's door
+  cuts were made once per model, at the radius of whichever port asked first.
+  The cut's lead is capped in kilometres, so it is a different length in radii
+  at each size. Each (model, radius) now has its own carved copy, and the
+  shared grid is never written.
+
+Measured with interiors.test.js's sweep at Waypoint Dock's radius: berths with
+an inner leg through structure, 55 of 131 before, 52 now. No ring, refinery or
+small or medium spine has one. What is left is listed in the test: the arm
+bores' hub ends (the bore opens into the hub only through structure at the
+fleet's width, so the boarding leg still clips the bore's mouth), the
+skimmers' hoists, the yards' tracks, two spine-l berths and four cradle
+berths.
+
+Not done yet: the yards' tracks and carriages (Halden Yard's "left and right
+elevators": flush ends, floor apertures and covers, heights, and the track
+hatches still welded into the interior bucket); the yard-navy approaches and
+the navy/Syndicate yards' upward-opening bays; the 40 berths standing off a
+level floor (Halden Dock b0 and b1 among them); the cradle and yard-syn
+arrivals that go indoors and back out; ground ports' own-gear stance.
+
+**Saves:** survive. Only geometry, routes and caches changed. Nothing here is
+stored: routes and stand heights are worked out from the model each session.
+
 ### Added (2026-11-03, the lead pip and the intercept assist)
 
 Astra: "can we simplify the orbital mechanics controls for the player? Maybe

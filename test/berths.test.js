@@ -656,6 +656,38 @@ console.log('--- a station is a solid object ---');
   check('and cutting the doors did not dissolve the hull',
         solid > sol.grid.length * 0.02,
         (100 * solid / sol.grid.length).toFixed(1) + '% of the grid is wall');
+
+  /* THE CARVE BELONGS TO THE PORT'S SIZE, not to whichever port asked
+   * first (2026-11-03). The cut's lead is capped in kilometres, so it is a
+   * different length in radii at each radius; carved once per model, a
+   * big station asked first left a small one with a short throat. The same
+   * model at two radii, asked in both orders: each size's grid is the same
+   * whichever came first, the two sizes differ, and the bare grid is never
+   * written. */
+  (function () {
+    var id = MODELS.filter(function (m) { return /^spine-m$/.test(m); })[0] || MODELS[0];
+    Render.assignPort('orbital', id);
+    var bare = Render.portSolidity(id), bareCopy = bare.grid.slice();
+    function at(r) {
+      var p = {}; for (var k in station) p[k] = station[k];
+      p.radius = r; p.id = station.id + '-r' + r;
+      return Sim.stationSolidity(p);
+    }
+    function sig(g) { var n = 0; for (var i = 0; i < g.grid.length; i++) if (g.grid[i] === Render.SOLID_DOOR) n += i % 997; return n; }
+    var big = at(4.91), small = at(0.3);
+    var sb = sig(big), ss = sig(small);
+    check('the carve is keyed by size: the same model carves differently at 0.3 km and 4.91 km',
+          sb !== ss, sb + ' vs ' + ss);
+    check('and asking again gives the same carved grid', at(0.3) === small && at(4.91) === big);
+    var same = true;
+    for (var i = 0; i < bare.grid.length; i++) if (bare.grid[i] !== bareCopy[i]) { same = false; break; }
+    check('the bare grid Render shares is never carved in place', same && !bare.carved);
+    /* Put back what the checks below were written against: MODELS[0]
+     * assigned. Left on spine-m, the landing sweep found spine-m refusing a
+     * clean seat at its two small stations (2.18 and 2.30 km) - true at
+     * af2b08b too, and not this test's question. */
+    Render.assignPort('orbital', MODELS[0]);
+  })();
 })();
 
 /* ---- and the doors are doors ------------------------------------------
