@@ -73,6 +73,14 @@ screenshot, and each was looked at again after the fix at 800 × 600 and
   from the same numbers the HUD itself uses, and a test checks that every
   readout falls inside them. A label that would land on one moves above or
   below it.
+- **The intercept pip's label keeps off the readouts too, and the locked
+  target is named once.** With the pip just under the nose, "PIP 17.0 min"
+  and its drive line printed through PITCH / ROLL. Both lines now move
+  together, up or down, using the same boxes (`labelOffReadouts`'s new
+  `extra`, the height of the second line). The nav lock and the docking
+  target were named twice: once by their box on the glass, with the range,
+  and again by the world's own label a few pixels away. In the cockpit the
+  box's label is now the only one (`holoNames`).
 - **Ships' names in a crowded berth stack instead of overprinting.** A ground
   port's pit with three ships berthed in it printed three names on one spot
   (Terminus Downport, Cydoren). Ship names are now placed like planet names
