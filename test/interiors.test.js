@@ -565,6 +565,25 @@ console.log('--- each hull on her own gear ---');
   });
   st.radius = R0;
   check('every hull\'s feet are on the deck at every station size', n > 0 && bad.length === 0, n + ' cases; ' + bad.slice(0, 4).join('; '));
+  /* F: AND AT A GROUND PORT (2026-11-03). Ground ports kept the old flat
+   * half metre over the berth's standoff, so at Harrow Deep (standoff
+   * 1.79 m) a Talon's centre stood 2.29 m over the bay floor on feet 4.78 m
+   * under it: her gear 2.5 m into the floor, the Tanker's 9.3 m. Every hull
+   * with a fit, at every ground port of the kawartha start: feet on the
+   * floor to a centimetre. */
+  var gsys = Gen.generateSystem('kawartha'), gbad = [], gn = 0;
+  gsys.ports.filter(function (p) { return p.surface && !p.seaPlatform; }).forEach(function (p) {
+    var g = Gen.bayGeometry(p);
+    if (!g || !(g.standoff > 0)) return;
+    Object.keys(global.HullFit || {}).forEach(function (h) {
+      var f = Render.hullFit(h);
+      if (!f || !(f.ground < 0)) return;
+      gn++;
+      var feet = (g.standoff * p.radius + Sim.standLiftKm({ hullId: h }, p)) * 1000 + f.ground;
+      if (Math.abs(feet) > 0.01) gbad.push(h + ' at ' + p.name + ': ' + feet.toFixed(2) + ' m');
+    });
+  });
+  check('every hull\'s feet are on the floor at every ground port', gn > 0 && gbad.length === 0, gn + ' cases; ' + gbad.slice(0, 4).join('; '));
   check('without a port it is the half metre on her gear it always was',
         Math.abs(Sim.standLiftKm({ hullId: 'talon' }) - 0.0005) < 1e-9, Sim.standLiftKm({ hullId: 'talon' }) + '');
 })();

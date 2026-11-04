@@ -464,14 +464,16 @@ function dockedShip(id) {
      * port): her centre stands her own gear's height over the deck, so the
      * shift off the berth's point is that less the berth's standoff, and her
      * feet are ON the deck rather than where the fleet's standoff left them.
-     * At a ground port and a sea pad it is still the half metre. */
+     * At a ground port too since the third pass (2026-11-03: a Talon's
+     * gear stood 2.26 m into Harrow Deep's floor, the Mule's 2.68 m); at a
+     * sea pad it is still the half metre. */
     var want = Sim.standLiftKm(sh, P.port) * 1000;
     var d = V.sub(sh.pos, bs.pos), up = V.dot(d, bs.basis.up) * 1000, side = V.len(V.addScaled(d, bs.basis.up, -V.dot(d, bs.basis.up))) * 1000;
     if (Math.abs(up - want) > 1e-3 || side > 1e-3) liftErr.push(id + '@' + k + ' ' + up.toFixed(4) + ' m up, ' + side.toFixed(4) + ' m aside');
     /* Her feet in the port's frame, as the renderer stands them (her pos,
      * her up, her lifted ground): where the unlifted hull's were. */
     var feet = V.dot(V.addScaled(sh.pos, sh.up, fit.ground / 1000), bs.basis.up) * 1000;
-    var was = k === 'orbital'
+    var was = (k === 'orbital' || k === 'ground')
       ? V.dot(V.addScaled(bs.pos, bs.basis.up, -Gen.bayGeometry(P.port).standoff * P.port.radius), bs.basis.up) * 1000
       : V.dot(V.addScaled(bs.pos, bs.basis.up, raw.ground / 1000), bs.basis.up) * 1000;
     if (Math.abs(feet - was) > 1e-3) footErr.push(id + '@' + k + ' ' + (feet - was).toFixed(4) + ' m');
@@ -495,7 +497,7 @@ function dockedShip(id) {
 });
 check('a geared hull is lifted GEAR_LIFT (0.5 m) in her own frame, a belly-sitter not at all', !liftErr.length && R.GEAR_LIFT === 0.5, liftErr.join(', '));
 check('her walking floor is the ground her legs are drawn on', !floorErr.length, floorErr.join(', '));
-check('docked at a station her feet are on the deck; at a ground port and a sea pad where they were, the lift higher', !footErr.length && !liftErr.length, footErr.join(', '));
+check('docked at a station or a ground port her feet are on the deck; at a sea pad where they were, the lift higher', !footErr.length && !liftErr.length, footErr.join(', '));
 check('a docked save loads at the new height on its first frame', !loadErr.length, loadErr.join(', '));
 check('the arrival rail carries her lift too, so the hand-over does not pop', railN > 0 && !railErr.length, railN + ' poses' + (railErr.length ? ': ' + railErr.join(', ') : ''));
 console.log('  note  ' + liftNums.join('; '));

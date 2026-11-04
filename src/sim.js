@@ -5491,12 +5491,21 @@
     var lift = f && f.gearLift > 0 ? f.gearLift / 1000 : 0;
     var Gen = global.Gen;
     if (!port || !f || typeof f.ground !== 'number' || !(f.ground < 0) || !Gen || !Gen.bayGeometry) return lift;
-    /* ORBITAL BERTHS ONLY, for now. At a ground port the walkable hangar
-     * the boom starts in is fitted round her as she stood (render.test:
-     * "surface, cut on at Harrow Deep: she starts in her hangar" goes red
-     * with her own stance there); the ground ports keep the half metre
-     * until that hangar is fitted to the new height. */
-    if (port.surface) return lift;
+    /* GROUND PORTS TOO (2026-11-03). They kept the half metre while the
+     * walkable hangar was thought to be fitted round her as she stood:
+     * render.test's "surface, cut on at Harrow Deep: she starts in her
+     * hangar" went red with her own stance there. Measured, the hangar was
+     * never the cause - it is built in her own frame on her lifted gear
+     * (Render.hangarSpec: floor at outsidePlan's floorY), so it moves with
+     * her and its floor is where her feet are, which with this stance is
+     * the bay's own deck. What went red was the test's camera: its yaw and
+     * pitch are the world's until the first frame hands the boom to the
+     * port's ground frame, and converted at that moment they pointed the
+     * 5 m boom 70 degrees down, through the floor 2.3 m away. The test now
+     * sets its shot in the ground's frame. A SEA PAD keeps the half metre:
+     * its stand is the pad's own table (seaPath), not this standoff, and
+     * nobody has measured her feet against its deck. */
+    if (port.seaPlatform) return lift;
     var g = Gen.bayGeometry(port);
     if (!g || !(g.standoff > 0)) return lift;
     return -f.ground / 1000 - g.standoff * (port.radius || 1);
