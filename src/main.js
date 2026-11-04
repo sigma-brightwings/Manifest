@@ -4731,6 +4731,18 @@
        * lines rather than one long one, so it does not run into the speed
        * and range boxes either side of the glass at 800 wide. */
       var ly0 = at.y + (merged ? 34 : 26);
+      /* AND OFF THE GLASS'S READOUTS (2026-11-03, fix/ui-polish). A pip
+       * just under the nose put "PIP 17.0 min" and its drive line straight
+       * through PITCH / ROLL / REF. Moved as a pair, up or down, by the same
+       * boxes the planets' names keep off (Render.hudReadoutBoxes, set by
+       * placeLabels this frame). */
+      if (labelHud && Render.labelOffReadouts) {
+        var pw = Math.max(ctx.measureText(label).width, ctx.measureText(driveTxt).width);
+        var ny = Render.labelOffReadouts(at.x - pw / 2, ly0, pw, labelHud, labelFoot, 13);
+        /* Never up onto its own ring: past it, then, to the other side. */
+        if (ny < ly0 && ny + 16 > at.y - (merged ? 20 : 15)) ny = at.y - (merged ? 20 : 15) - 16;
+        ly0 = ny;
+      }
       pipLabel(ctx, label, at.x, ly0, 'center');
       ctx.globalAlpha = 0.85;
       pipLabel(ctx, driveTxt, at.x, ly0 + 13, 'center');
@@ -9552,7 +9564,7 @@
     G.rocksDrawn = 0;
     drawRingsAndRock(ctx, cam, inside, buried);
     if (G.showOrbits || mapMode()) drawBeltChart(ctx, cam, inside);
-    placeLabels(ctx, G.labelQueue, w, h);
+    placeLabels(ctx, G.labelQueue, w, h, cam.h || h);
 
     /* Predicted trajectory — the whole point of the exercise. Not while
      * berthed: a ship on the clamps has no trajectory worth predicting, and
@@ -10368,6 +10380,7 @@
   function drawTraffic(ctx, cam) {
     var list = Sim.shipsAll(G.sys, G.t);
     if (!list.length) return;
+    var tags = [], tagSkip = holoNames();
     var blink = (performance.now() / 1000) % 2;
 
     for (var i = 0; i < list.length; i++) {
@@ -10463,15 +10476,39 @@
       // Name only when it is genuinely nearby; otherwise the sky fills with
       // labels for ships you cannot see.
       if (lenPx > 2.2 || (s.spec && s.spec.live)) {
-        ctx.save();
-        ctx.font = 'bold 11px ui-monospace, monospace';
-        ctx.fillStyle = s.hostile ? 'rgba(255,150,130,0.9)' : 'rgba(190,215,240,0.75)';
         var tag = s.name;
         if (s.kind !== 'trade') tag += '  [' + s.className + ']';
-        ctx.fillText(tag, sp.x + 9, sp.y + 3);
-        ctx.restore();
+        if (tagSkip && tagSkip[s.name]) continue;
+        tags.push({ text: tag, x: sp.x + 9, y: sp.y + 3, hostile: !!s.hostile,
+                    pri: (s.hostile ? 1e6 : 0) + (s.spec && s.spec.live ? 1e5 : 0) + lenPx });
       }
     }
+    placeShipTags(ctx, tags, cam);
+  }
+
+  /* SHIP NAMES THAT DO NOT OVERPRINT (2026-11-03). Each ship's name used
+   * to be written beside her wherever she was, and a ground port's pit
+   * with four ships berthed in it is four names on one spot — seen at
+   * Terminus Downport as an unreadable smear of "Coldwater Lighter" and
+   * three others. They are placed now as the bodies' names are
+   * (placeLabels, whose boxes they also keep off — the port's own name
+   * among them): the hostile and the awake first, then the larger on
+   * screen. A name that would land on one already placed tries the rows
+   * just under and over its own; one with nowhere to go is not drawn, and
+   * the name it lost to says "+1", so a crowded berth reads as crowded
+   * rather than as one ship. In the cockpit they keep off the glass's
+   * readouts too. */
+  function placeShipTags(ctx, tags, cam) {
+    if (!tags.length) return;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var placed = Render.stackLabels(tags, labelBoxes, labelHud, labelFoot,
+                                    function (t) { return ctx.measureText(t).width; });
+    placed.forEach(function (t) {
+      ctx.fillStyle = t.q.hostile ? 'rgba(255,150,130,0.9)' : 'rgba(190,215,240,0.75)';
+      ctx.fillText(t.q.text + (t.more ? '  +' + t.more : ''), t.x, t.y);
+    });
+    ctx.restore();
   }
 
   /* ---- shields, and what a hit does to one ------------------------------
@@ -13648,7 +13685,17 @@
       var sx = cam.cx + (vx * cam.r.x + vy * cam.r.y + vz * cam.r.z) * cam.flen / dpt;
       var sy = cam.cy - (vx * cam.u.x + vy * cam.u.y + vz * cam.u.z) * cam.flen / dpt;
       ctx.fillStyle = it === G.walk.near ? '#ffe9a8' : 'rgba(180,240,255,0.75)';
-      ctx.fillText(it.label, sx, sy);
+      /* Off the room title and the use-prompt (walk.js labelClear): at the
+       * trade terminal, looking down, the 2.4 m label sat on the title. */
+      var ly = global.Walk.labelClear(sx, sy, ctx.measureText(it.label).width,
+                                      global.Walk.walkReserved(w, h - FBAR_H, G.talk ? null : G.walk.near));
+      /* A dark edge round the letters, so a label still reads where it
+       * lands on a lit sign (the concourse's MARKET board is cyan). */
+      var fs = ctx.fillStyle;
+      ctx.strokeStyle = 'rgba(4,10,14,0.85)'; ctx.lineWidth = 3; ctx.lineJoin = 'round';
+      ctx.strokeText(it.label, sx, ly);
+      ctx.fillStyle = fs;
+      ctx.fillText(it.label, sx, ly);
     });
     ctx.fillStyle = 'rgba(220,240,255,0.7)';
     ctx.beginPath(); ctx.arc(w / 2, (h - FBAR_H) / 2, 2, 0, Math.PI * 2); ctx.fill();
@@ -13959,9 +14006,22 @@
       ctx.fillStyle = '#ffe9a8';
       ctx.fillText(line, w / 2, (h - FBAR_H) / 2 + 43);
     }
+    /* THE ROOM'S NAME ON ITS OWN PLATE (2026-11-03). It was bare pale
+     * text over whatever the deck put behind it, and at Waypoint Dock's
+     * concourse that was a lit yellow sign: pale cyan on pale yellow,
+     * unreadable. A dark plate, as the use-prompt has, reads over a lit
+     * sign, a dark wall and the sky through a pane alike. Its band is
+     * reserved for it (walk.js TITLE_BAND), so no label prints through. */
     ctx.font = 'bold 11px ui-monospace, monospace';
-    ctx.fillStyle = 'rgba(180,240,255,0.8)';
-    ctx.fillText((G.walk.portName || '') + (room ? '  ·  ' + room.label : ''), w / 2, 22);
+    var title = (G.walk.portName || '') + (room ? '  ·  ' + room.label : '');
+    var tb = global.Walk.TITLE_BAND, ttw = ctx.measureText(title).width;
+    ctx.fillStyle = 'rgba(6,16,22,0.82)';
+    ctx.fillRect(w / 2 - ttw / 2 - 12, tb.y0, ttw + 24, tb.y1 - tb.y0);
+    ctx.strokeStyle = 'rgba(120,200,230,0.35)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(w / 2 - ttw / 2 - 11.5, tb.y0 + 0.5, ttw + 23, tb.y1 - tb.y0 - 1);
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(title, w / 2, 22);
     ctx.fillStyle = 'rgba(180,240,255,0.55)';
     ctx.fillText('WASD walk  ·  Shift run  ·  Ctrl or C crouch  ·  mouse or arrows to look  ·  E use  ·  hold Alt for the pointer  ·  Esc menu', w / 2, h - FBAR_H - 10);
     if (G.message && performance.now() < G.messageUntil) {
@@ -18493,16 +18553,56 @@
    * Zoomed out, a dozen names land on the same few pixels; showing all of
    * them is worse than showing the three that matter. Bigger and more
    * significant bodies win. */
-  function placeLabels(ctx, queue, w, h) {
+  /* The glass's readouts, when drawCockpitView will draw them this frame
+   * — the same conditions it tests — as boxes for placeLabels to keep
+   * off; null otherwise. */
+  function cockpitReadoutBoxes(w, hv, h) {
+    if (G.viewMode !== 'cockpit' || G.hyper || G.eva || G.walk || !flying() || !Render.hudReadoutBoxes) return null;
+    if (Math.abs(G.look.yaw) >= 0.42 || Math.abs(G.look.pitch) >= 0.42) return null;
+    var lv = G.ship && Sim.localVertical(G.ship.pos, G.sys, G.t);
+    if (!lv || !lv.body) return null;
+    return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
+  }
+
+  /* NAMED ONCE (2026-11-03, fix/ui-polish). In the cockpit the nav lock
+   * and the docking target are boxed on the glass (drawHoloTarget) with
+   * their names and range beside the box, and the world's own label for
+   * the same body or ship was printed as well, a few pixels off: seen with
+   * the intercept pip on Threshold Dock, the name twice, overprinted. The
+   * box's label is the one that says more, so the world's is skipped. */
+  function holoNames() {
+    if (G.viewMode !== 'cockpit' || !flying() || G.walk || G.eva || G.hyper) return null;
+    var out = null, nav = navTargetState();
+    if (nav && nav.name) (out = out || {})[nav.name] = true;
+    if (G.dockTarget && !G.ship.docked && G.dockTarget.name) (out = out || {})[G.dockTarget.name] = true;
+    return out;
+  }
+
+  /* What placeLabels drew this frame, for the ships' names after it
+   * (placeShipTags) to keep off. Reset by it every frame it runs. */
+  var labelBoxes = [], labelHud = null, labelFoot = 0;
+  function placeLabels(ctx, queue, w, h, hv) {
+    labelBoxes = [];
     queue.sort(function (a, b) { return b.pri - a.pri; });
     ctx.save();
     ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
     var taken = [];
+    labelFoot = Math.min(hv || h, deckTop(h));
+    /* Outside the cockpit there are no readouts on the glass, but the
+     * key-hint line along the foot of the view is still there, and a
+     * crowded berth's stacked names ran down into it. */
+    var hud = cockpitReadoutBoxes(w, hv || h, h) || [{ id: 'foot', x0: 0, x1: w, y0: labelFoot - 21, y1: h + 40 }];
+    labelHud = hud;
+    var skip = holoNames();
     for (var i = 0; i < queue.length; i++) {
       var q = queue[i];
+      if (skip && skip[q.text]) continue;
       var x = q.sp.x + q.offset, y = q.sp.y + 3;
       if (x < -40 || x > w + 40 || y < 0 || y > h) continue;
       var tw = ctx.measureText(q.text).width;
+      /* Clear of the cockpit's readouts (Render.hudReadoutBoxes): a planet
+       * just under the nose printed its name across the PITCH line. */
+      if (hud) y = Render.labelOffReadouts(x, y, tw, hud, labelFoot);
       var box = { x: x - 2, y: y - 10, w: tw + 4, h: 13 };
       var clash = false;
       for (var j = 0; j < taken.length; j++) {
@@ -18512,6 +18612,7 @@
       }
       if (clash) continue;
       taken.push(box);
+      labelBoxes.push(box);
       ctx.fillStyle = q.color;
       ctx.globalAlpha = 0.92;
       ctx.fillText(q.text, x, y);
@@ -19468,8 +19569,18 @@
      * that, and MORE brings the whole card back for as long as you want
      * it. You read what he says in the cockpit; on a screen you only need
      * to know what to do. */
+    /* AND IT GIVES WAY TO THE PAGE'S NAME (2026-11-03). Seen on F6: the
+     * fixed 170 px start covered "GALAXY MAP & COURSE PLOTTER" from its
+     * fourth word. Every full-screen page writes its name through
+     * modeFrame (screens.js), which leaves where the name ends in
+     * G.modeTitleRight; the strip starts past that. Consumed here, so a
+     * page that does not draw a title bar never inherits the last one's. */
+    var titleR = G.modeTitleRight || 0;
+    G.modeTitleRight = 0;
     if ((!flying() || G.market) && !G.tutMore) {
-      var sx = Math.min(170, Math.round(w * 0.2)), sw = w - sx - 8, sy = 3, sh = 42;
+      var sx = Math.min(170, Math.round(w * 0.2)), sy = 3, sh = 42;
+      if (!flying() && titleR) sx = Math.max(sx, Math.min(Math.round(titleR + 14), w - 300));
+      var sw = w - sx - 8;
       panel(ctx, sx, sy, sw, sh, true);
       ctx.font = 'bold 12px ui-monospace, monospace';
       var head = 'HALLOWAY ' + c.lesson + '/' + c.of + '  ▶ ' + c.goal;

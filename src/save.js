@@ -327,6 +327,12 @@
          * holding it — on a heavy world, the fall-back-and-crash the hold
          * exists to prevent. Saved there, it comes back in the berth. */
         docked: s.docked || (s.arrival ? s.arrival.port : null) || (s.padHold ? s.padHold.port : null),
+        /* THE HEAVY BAY SHE WAS LENT (combat.js grantClearance, 2026-11-03).
+         * Not written, a ship saved in a lent heavy bay came back through
+         * Sim.assignBerth without it and was parked in a small berth her
+         * hull does not fit. A port id or null; additive, and an older
+         * save without it loads as "not lent", which it was. */
+        lentBay: s.lentBay || null,
         hullId: s.hullId, hullHp: s.hullHp,
         /* Additive: the outside a hull is wearing, when it is not its own. */
         meshKind: s.meshKind || null,
@@ -775,6 +781,9 @@
     G._rumourSlot = null;
     G.ledgerLog = data.ledger || [];
 
+    /* Before the dock: dockShip asks assignBerth for her berth, and the
+     * lent bay is what sends her to the heavy one. */
+    s.lentBay = (typeof d.lentBay === 'string' || typeof d.lentBay === 'number') ? d.lentBay : null;
     if (d.docked && G.sys.byId[d.docked]) {
       Sim.dockShip(s, G.sys.byId[d.docked], G.sys, G.t);
     } else {

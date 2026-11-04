@@ -508,6 +508,47 @@ console.log('--- the walk ---');
   check('nose toward the hub, down her tube', nose.x - at2.x > 9.99, (nose.x - at2.x).toFixed(2));
 })();
 
+console.log('--- no hull stands on her tail at a rig (2026-11-03) ---');
+(function () {
+  /* "Ironwake Packet" was seen nose-up beside a sea rig. A heavy
+   * (`outboard`) never gets a pad from seaStay, and the boats that live at
+   * a port have no route at all; both fell through dockPose's sea branch
+   * into the open-pad pose, nose up at 0.4 port radii. Measured before the
+   * fix over 71 kawartha systems: 70,473 of 2.27 million samples within
+   * 3 km of a rig pointed within 32 degrees of straight up. Here, Taolmai's
+   * Terminus Hold (the system the case was found in) and every route at
+   * it, through a whole cycle: none may. */
+  var star = gal.stars[5], sys = Gen.generateSystem(star.seed, Galaxy.systemOpts(gal, star));
+  var port = (sys.ports || []).filter(function (p) { return p.seaPlatform; })[0];
+  check('Taolmai has its sea platform', !!port, star.name);
+  if (!port) return;
+  var n = 0, up = 0, eg = '', heavies = 0, heavyLevel = 0;
+  (sys.traffic || []).forEach(function (r) {
+    if (r.from !== port.id && r.to !== port.id) return;
+    for (var k = 0; k < 120; k++) {
+      var t = r.t0 + k * r.period / 61;
+      var st = Sim.trafficState(r, sys, t);
+      if (!st || !st.pos) continue;
+      var ps = Sim.bodyState(port, sys, t).pos;
+      if (V.dist(st.pos, ps) > 3) continue;
+      n++;
+      var lup = V.norm(V.sub(ps, Sim.bodyState(port.parentBody, sys, t).pos));
+      var c = V.dot(V.norm(st.fwd), lup);
+      if (c > 0.85) { up++; if (!eg) eg = r.name + ' ' + st.phase + ' t=' + t.toFixed(0); }
+      if (r.outboard && st.phase === 'moored') { heavies++; if (Math.abs(c) < 0.2) heavyLevel++; }
+    }
+  });
+  check('no ship within 3 km of the rig points within 32 degrees of straight up', n > 100 && up === 0,
+        up + ' of ' + n + ' ' + eg);
+  check('and a heavy moored there lies level off the rig', heavies > 0 && heavyLevel === heavies, heavyLevel + ' of ' + heavies);
+  /* A boat that lives at the port and has no route (railState 'port'). */
+  var pose = Sim.railState ? Sim.railState({ id: 'tender-x', name: 'Test Tender', rail: { type: 'port', port: port.id } }, sys, 1000) : null;
+  if (pose) {
+    var lu = V.norm(V.sub(Sim.bodyState(port, sys, 1000).pos, Sim.bodyState(port.parentBody, sys, 1000).pos));
+    check('nor does a boat that lives at the rig with no route', Math.abs(V.dot(pose.fwd, lu)) < 0.2);
+  }
+})();
+
 module.exports = { platforms: platforms, sample: sampleSys };
 if (require.main === module) {
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

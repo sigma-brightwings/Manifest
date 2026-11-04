@@ -3672,6 +3672,20 @@
      * geometry. */
     var leaf = odd ? 0.95 : 1;
     var ROWS = [1.00, 0.95, 1.04, 0.97, 1.02, 0.94, 1.0];
+    /* AND THE CROWN A STEP DARKER (2026-11-03, third round). Under a high
+     * sun the crowns still washed out — measured at Linis's Low Strip with
+     * the sun 72 degrees up, crown and shoulder read 161 and 154 of 255, a
+     * pale sky-blue with nothing between them, so the dome lost its top.
+     * A plate facing straight up takes the sun's full cosine AND the whole
+     * sky's fill (gl.js uSkyFill, a third again), where the shoulder sees
+     * half the sky and the sun at a slant; the same paint all over is
+     * therefore brightest exactly where the eye looks for the curve. So the
+     * rows are toned from 0.80 at the crown back to the plate's own grey
+     * at the foot — about the ratio of the light the two receive at noon —
+     * which keeps the crown in range overhead and, under a low sun, gives
+     * the dome a darker top to read its shape by. Row i = 0 is the crown;
+     * the hazard band (the last row) is left alone. */
+    var CROWN_TONE = [0.80, 0.84, 0.88, 0.92, 0.96, 1.0, 1.0];
     [[0, '#8c969e', '#6c747b', '#d9b23a'], [0.0012, '#59626a', '#4a5158', '#59626a']].forEach(function (skin, inner) {
       var base = m.v.length;
       for (var i = 0; i <= NA; i++) {
@@ -3684,7 +3698,7 @@
         for (j = 0; j < NU; j++) {
           var a0 = base + i * (NU + 1) + j, a1 = a0 + 1, b0 = a0 + NU + 1, b1 = b0 + 1;
           var col = i === NA - 1 ? skin[3] : (j === 0 || j === NU - 1) ? skin[2] : skin[1];
-          if (!inner && i !== NA - 1) col = petalShade(col, leaf * ROWS[i] * (j === 2 ? 1.03 : 1));
+          if (!inner && i !== NA - 1) col = petalShade(col, leaf * ROWS[i] * CROWN_TONE[i] * (j === 2 ? 1.03 : 1));
           m.f.push([a0, b0, b1]); m.c.push(col);
           m.f.push([a0, b1, a1]); m.c.push(col);
         }
@@ -11967,6 +11981,105 @@
     ctx.restore();
     return { left: L.x0, right: R ? R.x1 : cx + off };
   }
+  /* ---- where the cockpit's readouts stand (2026-11-03) ------------------
+   * Seen in the cockpit: a planet's name ("Seapickle", "Runner") printed
+   * straight over "PITCH ... ROLL ... REF MIRVEN I". The world's labels
+   * are placed (main.js placeLabels) before the glass is drawn, and knew
+   * nothing of it. These are the boxes the glass's fixed instruments
+   * occupy — the heading tape and its REF, the speed and altitude boxes
+   * with their lines under them, the attitude line and the facing cue —
+   * from the same numbers that place them (drawHeadingTape's cy and half,
+   * drawAirData's off and BH, drawCockpitView's +40 and +66), so a label
+   * can be moved clear of them. Generous by a few px on purpose: the
+   * glyph widths are counted, not measured, and touching is overlapping
+   * to the eye. `hv` is the view height the glass is laid out on. */
+  var HUD_CHAR_11 = 6.7;   // px per glyph at 11 px monospace
+  function hudReadoutBoxes(w, hv, ref, foot) {
+    foot = foot || hv;
+    var cx = w / 2, cy = hv / 2;
+    var off = Math.max(190, Math.min(w * 0.27, 420));
+    var half = Math.min(170, w * 0.18), T = Math.max(40, hv * 0.30 - 74 - 44);
+    var refW = ref ? (4 + ref.length) * HUD_CHAR_11 : 0;
+    var lineHalf = (31 + (ref ? ref.length : 8)) * HUD_CHAR_11 / 2 + 8;
+    return [
+      { id: 'tape', x0: cx - half - 14, x1: cx + half + 26 + refW, y0: T - 30, y1: T + 34 },
+      { id: 'speed', x0: cx - off - 130, x1: cx - off + 4, y0: cy - 16, y1: cy + 62 },
+      { id: 'alt', x0: cx + off - 4, x1: cx + off + 210, y0: cy - 16, y1: cy + 80 },
+      { id: 'attitude', x0: cx - lineHalf, x1: cx + lineHalf, y0: cy + 28, y1: cy + 46 },
+      { id: 'facing', x0: cx - 175, x1: cx + 175, y0: cy + 49, y1: cy + 74 },
+      /* The key-hint line and everything under it (main.js: the line is
+       * at the deck's top - 8, `foot`, and the deck's panels cover the
+       * glass below that). Not an instrument, but at 800 x 600 a label
+       * pushed down off the speed box landed in it, half under the deck. */
+      { id: 'foot', x0: 0, x1: w, y0: foot - 21, y1: Math.max(foot, hv) + 40 }
+    ];
+  }
+
+  /* A label's baseline, moved up or down — whichever is nearer and still
+   * on the view — until its box is off every reserved one. Moved, not
+   * dropped: the planet you are pointing at is the one whose name you
+   * want, and it is the one most likely to sit near the readouts. */
+  /* `extra`: px the label runs on below its baseline — a second line under
+   * it (the intercept pip's drive line) — so the pair moves as one. */
+  function labelOffReadouts(x, y, tw, boxes, hv, extra) {
+    extra = extra || 0;
+    /* The first box hit picks the way out — up or down, whichever is
+     * nearer and on the view — and the label keeps going that way past
+     * any box it then lands on: the attitude line and the facing cue are
+     * 3 px apart, and choosing afresh at each one bounced a label between
+     * them forever. Off the top or the bottom, it turns round once. */
+    var y0 = y, dir = 0;
+    for (var turn = 0; turn < 2; turn++) {
+      y = y0;
+      for (var pass = 0; pass < 8; pass++) {
+        var hitB = null;
+        for (var k = 0; k < boxes.length && !hitB; k++) {
+          var r = boxes[k];
+          if (!(x + tw + 2 <= r.x0 || x - 2 >= r.x1 || y + 3 + extra <= r.y0 || y - 10 >= r.y1)) hitB = r;
+        }
+        if (!hitB) return y;
+        var up = hitB.y0 - 4 - extra, down = hitB.y1 + 11;
+        if (!dir) dir = (up - 10 < 0 || (down < hv && down - y < y - up)) ? 1 : -1;
+        y = dir > 0 ? down : up;
+        if (y - 10 < 0 || y + extra > hv) break;
+      }
+      dir = -dir;
+    }
+    return y;
+  }
+
+
+  /* Names that would overprint, stacked (main.js placeShipTags, and the
+   * reasons there). `tags` { text, x, y, pri }; `taken` boxes { x, y, w, h }
+   * already drawn; `reserved` boxes { x0, x1, y0, y1 } to keep off
+   * (hudReadoutBoxes); `foot` the view's usable bottom; `widthOf` measures
+   * a text. Returns the drawn ones as { q, x, y, more }, where `more` is
+   * how many names lost their place to this one. Pure: airdata.test.js
+   * holds it to the boxes. */
+  var STACK_ROWS = [0, 13, -13, 26, -26];
+  function stackLabels(tags, taken, reserved, foot, widthOf) {
+    var list = tags.slice().sort(function (a, b) { return b.pri - a.pri; });
+    var boxes = (taken || []).slice(), placed = [];
+    for (var i = 0; i < list.length; i++) {
+      var q = list[i], tw = widthOf(q.text), at = null, firstHit = null;
+      for (var r = 0; r < STACK_ROWS.length && !at; r++) {
+        var y = q.y + STACK_ROWS[r];
+        if (reserved) y = labelOffReadouts(q.x, y, tw, reserved, foot);
+        var box = { x: q.x - 2, y: y - 10, w: tw + 4, h: 13 }, hit = null;
+        for (var j = 0; j < boxes.length && !hit; j++) {
+          var o = boxes[j];
+          if (box.x < o.x + o.w && box.x + box.w > o.x && box.y < o.y + o.h && box.y + box.h > o.y) hit = o;
+        }
+        if (!hit) at = { box: box, y: y };
+        else if (!firstHit) firstHit = hit;
+      }
+      if (!at) { if (firstHit && firstHit.tag) firstHit.tag.more++; continue; }
+      var rec = { x: at.box.x, y: at.box.y, w: at.box.w, h: at.box.h, tag: { q: q, x: q.x, y: at.y, more: 0 } };
+      boxes.push(rec); placed.push(rec.tag);
+    }
+    return placed;
+  }
+
   function fmtG(g) {
     var a = Math.abs(g);
     return a < 10 ? g.toFixed(1) : Math.round(g).toString();
@@ -17067,7 +17180,7 @@
     drawFlightPathMarker: drawFlightPathMarker,
     drawBankScale: unblurred(drawBankScale),
     drawHeadingTape: drawHeadingTape,
-    drawAirData: drawAirData,
+    drawAirData: drawAirData, hudReadoutBoxes: hudReadoutBoxes, labelOffReadouts: labelOffReadouts, stackLabels: stackLabels,
     facingInfo: facingInfo, drawFacingCue: drawFacingCue,
     airSpeedReadout: airSpeedReadout, altitudeReadout: altitudeReadout,
     vsReadout: vsReadout, airReadout: airReadout

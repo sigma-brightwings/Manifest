@@ -264,5 +264,112 @@ if (airy) {
         Math.abs(ho.kms - V.len(V.sub(high.vel, ost.vel))) < 1e-9, ho.frame + ' ' + ho.kms.toFixed(3) + ' km/s');
 }
 
+console.log('--- the world\'s labels keep off the readouts (2026-11-03) ---');
+(function () {
+  /* Seen in the cockpit: "Seapickle" printed across "PITCH ... REF
+   * MIRVEN I". placeLabels now moves a label off Render.hudReadoutBoxes;
+   * that is only as good as the boxes, so the instruments are drawn here
+   * into a recording context, as drawCockpitView draws them, and every
+   * glyph run they print must lie inside a box. Then labels everywhere
+   * across the middle of the glass must come out clear of every box. */
+  /* The third number is the deck's top where the band covers the foot of
+   * the glass: at 800 x 600 the glass is laid out on 592 px and the band
+   * starts at 378. */
+  [[800, 560], [800, 592, 378], [1280, 640], [1280, 720, 498], [1920, 1000]].forEach(function (vp) {
+    var w = vp[0], hv = vp[1], foot = vp[2] || hv, ref = 'MIRVEN I';
+    var texts = [];
+    var font = '11px';
+    var ctx = {
+      save: function () {}, restore: function () {}, beginPath: function () {}, moveTo: function () {},
+      lineTo: function () {}, closePath: function () {}, stroke: function () {}, fill: function () {},
+      fillRect: function () {}, strokeRect: function () {}, arc: function () {}, setLineDash: function () {},
+      strokeText: function () {}, createLinearGradient: function () { return { addColorStop: function () {} }; },
+      measureText: function (t) { return { width: String(t).length * (parseFloat(/(\d+)px/.exec(this.font || font)[1]) * 0.6) }; },
+      fillText: function (t, x, y) {
+        var px = parseFloat(/(\d+)px/.exec(this.font)[1]), tw = String(t).length * px * 0.6;
+        var x0 = this.textAlign === 'center' ? x - tw / 2 : this.textAlign === 'right' ? x - tw : x;
+        texts.push({ t: String(t), x0: x0, x1: x0 + tw, y0: y - px * 0.8, y1: y + px * 0.2 });
+      },
+      font: '11px monospace', textAlign: 'left'
+    };
+    Render.drawAirData(ctx, w, hv, { cy: hv / 2, speed: { value: '161,987', unit: 'KM/S' }, g: 1.2, peak: 3.4,
+      alt: { value: '161,987', unit: 'KM' }, vs: { text: '-120 m/s', dir: -1 }, air: { text: 'AIR ▼ 161,840 km' } });
+    Render.drawHeadingTape(ctx, w, hv, { heading: 291, bug: 300 }, { cy: Math.max(40, hv * 0.30 - 74 - 44), ref: ref });
+    ctx.font = 'bold 11px ui-monospace, monospace'; ctx.textAlign = 'center';
+    ctx.fillText('PITCH -79.1°   ROLL 168.5°   REF ' + ref, w / 2, hv / 2 + 40);
+    Render.drawFacingCue(ctx, w, hv, { mode: 'retro', deg: 80, locked: false }, hv / 2 + 66);
+    var boxes = Render.hudReadoutBoxes(w, hv, ref, foot);
+    var out = texts.filter(function (t) {
+      return !boxes.some(function (b) { return t.x0 >= b.x0 && t.x1 <= b.x1 && t.y0 >= b.y0 && t.y1 <= b.y1; });
+    });
+    check(w + 'x' + hv + ': every readout the glass prints is inside a reserved box', texts.length > 10 && out.length === 0,
+          texts.length + ' texts; ' + out.map(function (t) { return '"' + t.t + '" ' + t.x0.toFixed(0) + '..' + t.x1.toFixed(0) + ',' + t.y0.toFixed(0) + '..' + t.y1.toFixed(0); }).join('; '));
+    var bad = 0, eg = '';
+    for (var y = 20; y < foot - 20; y += 3) {
+      for (var x = w * 0.15; x < w * 0.85; x += 17) {
+        var tw = 9 * 7.2;   // "Seapickle", bold 12 px
+        var ly = Render.labelOffReadouts(x, y, tw, boxes, foot);
+        boxes.forEach(function (b) {
+          if (x + tw + 2 > b.x0 && x - 2 < b.x1 && ly + 3 > b.y0 && ly - 10 < b.y1) { bad++; if (!eg) eg = b.id + ' at ' + x.toFixed(0) + ',' + y; }
+        });
+      }
+    }
+    check(w + 'x' + hv + ': a planet label anywhere on the glass is moved clear of them', bad === 0, bad + ' ' + eg);
+  });
+})();
+
+console.log('--- the intercept pip\'s two-line label keeps off them too (2026-11-03) ---');
+(function () {
+  /* Seen with the pip just under the nose: "PIP 17.0 min" and its drive
+   * line through PITCH / ROLL. main.js moves the pair with labelOffReadouts'
+   * `extra` (13 px: the second line). Both lines must come out clear. */
+  [[800, 592, 378], [1280, 720, 498]].forEach(function (vp) {
+    var w = vp[0], hv = vp[1], foot = vp[2];
+    var boxes = Render.hudReadoutBoxes(w, hv, 'MIRVEN I', foot), bad = 0, eg = '';
+    var tw = 33 * 6.6;   // "thrusters · too close for the drive"
+    for (var y = 30; y < foot - 40; y += 2) {
+      var x = w / 2 - tw / 2, ly = Render.labelOffReadouts(x, y, tw, boxes, foot, 13);
+      boxes.forEach(function (b) {
+        [ly, ly + 13].forEach(function (yy) {
+          if (x + tw + 2 > b.x0 && x - 2 < b.x1 && yy + 3 > b.y0 && yy - 10 < b.y1) { bad++; if (!eg) eg = b.id + ' from ' + y; }
+        });
+      });
+    }
+    check(w + 'x' + hv + ': both lines of the pip\'s label land clear of every readout', bad === 0, bad + ' ' + eg);
+  });
+})();
+
+console.log('--- ships in one berth do not overprint each other (2026-11-03) ---');
+(function () {
+  /* Terminus Downport (Cydoren): three ships in the pit, their names all
+   * written at the same few pixels. Seven at one spot, beside the port's
+   * own name already placed: none of the drawn names may touch another or
+   * the port's, the extra ones are counted on one that was drawn, and
+   * nothing goes into the hint line at the foot of the view. */
+  var tags = [];
+  for (var i = 0; i < 7; i++) tags.push({ text: ['Redsail Tender', 'Coldwater Lighter', 'Overwater Wain', 'Juno Runner',
+                                               'Halcyon Carrier', 'Fender 6  [port tug]', 'Ironwake Packet'][i],
+                                       x: 600 + i * 0.4, y: 440 + i * 0.3, pri: 10 - i });
+  var portBox = { x: 640, y: 466, w: 120, h: 13 };
+  var foot = 478, reserved = [{ id: 'foot', x0: 0, x1: 1280, y0: foot - 21, y1: 760 }];
+  var placed = Render.stackLabels(tags, [portBox], reserved, foot, function (t) { return t.length * 6.6; });
+  var boxes = placed.map(function (p) { return { x: p.x - 2, y: p.y - 10, w: p.q.text.length * 6.6 + 4, h: 13 }; });
+  var touch = 0;
+  for (var a = 0; a < boxes.length; a++) {
+    var A = boxes[a];
+    if (A.x < portBox.x + portBox.w && A.x + A.w > portBox.x && A.y < portBox.y + portBox.h && A.y + A.h > portBox.y) touch++;
+    if (A.y + A.h > foot - 21) touch++;
+    for (var b = a + 1; b < boxes.length; b++) {
+      var B = boxes[b];
+      if (A.x < B.x + B.w && A.x + A.w > B.x && A.y < B.y + B.h && A.y + A.h > B.y) touch++;
+    }
+  }
+  var more = placed.reduce(function (n, p) { return n + p.more; }, 0);
+  check('no two ship names, the port\'s name or the hint line overlap', touch === 0, touch + ' overlaps, ' + placed.length + ' drawn');
+  check('several are drawn, stacked, and every one left out is counted on one that is',
+        placed.length >= 3 && placed.length + more === tags.length, placed.length + ' drawn + ' + more + ' counted');
+  check('the first by priority keeps its own spot', placed[0].q.text === 'Redsail Tender' && placed[0].y === 440);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

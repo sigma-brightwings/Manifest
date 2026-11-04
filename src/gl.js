@@ -862,7 +862,18 @@
      *     atmospheres long, so a low sun is dimmer and redder in its own
      *     reflection, and below the horizon it has none;
      *   - and screened onto the water, never added: it approaches white
-     *     without ever passing it, so nothing clips. */
+     *     without ever passing it, so nothing clips.
+     * THE GAIN, MEASURED (2026-11-03; doctrine 6). Astra saw it faint, and
+     * at 2.2 it was: the lobe's peak, (0.15 + 0.85 fres) * tr, is 0.26 for
+     * a sun 7 degrees up, 0.22 at 17 and 0.15 high, so the brightest pixel
+     * of the sun's image never came near the 0.85 cap — 0.58, 0.48 and
+     * 0.33 screened onto the water — and from 4 km off a sun low over the
+     * swell it was a smudge (ui-shots glint2, g2.2). Swept at 2.2, 3.5,
+     * 4.5, 6 and 9: 4.5 brings the peak to the cap for a low or middling
+     * sun and to 0.67 under a high one, with the lobe over 0.25 about 1.6
+     * degrees across, still broken by the swell into sparkle; 6 caps under
+     * every sun and 9 turned the far glint into a second sun disc. The cap
+     * itself is unchanged, so it still cannot blow out. */
     'vec3 seaShade(vec3 col, vec3 base, vec3 n, vec3 rd, float sea, vec4 sw) {',
     '  if (uSeaRel.w <= 0.0 || sea < 0.01) return col;',
     '  vec3 n2 = normalize(n - (sw.y * uSeaE + sw.z * uSeaN));',
@@ -877,7 +888,7 @@
     '  vec3 sunC = vec3(1.0, 0.96, 0.88) * mix(vec3(1.0, 0.62, 0.38), vec3(1.0), smoothstep(0.02, 0.45, mu));',
     '  float fres = 0.02 + 0.98 * pow(1.0 - max(0.0, -dot(rd, n2)), 5.0);',
     '  float g = pow(max(0.0, dot(reflect(rd, n2), uSunDir)), 900.0) * (0.15 + 0.85 * fres) * tr * ovK;',
-    '  vec3 hl = sunC * min(g * 2.2, 0.85);',
+    '  vec3 hl = sunC * min(g * 4.5, 0.85);',
     '  c2 = 1.0 - (1.0 - c2) * (1.0 - hl);',
     '  c2 = mix(c2, vec3(0.88, 0.93, 0.96) * (0.12 + 0.88 * l2), clamp(sw.w, 0.0, 1.0));',
     '  return mix(col, c2, sea);',
@@ -4493,7 +4504,25 @@
       var mq = meshQueue[i];
       /* GL.queueWindows: the world so far is finished, its depth is
        * dropped, and the windows go in depth-only (see there). */
-      if (mq.clearDepth) { gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT); continue; }
+      if (mq.clearDepth) {
+        /* THE REST OF THE WORLD FIRST (2026-11-03): the tears, the bolts
+         * and the rings are passes of their own after this one, and once
+         * the depth below is cleared and the deck drawn they would be
+         * tested against the deck and the panes — so a planet's ring and a
+         * storm's lightning were never seen through the tube's windows,
+         * while the outside view drew both. Drawn here, while the depth
+         * is still the world's, they are in the picture the panes show;
+         * their queues are then emptied so GL.end does not draw them a
+         * second time over the room. */
+        drawTears(); drawBolts(); drawRings();
+        tearQueue.length = 0; boltQueue.length = 0; ringQueue.length = 0;
+        /* drawRings leaves alpha writes off (the glow mask), and the room
+         * after this must write them as the mesh pass always has. */
+        gl.colorMask(true, true, true, true);
+        gl.depthMask(true); gl.clear(gl.DEPTH_BUFFER_BIT);
+        meshPassBegin(mq.cam);
+        continue;
+      }
       if (mq.depthOnly) {
         gl.colorMask(false, false, false, false);
         drawQueuedMesh(mq);
@@ -4520,10 +4549,11 @@
    * drawn through the room. Then the panes, depth only. Everything queued
    * after (the deck, her hull) is depth-tested against the panes alone: a
    * wall behind a pane is further than the pane and is not drawn, so the
-   * world's colour stays there. What the depth clear costs: the passes
-   * after the mesh pass (rings, tears, lightning bolts) are tested against
-   * the deck and the panes, so a planetary ring is not seen through a
-   * pane. A sea platform's sky rarely has one in it; noted, not fixed. */
+   * world's colour stays there. What the depth clear used to cost: the
+   * passes after the mesh pass (rings, tears, lightning bolts) were tested
+   * against the deck and the panes, so a planetary ring was not seen
+   * through a pane. Since 2026-11-03 drawMeshes draws them at the depth
+   * clear, before the room (see there). */
   GL.queueWindows = function (cam, frame, mesh, scale) {
     if (!gl || !meshProg || !mesh || !mesh.f || !mesh.f.length) return false;
     meshQueue.push({ clearDepth: true, cam: cam });

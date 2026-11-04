@@ -2477,6 +2477,47 @@ section('--- the save file ---');
   check('N really deletes it', Save.load('kawartha') === null);
 })();
 
+section('--- a lent heavy bay survives a save (2026-11-03) ---');
+(function () {
+  /* ship.lentBay was not written, so a small hull saved in the heavy bay
+   * it had been lent came back through assignBerth as an ordinary arrival
+   * and was parked in a small berth. Find a port that lends its heavy
+   * bay, berth her in it, save, restore into a fresh career: same berth. */
+  var s2 = Gen.generateSystem('queue-sweep-1'), port = null;
+  s2.ports.forEach(function (p) {
+    if (port || !p.docking || p.surface || p.seaPlatform) return;
+    for (var k2 = 0; k2 < 40 && !port; k2++) if (Sim.berthStatus(p, s2, k2 * 4000, { cls: 'courier', dryMass: 80 }).lend) port = p;
+  });
+  check('there is a port with a heavy bay to lend', !!port);
+  if (!port) return;
+  var G = makeG();
+  G.sys = s2; G.seed = 'kawartha'; G.galaxy = Galaxy.build('kawartha'); G.here = G.galaxy.home;
+  G.visited = {}; G.ledgerLog = [];
+  G.ship.dryMass = 80;
+  G.ship.lentBay = port.id;
+  Sim.dockShip(G.ship, port, s2, G.t);
+  var lent = G.ship.dockOffset && G.ship.dockOffset.berth;
+  var plain = Sim.assignBerth({ cls: 'courier', dryMass: 80 }, port);
+  check('docked in the heavy bay it was lent, not the berth a stranger gets', lent === 0 && plain !== 0,
+        lent + ' lent, ' + plain + ' otherwise');
+  var data = JSON.parse(JSON.stringify(Save.snapshot(G)));
+  check('the save writes which port lent it', data.ship.lentBay === port.id);
+  var G2 = makeG();
+  G2.sys = s2; G2.seed = 'kawartha'; G2.galaxy = G.galaxy; G2.here = G.galaxy.home; G2.visited = {};
+  G2.ship.dryMass = 80;
+  Save.restore(G2, data, {});
+  check('and she comes back in that bay', G2.ship.docked === port.id && G2.ship.dockOffset &&
+        G2.ship.dockOffset.berth === lent && G2.ship.lentBay === port.id,
+        'docked ' + G2.ship.docked + ' berth ' + (G2.ship.dockOffset && G2.ship.dockOffset.berth));
+  /* A save from before the field: loads as not lent, as it was. */
+  delete data.ship.lentBay;
+  var G3 = makeG();
+  G3.sys = s2; G3.seed = 'kawartha'; G3.galaxy = G.galaxy; G3.here = G.galaxy.home; G3.visited = {};
+  G3.ship.dryMass = 80;
+  Save.restore(G3, data, {});
+  check('an older save with no lentBay loads, as an ordinary berth', G3.ship.lentBay === null && G3.ship.docked === port.id);
+})();
+
 /* The exploit this closes: waste pays you at PICKUP, so jettisoning it
  * used to keep the whole payout at zero cost — faster and richer than the
  * disposal run the payout exists to fund. The fix is not a price change,

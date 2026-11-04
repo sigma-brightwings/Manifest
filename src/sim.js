@@ -2107,16 +2107,29 @@
        * eight; see SEA_PADS): she holds off the rig, low over the water on
        * station-keeping, until her slot in the timetable is over - in plain
        * sight, waiting, rather than parked inside another ship's dome. */
-      if (padK === SEA_OFF) {
+      /* AND SO DOES A SHIP THE PADS NEVER TAKE (2026-11-03). A heavy
+       * (`outboard`: lies off with lighters working her, never takes a
+       * berth — seaStay gives her no stay), or a boat that lives at the
+       * port with no route at all (railState's 'port' rail), had no pad and
+       * fell through to the open-pad branch below: stood on her tail at
+       * four tenths of the rig's radius, in the middle of it. Seen as the
+       * "Ironwake Packet" nose-up beside a rig. She holds off the rig as a
+       * ship turned away from a full deck does, on her own hashed spot.
+       *
+       * `rest` is her level heading, as the pad pose has: the touchdown
+       * blend in trafficCore and the final descent flare the nose toward
+       * `rest || up`, and without it a ship coming in to hold off the rig
+       * was stood on her tail for the last few pad-widths of her crossing. */
+      if (padK === SEA_OFF || padK === null) {
         var gbO = groundBasis(dst, sys, t);
         if (gbO) {
-          var hO = portHash({ id: String(route && route.id) + '@off@' + dst.id });
+          var hO = portHash({ id: String(route ? route.id : 'home') + '@off@' + dst.id });
           var aO = ((hO % 4096) / 4096) * Math.PI * 2;
           var LO = global.Gen.seaLayout(), rO = LO.reach + 0.25 + ((hO >>> 12) % 200) / 1000;
           var pO = V.addScaled(V.addScaled(V.addScaled(gbO.entrance.pos, gbO.east, Math.cos(aO) * rO),
                                            gbO.north, Math.sin(aO) * rO), gbO.up, 0.06 + ((hO >>> 20) % 60) / 1000);
-          return { pos: pO, vel: V.clone(gbO.entrance.vel), up: gbO.up,
-                   fwd: V.norm(V.add(V.scale(gbO.east, -Math.sin(aO)), V.scale(gbO.north, Math.cos(aO)))), holding: true };
+          var fO = V.norm(V.add(V.scale(gbO.east, -Math.sin(aO)), V.scale(gbO.north, Math.cos(aO))));
+          return { pos: pO, vel: V.clone(gbO.entrance.vel), up: gbO.up, fwd: fO, rest: fO, holding: true };
         }
       }
       var bsS = (padK === null || padK === SEA_OFF) ? null : berthState(dst, sys, t, padK);

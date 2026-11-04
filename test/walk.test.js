@@ -161,5 +161,29 @@ check('turn round and E acts on your own ship', w2.near === mine, w2.near && w2.
   check('no two rooms\' walls are drawn in the same plane (the bar door\'s flicker)', fights === 0, fights + ' ' + eg);
 })();
 
+console.log('--- labels keep off the room title and the use-prompt (2026-11-03) ---');
+(function () {
+  /* At Waypoint Dock, at the trade terminal, looking down at it: the 2.4 m
+   * label projected to y ~ 18 on an 800 x 560 view and printed through the
+   * room title. Every label baseline from the top of the screen to the
+   * bottom, at the middle and off to one side, must come out clear of
+   * every reserved box. */
+  var W = 800, H = 560, tw = 98;   // "Trade terminal" in bold 11 px monospace
+  var res = Walk.walkReserved(W, H, { label: 'Trade terminal' });
+  var bad = 0, eg = '';
+  for (var sy = -40; sy < H; sy += 1) {
+    [W / 2, W / 2 + 120, 60].forEach(function (sx) {
+      var y = Walk.labelClear(sx, sy, tw, res);
+      res.forEach(function (r) {
+        if (sx + tw / 2 > r.x0 && sx - tw / 2 < r.x1 && y + 3 > r.y0 && y - 10 < r.y1) { bad++; if (!eg) eg = sx + ',' + sy + ' -> ' + y; }
+      });
+    });
+  }
+  check('no label baseline lands on the title band or the use-prompt', bad === 0, bad + ' ' + eg);
+  check('the terminal label seen looking down moves BELOW the title band',
+        Walk.labelClear(W / 2, 18, tw, res) > Walk.TITLE_BAND.y1);
+  check('and a label nowhere near either is left where it was', Walk.labelClear(W / 2, 200, tw, res) === 200);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);
