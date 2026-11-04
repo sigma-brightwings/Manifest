@@ -31,7 +31,7 @@ var path = require('path');
 
 /* The names each src file publishes onto `global`. */
 var MODULES = ['V', 'RNG', 'Kepler', 'Economy', 'Gen', 'Galaxy', 'Sim',
-               'Combat', 'Intercept', 'Missions', 'Arcs', 'Sound', 'Save', 'Hulls', 'Fleet', 'Crew', 'Holdings', 'ShipTrade', 'Captains', 'Messages', 'Favours', 'Rumours', 'Construction', 'Walk', 'Dressing', 'ShipDeck', 'Airlock', 'Tithe', 'TradeAnalyser', 'Boarding', 'Eva', 'Upkeep', 'Journal', 'Tutorial', 'CargoKit', 'CargoKitData', 'HullFit', 'Npc', 'NpcModel', 'NpcGL', 'CaptainStories', 'Start',
+               'Combat', 'Intercept', 'Missions', 'Arcs', 'Sound', 'Save', 'Hulls', 'Fleet', 'Crew', 'Holdings', 'ShipTrade', 'Captains', 'Messages', 'Favours', 'Rumours', 'Construction', 'Walk', 'Dressing', 'ShipDeck', 'Airlock', 'Tithe', 'TradeAnalyser', 'TradingFirm', 'Boarding', 'Eva', 'Upkeep', 'Journal', 'Tutorial', 'CargoKit', 'CargoKitData', 'HullFit', 'Npc', 'NpcModel', 'NpcGL', 'CaptainStories', 'Start',
                'Render', 'GLWorld', 'Screens', 'Slipspace', 'Logo', 'Weather', 'Game'];
 
 var srcDir = path.resolve(__dirname, '..', 'src');

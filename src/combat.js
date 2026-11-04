@@ -9685,6 +9685,9 @@
     if (!rec) return 'no such ship';
     if (rec.partner) return 'the ' + rec.name + ' is ' + rec.partner.name + '\'s ship — she flies with you, not for you';
     if (rec.order) return 'the ' + rec.name + ' is under way';
+    /* On a trading firm's book (tradingfirm.js): her hold is the firm's
+     * money, and stepping into her would walk off with it. */
+    if (rec.trade) return 'the ' + rec.name + ' is trading for a firm — stand her down at their office first';
     if (!s || !s.docked || rec.port !== s.docked ||
         (rec.star && G.here && rec.star !== G.here.id)) {
       return 'the ' + rec.name + ' is at ' + (rec.portName || 'another port') +

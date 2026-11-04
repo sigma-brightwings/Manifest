@@ -2226,7 +2226,7 @@
     FUEL_ID: FUEL_ID,
     SPREAD: SPREAD,
     LIVE_RANGE: LIVE_RANGE,
-    LEDGER_HALFLIFE: LEDGER_HALFLIFE,
+    LEDGER_HALFLIFE: LEDGER_HALFLIFE, marketKey: marketKey,
     PORT_ROLES: PORT_ROLES,
     NATIVE: NATIVE,
     INDUSTRY: INDUSTRY,
@@ -2244,6 +2244,11 @@
     stock: stock,
     price: price,
     priceAt: priceAt,
+    /* The quote for a stated shelf (trading firms, 2026-11-03): the firm
+     * prices off the closed form plus its own footprint, and has to ask
+     * this the same question price() and priceAt() ask, not a copy of it. */
+    quoteStock: quote,
+    LEDGER_HALFLIFE: LEDGER_HALFLIFE,
     priceList: priceList,
     priceMark: priceMark,
     MARK_BUY_GOOD: MARK_BUY_GOOD, MARK_BUY_BAD: MARK_BUY_BAD,

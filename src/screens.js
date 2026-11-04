@@ -3520,6 +3520,21 @@
     if (cardH && listH < 40) { cardH = Math.max(0, cardH + listH - 40); listH = 40; }
     var perPage = Math.max(1, Math.floor((listH + gap) / (bh + gap)));
     var maxScroll = Math.max(0, rows.length - perPage);
+    /* WHERE THE "1-11 of 13" GOES. On the budget bar after SLOTS when there
+     * is room before the tab buttons; it was drawn there unconditionally,
+     * and on a 1280-wide window with six tabs on the bar it sat under
+     * FITTING (seen on FLEET, 2026-11-03). When the bar has no room, the
+     * list gives up a line at its foot and the counter goes there instead,
+     * right-aligned under the scrollbar it describes. */
+    var tabsLeft = tabRow ? x + w - 12 : x + w - 12 - tabs.length * tabStep;
+    var counterW = 92;                // "999-999 of 999" in bold 10 px, and a gap
+    var counterOnBar = x + 352 + counterW <= tabsLeft && 352 < w - 210;
+    var foot = 0;
+    if (maxScroll > 0 && !counterOnBar) {
+      foot = 14; listH -= foot;
+      perPage = Math.max(1, Math.floor((listH + gap) / (bh + gap)));
+      maxScroll = Math.max(0, rows.length - perPage);
+    }
 
     /* Changing tab starts you at the top of the new one. Carrying a scroll
      * position across from a list of ten hulls to a list of three would
@@ -3540,7 +3555,7 @@
           r.fn, { disabled: r.disabled, font: 11, hot: r.hot });
     }
 
-    if (cardH) drawHullCard(ctx, x, listY + listH + 4, w, cardH - 4);
+    if (cardH) drawHullCard(ctx, x, listY + listH + foot + 4, w, cardH - 4);
 
     if (maxScroll > 0) {
       drawScrollbar(ctx, x + 12 + rowW + 5, listY, sbW, listH,
@@ -3553,16 +3568,15 @@
       });
 
       /* Left-aligned after SLOTS, not right-aligned: the right-hand end of
-       * this row belongs to the tab buttons. */
-      if (352 < w - 210) {
-        ctx.save();
-        ctx.font = 'bold 10px ui-monospace, monospace';
-        ctx.fillStyle = 'rgba(160,185,220,0.55)';
-        ctx.fillText((G.yardScroll + 1) + '-' +
-                     Math.min(rows.length, G.yardScroll + perPage) +
-                     ' of ' + rows.length, x + 352, barY + 11);
-        ctx.restore();
-      }
+       * this row belongs to the tab buttons — and when they leave no room
+       * for it, at the foot of the list (see counterOnBar above). */
+      var ctr = (G.yardScroll + 1) + '-' + Math.min(rows.length, G.yardScroll + perPage) + ' of ' + rows.length;
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.55)';
+      if (counterOnBar) ctx.fillText(ctr, x + 352, barY + 11);
+      else { ctx.textAlign = 'right'; ctx.fillText(ctr, x + w - 12, listY + listH + 11); }
+      ctx.restore();
     }
   }
 
@@ -4003,6 +4017,7 @@
    * thing worth being able to do. Selling is here because a hull you
    * cannot get rid of is a hull the yard tricked you into.
    */
+  function fmtCr(n) { return Math.round(n || 0).toLocaleString('en-US') + ' cr'; }
   function drawYardFleet(ctx, x, w, row, s, port) {
     var mine = Fleet ? Fleet.list(G) : [];
     var hull = Combat.HULLS[s.hullId || 'talon'];
@@ -4046,6 +4061,34 @@
           function () {}, true);
     });
 
+    /* THE TRADING HOUSES' ACCOUNTS (tradingfirm.js, 2026-11-03): one row
+     * per open account, above the ships, with what is in it and how the
+     * quarter is going — the number the house will be judged on. Read
+     * only: money moves at the house's own desk, where the factor is. */
+    var TFs = global.TradingFirm;
+    if (TFs) {
+      TFs.book(G, G.t);
+      TFs.contracts(G).forEach(function (c) {
+        if (c.closed) return;
+        var eq = TFs.equity(G, c), so = eq - c.qStart - c.qFlows;
+        var last = c.history && c.history.length ? c.history[c.history.length - 1] : null;
+        var tell = function () {
+          say('Your account with ' + c.firmShort + ' is kept at their office at ' + c.portName +
+              (c.starName ? ', ' + c.starName : '') + ' — withdraw, deposit or close it there', 6);
+        };
+        /* Two rows, short: the first draft put all of it on one and the
+         * row cut the last quarter off at the right edge, which is the one
+         * number the house is judged on. */
+        row('ACCOUNT  ·  ' + c.firmShort.toUpperCase() + (c.closing ? '  ·  CLOSING' : ''),
+            'worth ' + fmtCr(eq) + '  ·  this quarter ' + (so >= 0 ? '+' : '') + fmtCr(so) +
+            (c.nextReview != null ? '  ·  review in ' + TFs.fmtSpan(Math.max(0, c.nextReview - G.t)) : ''), tell);
+        row('   LAST QUARTER',
+            (last ? (last.profit >= 0 ? '+' : '') + fmtCr(last.profit) + ', ' + last.verdict + ', ' + fmtCr(last.commission) + ' commission'
+                  : 'none yet — the first review is the end of this one') +
+            '  ·  ' + fmtCr(c.cash) + ' cash  ·  ' + c.hulls.length + ' hull' + (c.hulls.length === 1 ? '' : 's'), tell);
+      });
+    }
+
     if (!mine.length) {
       if (!slips.length) {
         row('YOU OWN NO OTHER SHIP', 'buy a hull with KEEP HER and the old one stays yours',
@@ -4069,6 +4112,26 @@
          * is, and clicking it recalls her: she finishes the run she is on
          * and stands down at her port. A second click does nothing new -
          * the row says she is already standing down. */
+        /* ON A TRADING HOUSE'S BOOK: where she is in her run, what she has
+         * made the account, and the account's last quarter. One row, no
+         * action here — she is the house's to direct until you stand her
+         * down at its office. */
+        if (rec.trade && TFs) {
+          var tc = TFs.contractFor(G, rec), made = rec.trade.made || 0, tl = rec.trade.leg;
+          var hailHer = function () {
+            say(rec.name + ' is ' + TFs.phaseOf(rec, G.t) + ' for ' + (tc ? tc.firmShort : 'the house') +
+                ' — you can hail her on the channel', 6);
+          };
+          row(rec.name.toUpperCase() + '  ·  TRADING FOR ' + (tc ? tc.firmShort.toUpperCase() : 'A HOUSE'),
+              tl ? (tl.cid ? tl.qty + ' t ' + TFs.goodName(tl.cid) : 'empty') + ' → ' + tl.toName +
+                   (tl.kind === 'jump' ? ' (' + (tl.toStarName || 'another star') + ')' : '') +
+                   '  ·  in ' + TFs.fmtSpan(Math.max(0, tl.arrive - G.t))
+                 : 'at ' + (rec.portName || 'her port') + '  ·  next run in ' + TFs.fmtSpan(Math.max(0, rec.trade.next - G.t)),
+              hailHer);
+          row('   HER RUNS', (rec.trade.runs || 0) + ' run' + (rec.trade.runs === 1 ? '' : 's') + ', ' +
+              (made >= 0 ? '+' : '') + fmtCr(made) + ' to the account', hailHer);
+          return;
+        }
         if (rec.work) {
           var wk = rec.work;
           row(rec.name.toUpperCase() + '  ·  WORKING ' + wk.siteName.toUpperCase(),

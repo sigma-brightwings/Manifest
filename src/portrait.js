@@ -77,6 +77,8 @@
     officer:    { earpiece: 0.5, glasses: 0.2, eyepiece: 0.1 },
     bartender:  { piercings: 0.4, tattoo: 0.35, glasses: 0.15, earpiece: 0.1 },
     clerk:      { glasses: 0.35, earpiece: 0.35, eyepiece: 0.1 },
+    /* A trading house's factor (tradingfirm.js): reads boards for a living. */
+    factor:     { glasses: 0.45, eyepiece: 0.25, earpiece: 0.4 },
     steward:    { glasses: 0.25, earpiece: 0.4 }
   };
   /* Two on one face that cannot both be there. */
@@ -163,7 +165,7 @@
     marine: { buzz: 6, fade: 5, crop: 3 }, tactical: { buzz: 5, fade: 4, crop: 3 },
     officer: { sidepart: 6, crop: 4, slickpart: 3, bun: 3 }, security: { buzz: 3, fade: 3, crop: 2 },
     enforcer: { buzz: 5, slick: 3, bald: 2 }, heavy: { buzz: 5, bald: 2, fade: 2 },
-    fixer: { slick: 6, slickpart: 4, undercut: 3 }, captain: { long: 4, locs: 3, horseshoe: 2, spikes: 2 }
+    fixer: { slick: 6, slickpart: 4, undercut: 3 }, factor: { sidepart: 5, bun: 3, slickpart: 3, bob: 2 }, captain: { long: 4, locs: 3, horseshoe: 2, spikes: 2 }
   };
   function rollCut(role, id, age) {
     var r = rng(hash('cut|' + id)), lean = CUT_LEAN[role] || {};

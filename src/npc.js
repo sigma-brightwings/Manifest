@@ -96,6 +96,8 @@
     enforcer: ['Business is good when everybody behaves.', 'You are not here to make trouble, are you.'],
     heavy: ['Keep walking.'],
     fixer: ['Not here. Not now.', 'If you want something, you will know who to ask.'],
+    factor: ['Buy where they make it, sell where they want it. The rest is timing.', 'Our boards are fresher than the terminal\'s.',
+             'A quarter is a long time in a market, and not long at all on a ledger.'],
     marine: ['Papers in order, I hope.', 'Keep your hands where I can see them.'],
     officer: ['Customs is closed to complaints.', 'Fly straight and we will never meet again.'],
     raider: ['What are you looking at.'],
@@ -462,6 +464,29 @@
     var corrupt = (opts.corruption || 0) / 100;
     if (bar && draw(key, 'fixer|' + Math.floor(t / (2 * 86400))) < 0.12 + 0.6 * corrupt + (portLiv === 'syn' ? 0.3 : 0)) {
       people.push(person(key + '|fixer', staffName('fixer'), 'fixer', 'syn', 'fixer', { room: 'bar', sitting: true }));
+    }
+
+    /* THE TRADING HOUSE'S FACTOR (tradingfirm.js, 2026-11-03): where the
+     * port has a house, its factor stands at the trade terminal on the
+     * concourse — a step to the side of the screen, facing the floor, so
+     * the terminal and the person who reads it for a living are found
+     * together. Whether there is a house is TradingFirm.firmAt, a pure
+     * function of the system and the port; the factor's face and name are
+     * drawn off the house's own key, so the same port is the same person. */
+    var TFm = global.TradingFirm, firm = TFm && TFm.firmAt && port && sys ? TFm.firmAt(port, sys) : null;
+    if (firm) {
+      var term = itemsOfKind(plan, 'tradeterm')[0], fpost = null;
+      if (term && term.face) {
+        var fx = term.face.x, fz = term.face.z;
+        [1, -1].forEach(function (side) {
+          if (fpost) return;
+          var px = term.x + fx * 0.9 + fz * 1.1 * side, pz = term.z + fz * 0.9 - fx * 1.1 * side;
+          if (standable(plan, px, pz)) fpost = { x: px, z: pz, yaw: Math.atan2(fx, fz) };
+        });
+      }
+      var fextra = { staff: 'Factor', firmKey: firm.key };
+      if (fpost) fextra.post = fpost; else fextra.room = conc ? 'concourse' : 'bar';
+      people.push(person(key + '|factor', nameFrom('firm|' + firm.key), 'pilot', 'civ', 'factor', fextra));
     }
 
     var sc = { kind: 'station', plan: plan, people: people, floorY: 0, key: key };

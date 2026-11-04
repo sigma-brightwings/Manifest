@@ -13971,6 +13971,9 @@
     global.Dialogue.choose(G, G.sys, talkPort(), tk.st, i);
     /* Signing someone on changes who is on the deck. */
     if (tk.st.hired) npcScene = null;
+    /* The trading house (tradingfirm.js): an account closed at the desk
+     * says what it remitted, in the ledger and the journal like any sale. */
+    if (tk.st.firmLines) { var fl = tk.st.firmLines; tk.st.firmLines = null; for (var fli = 0; fli < fl.length; fli++) logTrade(fl[fli]); }
     /* The standoff in her airlock, settled (boarding part 3). */
     if (tk.st.standoff) { var so = tk.st.standoff; tk.st.standoff = null; resolveStandoff(so); }
     /* Her master opened her books (dialogue.js DEAL): the hailed-ship board
