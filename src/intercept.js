@@ -403,7 +403,10 @@
      * solve there is — only to throw it away. The readout then says the
      * thrusters would take "over" that. */
     var cr = solveWith(o, now, 'cruise');
-    var give = isFinite(cr.T) ? cr.T : 0;
+    /* Ten times the cruise: still cheap (the slow thruster solves are the
+     * system-crossing ones, months long), and the "over" figure on the
+     * readout then says something — "over 2.3 min", not "over 14 s". */
+    var give = isFinite(cr.T) ? Math.max(cr.T * 10, 60) : 0;
     var o2 = give ? Object.create(o) : o;
     if (give) o2.give = give;
     var th = solveWith(o2, now, 'thrusters');
