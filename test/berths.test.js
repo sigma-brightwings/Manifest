@@ -763,8 +763,13 @@ console.log('--- and the doors are doors ---');
 
     /* THE HULL SURVIVED. A split that swallowed the station into its own
      * doors would leave nothing to draw and nothing to hit, and every
-     * other check here would still pass. */
-    if (!(d.hull.f.length > d.leaves.reduce(function (n, l) { return n + l.mesh.f.length; }, 0))) {
+     * other check here would still pass. The station is its shell AND its
+     * interior: the civil yards keep their whole hall in the interior, and
+     * since their carriages ride (2026-11-03) the shell holds little but
+     * the carriages and their leaves - yard-m's 8 carriages outweigh its
+     * shell, never its 127,000-face hall. */
+    var libD = Render.libPort(modelId), inrF = (libD && libD.interior && libD.interior.f) ? libD.interior.f.length : 0;
+    if (!(d.hull.f.length + inrF > d.leaves.reduce(function (n, l) { return n + l.mesh.f.length; }, 0))) {
       bad++;
       console.log('  FAIL  ' + modelId + ' is more door than station');
     }
