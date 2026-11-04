@@ -2338,6 +2338,47 @@ console.log('--- on the bay\'s floor, not its lintel ---');
         bad.length <= 30, bad.length + '');
 })();
 
+/* ---- E: INDOORS AND BACK OUT (2026-11-04) ---------------------------------
+ * An arrival that goes in through the doors and then comes out again before
+ * it stops - the occupancy grid the game asks (Sim.outsideStation) says the
+ * hull was in the station and then in space - is a hull parked on a roof or
+ * routed out through a wall. At the cradles and the Syndicate yards: 24 of
+ * their 72 berths on 2026-11-03 (the cradles' outboard pods and the yards'
+ * S/M bays bridged "by elevator" through the hull, and the Syndicate S/M
+ * stands on their slots' roofs). Now the three tilted garages whose own
+ * frame has no level floor (above) - their stands are outdoors - and
+ * nothing else. */
+console.log('--- indoors and back out ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var st = sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  var role = Render.portRole(st), R0 = st.radius;
+  st.radius = 4.184;
+  var n = 0, bad = [];
+  MODELS.filter(function (id) { return /^(cradle|yard-syn)/.test(id); }).forEach(function (id) {
+    Render.assignPort(role, id);
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      var dur = Sim.arrivalTotal(st, i);
+      if (!(dur > 0)) continue;
+      n++;
+      var wasIn = false, after = 0;
+      for (var el = 0; el <= dur + 1e-6; el += 0.5) {
+        var pose = Sim.arrivalPose(st, sys, 0, i, Math.min(el, dur));
+        if (!pose) continue;
+        var out = Sim.outsideStation(st, pose.pos, sys, 0);
+        if (!out) wasIn = true; else if (wasIn && pose.leg >= 2) after++;
+      }
+      if (after) bad.push(id + ' b' + i);
+    }
+  });
+  Render.assignPort(role, null);
+  st.radius = R0;
+  console.log('  ' + n + ' arrivals, ' + bad.length + ' indoors and back out: ' + bad.join(', '));
+  check('no cradle or Syndicate-yard arrival goes indoors and back out, but the three tilted garages (24 on 2026-11-03)',
+        n >= 60 && bad.length <= 3 && bad.every(function (s) { return /^yard-syn-[ms] /.test(s); }), bad.join('; '));
+})();
+
 /* ---- THE RAIL WAITS OUTSIDE THE DOORS, ON THE LAMPS' LINE (2026-11-03) ----
  * Astra at Waypoint Dock: "ship is not aligned with the navigation landing
  * lights", and leaving it "we phased through the wall just above it". The
