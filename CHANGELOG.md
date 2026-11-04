@@ -40,6 +40,79 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-04, station geometry, fourth pass: every leg inside a station in the open, the navy yards' heavy bays on their hall floor, the Syndicate yards' throats on their floors)
+
+Astra, of what was still open after the third pass: "let's do all the still
+open stuff".
+
+- **The cylinders' small bays ride their arms in the open.** Cylinder arm A
+  is the builder's arm rolled half a turn round the hub, and its bore came
+  out upside down: keel, racks and car on top, crown underneath. The hull,
+  stood on the car's deck, rode the whole bore *inside the keel slab* - and
+  a line inside a slab crosses no surface, so every sweep passed the ride
+  and failed the legs on and off it. The converter now turns such a bore
+  half a turn about its own axis, keel down (`tools/glb2hulls.js`
+  boreUpright; the tube is symmetric, so the hub's and pod's holes for it
+  are unchanged). All nine cylinders re-converted.
+- **On and off an inclined car along its rails.** The leg to a car parked in
+  a bore's mouth came in through the bore's side wall; the route search had
+  to find the mouth on a grid as coarse as the bore is narrow, and at arm B
+  it never did. She now drives out along the rails past the end of the run
+  and straight onto the car, and off it the same way (`Sim` seatRide).
+- **The skimmers' hoist has a way out at the top.** The field between the
+  hoist and the sort hall is called `hallGateForceField`, and anything
+  starting `hall` went into the interior bucket, where nothing makes a gate
+  into a door: it was a solid plate. A field is now never interior. The
+  station's own internal doors (the skimmers' lock and hall gates) open for
+  a transfer passing through (`Render.hallLeafOpen`); before, they opened
+  only with a berth's outer doors. Nine skimmers re-converted.
+- **No elevator through the walls.** Where the converter could not join a
+  small bay to a heavy one it drew a straight "elevator" between them,
+  through whatever was in the way, and at the game's own collision test
+  every such route stayed one. Those bays - the cradles' outboard pods,
+  which hang off the hull with open space between, spine-l's two, every S/M
+  bay at the navy and Syndicate yards, and one at cylinder-m - now dock at
+  their own doors, and the anchor says why ("no passage from a heavy bay").
+- **The navy yards' heavy bays.** Their doorway is set 0.19 radii up the end
+  wall of a hall whose floor is far below, with nothing to stand on in it,
+  so the hull was parked on the lintel with 613-700 m of nothing under her
+  and the rail flew in over the lintel into the wall. The stand is now on
+  the hall floor inside (`Render.berthStandIn`), with its pad; she comes in
+  level through the middle of the doorway, then down, and leaves the same
+  way back (the rail run backwards, as from a routed bay). The doorways'
+  roll-up slats also stood a strip of shut door, the doorway's full height,
+  in the middle of every open garage: a face lifted off a coplanar panel
+  fell outside its slat's rounded box (`inGateBox` pads a leaf's thin axis).
+- **The Syndicate yards' throats.** Six S/M bays were parked on the roof of
+  their slot, outdoors, 86-101 m over its floor; the lintel rule now covers
+  the top fifth of a bay's box, which moves exactly those six. Their doors
+  lean 10 degrees, and the line in is now kept on the door's own plane
+  where it is moved to her height (it had stood the hull in the shut
+  leaves).
+- **In transit with the cutaway outside, the station is drawn.** Checked at
+  Halden Yard on this branch: since the third pass's rooms (`Render.roomAt`)
+  the whole hull is drawn round her on the transfer, cut by the cone only.
+
+Measured (Waypoint Dock's radius, the navy and Syndicate yards included in
+every sweep, which the inner-leg sweep had always said it did and did not):
+
+- Berths with an inner leg through structure: 58 of 166 before, 0 now
+  (32 of 131 without the yards).
+- Approaches through something: 6 of 378 before (17 of 60 at yard-navy with
+  its routed bays), 0 now.
+- Berths off a level floor: 40 before, 30 now. All 30 are bays whose own
+  frame is not level: the cylinders' arm B and C pods, rolled 60 degrees
+  round the hub, and three Syndicate garages, 22 degrees. Every hull stands
+  +z up, so there is no level floor in them; that is the art's to mend (or
+  a tilted stand's). Every level-framed bay now stands on a real floor.
+- Cradle and Syndicate-yard arrivals that go indoors and back out: 24 of 72
+  before, 3 now - those three tilted garages, whose stands are outdoors.
+
+**Saves:** survive. Nothing stored changed: routes, stands and doors are
+worked out from the model each session. A ship saved docked is re-docked at
+that port on load (Sim.dockShip, as always), at the stand as it is worked
+out now.
+
 ### Fixed (2026-11-03, station geometry, third pass: Halden Yard's carriages ride, a clean landing at the small spines, ground ports on her own gear)
 
 Astra, of what was still open after the second pass: "let's do all the still
