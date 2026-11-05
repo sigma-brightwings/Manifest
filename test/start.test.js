@@ -275,7 +275,8 @@ check('the difficulty stage says the run profit, once, in the heading',
       texts.filter(function (t) { return /LESSONS/.test(t); }).join(' | '));
 check('HARD reads "keep the Talon" and shows the ship as she stands',
       texts.some(function (t) { return t === 'keep the Talon'; }) &&
-      texts.some(function (t) { return /Talon Courier . 64 t hold . guns: pulse . 4,700 cr$/.test(t); }));
+      /* the purse plus the run's 1,500, read off PURSE so a new purse needs no re-pin here */
+      texts.some(function (t) { return new RegExp('Talon Courier . 64 t hold . guns: pulse . ' + (PURSE + 1500).toLocaleString('en-US') + ' cr$').test(t); }));
 check('direction is glyphs', texts.some(function (t) { return t.indexOf('▸') >= 0; }) &&
       texts.some(function (t) { return t.indexOf('◂') >= 0; }));
 key('ArrowUp'); key('Enter');
@@ -328,7 +329,7 @@ key('Escape'); frame();
 
 freshEnded(1500);
 key('ArrowDown'); key('Enter');
-check('HARD keeps the Talon and changes nothing', G.ship.hullId === 'talon' && G.ship.credits === 4700 &&
+check('HARD keeps the Talon and changes nothing', G.ship.hullId === 'talon' && G.ship.credits === PURSE + 1500 &&
       G.start.difficulty === 'hard' && !G.startPending && !G.menu);
 
 /* A run that lost money does not come off the start. */
