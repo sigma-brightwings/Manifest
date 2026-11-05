@@ -9870,7 +9870,7 @@
     try {
       return yield* berthDeckBody(role, k, key, lib, sorted, raw);
     } finally {
-      DECK = DECK0; STAND_IN = STAND_IN0;
+      if (raw) { DECK = DECK0; STAND_IN = STAND_IN0; }
     }
   }
   function* berthDeckBody(role, k, key, lib, sorted, raw) {
@@ -10316,7 +10316,11 @@
       }
     }
     var out = [], shift = Math.sqrt((cx - x0) * (cx - x0) + (cy - y0) * (cy - y0));
-    var zLo = b.min[2] - under - 0.02, zHi = b.max[2] + 0.002;
+    /* No higher than the top of the bay's own box: the deck is a berth's
+     * own, inside the anchor it belongs to (berths.test.js asks it of every
+     * deck); as low as the box's floor tolerance and a little under, where a
+     * routed pod's stand comes up through it. */
+    var zLo = b.min[2] - under - 0.02, zHi = b.max[2];
     for (var zt = zHi; zt >= zLo; zt -= PAD_Z_STEP) {
       var clear = true;
       for (var c = 0; c < cols.length && clear; c++) {
