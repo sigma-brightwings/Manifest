@@ -1059,7 +1059,8 @@
    *
    * and from the hard start (3,200 cr, the best run the money covers,
    * twice a day, lanes wearing as they are flown) to a Tallyman: 3 runs
-   * before, 8 now. That is the target: a step is a few good runs, a few
+   * before, 8 after; 6 from the 7,000 cr purse and gentler near-supply
+   * that followed the same day (generate.js SHIP_SPEC.credits). That is the target: a step is a few good runs, a few
    * more than that once lanes wear, and the top of the ladder is a real
    * ambition rather than an afternoon.
    *

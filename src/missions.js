@@ -44,6 +44,9 @@
    * Measured on forty home systems over three board windows: a haul pays
    * 696 median, a courier parcel 3,309, and a Talon's hold of in-system
    * hauls about 3,500 against a 3,200 cr pilot's first trade run of 1,265.
+   * (The same day the hard purse went to 7,000 and that first run back to
+   * 2,940 median; the hauls were left at 0.75 — capital-free work stays
+   * worth having beside it, and nothing about a contract changed.)
    *
    * 0.75, not the 0.35 that would restore the old ratio, ON PURPOSE. The
    * retune hit the hard start hardest, and capital-free work is what a

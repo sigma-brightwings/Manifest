@@ -14,7 +14,7 @@
  *  - a combat start is docked at a shipyard where the home system has one;
  *  - HARD is today's career exactly: the same ship, the same port, the
  *    same system, as newGame with no choice at all - and that is the old
- *    Talon, 3,200 cr and a pulse laser;
+ *    Talon, the hard purse (7,000 cr since 2026-11-04) and a pulse laser;
  *  - the same seed twice gives the same start;
  *  - the choice survives a save, additively;
  *  - New career goes straight to the seed and is the Talon with the
@@ -79,6 +79,12 @@ srcs.filter(function (s) { return !/gl\.js$|npcgl\.js$|embedder\.js$/.test(s); }
 
 var G = global.Game, S = global.Start, C = global.Combat, Save = global.Save;
 check('the game and start.js booted', !!G && !!S && !!G.ship);
+/* The hard purse is written once, in generate.js SHIP_SPEC; everything below
+ * reads it. Re-pinned 3,200 -> 7,000 on 2026-11-04: Astra's bigger purse,
+ * which put Halloway's first run back near 3,000 cr after the retune. */
+var PURSE = global.Gen.SHIP_SPEC.credits;
+check('the hard purse is 7,000 cr (2026-11-04: the first run back near 3,000)', PURSE === 7000, PURSE);
+check('start.js reads it from there, not a copy', S.classicCredits ? S.classicCredits() === PURSE : true);
 check('start.js is loaded from index.html, after combat.js',
       srcs.indexOf('src/start.js') > srcs.indexOf('src/combat.js') && srcs.indexOf('src/start.js') < srcs.indexOf('src/main.js'));
 
@@ -133,10 +139,10 @@ function careerKey() {
   var old = careerKey(), oldShip = G.ship;
   G.newGame(seed, { difficulty: 'hard', focus: null });
   check(seed + ': HARD is newGame with no choice, field for field', careerKey() === old);
-  check(seed + ': and that is the Talon, 3,200 cr, a pulse laser, scoop and drive',
-        G.ship.hullId === 'talon' && G.ship.credits === 3200 &&
+  check(seed + ': and that is the Talon, the hard purse, a pulse laser, scoop and drive',
+        G.ship.hullId === 'talon' && G.ship.credits === PURSE &&
         JSON.stringify(G.ship.fit) === JSON.stringify({ hardpoint0: 'phpulse', utility0: 'cargoscoop', drive0: 'cruise1' }) &&
-        oldShip.credits === 3200, JSON.stringify(G.ship.fit));
+        oldShip.credits === PURSE, JSON.stringify(G.ship.fit));
   check(seed + ': the hard career is saved as hard', G.start && G.start.difficulty === 'hard');
 });
 
@@ -229,7 +235,7 @@ check('New career goes straight to the seed field - no picker on the title',
       G.title && G.title.edit && !G.title.pick, G.title && JSON.stringify(G.title.pick));
 key('Enter');
 check('and Enter starts the classic Talon with the lessons',
-      !G.title && G.ship.hullId === 'talon' && G.ship.credits === 3200 && G.start === null &&
+      !G.title && G.ship.hullId === 'talon' && G.ship.credits === PURSE && G.start === null &&
       G.tutorial && G.tutorial.step === 'hello' && G.tutorial.pickAtEnd === true && G.startPending === false);
 var newKey = careerKey();
 G.newGame('kawartha', { difficulty: 'hard', focus: null });
@@ -248,7 +254,7 @@ function endLessons() {
  * frame run that opens the picker. */
 function freshEnded(profit) {
   G.newGame('kawartha');
-  G.ship.credits = 3200 + profit;
+  G.ship.credits = PURSE + profit;
   endLessons();
   frame();
 }
@@ -338,16 +344,16 @@ var bids = {};
 global.Economy.priceList(port0, G.t).forEach(function (r) { if (r.sell > 0) bids[r.id] = r.sell; });
 var goods = Object.keys(bids).filter(function (id) { return id !== 'waste'; }).sort(function (a, b) { return bids[b] - bids[a]; });
 G.ship.cargo = {}; G.ship.cargo[goods[0]] = 10; G.ship.cargo[goods[goods.length - 1]] = 50;
-G.ship.credits = 3000;
+G.ship.credits = PURSE - 200;               // 200 under the purse, as 3,000 was under 3,200: the cargo makes the profit
 var lance = S.plan('normal', 'combat');
-var worth = 3000 + 10 * bids[goods[0]] + 50 * bids[goods[goods.length - 1]];
+var worth = PURSE - 200 + 10 * bids[goods[0]] + 50 * bids[goods[goods.length - 1]];
 var q = S.quote(G, lance, port0, G.t);
 check('quote: the dearest good is kept first, and the hold is not overfilled',
       q.ok && q.keep[goods[0]] === Math.min(10, lance.cargoCap) &&
       Object.keys(q.keep).reduce(function (a, k) { return a + q.keep[k]; }, 0) <= lance.cargoCap, JSON.stringify(q.keep));
 var keptV = Object.keys(q.keep).reduce(function (a, k) { return a + q.keep[k] * bids[k]; }, 0);
 check('quote: profit counts the cargo, and the cargo kept is not paid twice',
-      q.profit === Math.max(0, Math.round(worth - 3200)) && q.credits === Math.round(lance.credits + q.profit - keptV),
+      q.profit === Math.max(0, Math.round(worth - PURSE)) && q.credits === Math.round(lance.credits + q.profit - keptV),
       q.profit + ' / ' + q.credits);
 endLessons(); frame();
 key('Enter'); key('ArrowDown'); key('ArrowDown'); key('Enter');   // Normal, combat
