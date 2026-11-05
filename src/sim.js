@@ -548,6 +548,11 @@
   function berthFacing(basis, off) {
     if (off && off.normal) {
       var n = off.normal;
+      /* Level on a level pad (Gen.berthOffset `level`): the normal's level
+       * part. A tilted bay's normal points 10-60 degrees off the level, and
+       * the hull was pitched nose-down into a cylinder pod's slope with it -
+       * on a pad as flat as any other, she stands as level as any other. */
+      if (off.level && Math.abs(n[0]) + Math.abs(n[1]) > 1e-6) n = [n[0], n[1], 0];
       var v = V.addScaled(V.scale(basis.east, n[0]), basis.north, n[1]);
       v = V.addScaled(v, basis.up, n[2]);
       if (V.len(v) > 1e-9) return V.norm(v);
