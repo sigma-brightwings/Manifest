@@ -8419,6 +8419,11 @@
     var model = Render.portModelFor(port);
     if (G.ship.docked === port.id) {
       var b = currentBerth();
+      /* Not a stand moved in off a high wall door (Render.berthStandIn,
+       * 2026-11-04): she is on the hall's floor, outside her berth's box -
+       * which is only the doorway - and drawing that compartment alone
+       * would draw the doorway and leave her in the dark. */
+      if (typeof b === 'number' && b >= 0 && Render.berthStandIn && Render.berthStandIn(model, b)) return null;
       return (typeof b === 'number' && b >= 0) ? b : null;
     }
     var basis = Sim.portBasis(port, G.sys, G.t);

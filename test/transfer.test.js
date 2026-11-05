@@ -31,7 +31,12 @@ function check(n, c, d) {
 
 /* ---- every S/M berth of every orbital design has a way in ------------- */
 console.log('--- S/M in through the L bay ---');
-var lib = global.PortLib, smTotal = 0, smRouted = 0, missing = [];
+/* OR DOCKED AT ITS OWN DOOR, SAYING WHY (2026-11-04). Every bay whose only
+ * "route" in was an elevator bridge - a straight line through whatever lay
+ * between two decks - was a hull through the structure at the exact test
+ * (interiors.test: 58 of 166 inner legs). The converter now leaves such a
+ * bay unrouted, docked at its own mouth, with the reason on the anchor. */
+var lib = global.PortLib, smTotal = 0, smRouted = 0, missing = [], ownDoor = 0;
 Object.keys(lib).forEach(function (id) {
   var m = lib[id];
   var b = m && m.anchors && m.anchors.berths;
@@ -42,11 +47,13 @@ Object.keys(lib).forEach(function (id) {
     if (x.cls !== 'SM') return;
     smTotal++;
     if (typeof x.entry === 'number' && x.via) smRouted++;
+    else if (x.unrouted && /^(door|field|curtain)$/.test(x.kind || '')) ownDoor++;
     else missing.push(id + ':' + x.node);
   });
 });
-check('every S/M berth behind an L bay has a route in', smTotal > 0 && smRouted === smTotal,
-      smRouted + '/' + smTotal + (missing.length ? '  missing ' + missing.slice(0, 6).join(' ') : ''));
+check('every S/M berth behind an L bay has a route in, or a door of its own and the reason it has no route',
+      smTotal > 0 && smRouted + ownDoor === smTotal,
+      smRouted + ' routed + ' + ownDoor + ' at their own doors / ' + smTotal + (missing.length ? '  missing ' + missing.slice(0, 6).join(' ') : ''));
 ['cradle-m', 'cradle-l'].forEach(function (id) {
   var m = lib[id];
   var n = m ? m.anchors.berths.filter(function (x) { return x.cls === 'SM' && x.via; }).length : 0;

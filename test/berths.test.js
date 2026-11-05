@@ -191,8 +191,12 @@ console.log('--- both halves index a model\'s berths the same way ---');
     });
     for (var i = 0; i < sorted.length; i++) {
       var off = Gen.berthOffset(port, i);
-      if (Math.abs(off.x - sorted[i].mid[0]) > 1e-9 ||
-          Math.abs(off.y - sorted[i].mid[1]) > 1e-9) { bad++; }
+      /* Less a stand moved in off a high wall door (Render.berthStandIn,
+       * 2026-11-04): the navy yards' heavy bays stand on the hall floor
+       * inside their doorway, by a shift the renderer says. */
+      var sIn = Render.berthStandIn(modelId, i) || [0, 0];
+      if (Math.abs(off.x - sIn[0] - sorted[i].mid[0]) > 1e-9 ||
+          Math.abs(off.y - sIn[1] - sorted[i].mid[1]) > 1e-9) { bad++; }
     }
   });
   check('berthOffset and berthBoxes agree on which berth is which',
@@ -1203,7 +1207,10 @@ console.log('--- landing in a berth ---');
         return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
       });
       var b = sorted[k];
-      if (b.min && b.max && (deck < b.min[2] - 1e-6 || deck > b.max[2] + 1e-6)) {
+      /* ...or, for a high wall door whose stand is moved in to the hall's
+       * floor (Render.berthStandIn), under it: the box is the doorway. */
+      var movedIn = !!Render.berthStandIn(id, k);
+      if (b.min && b.max && (deck < b.min[2] - 1e-6 && !movedIn || deck > b.max[2] + 1e-6)) {
         offDeck++;
         console.log('  FAIL  ' + id + ' berth ' + k + ' put its deck outside its own anchor');
       }
@@ -2285,8 +2292,91 @@ console.log('--- on the bay\'s floor, not its lintel ---');
   bad.forEach(function (s) { console.log('    ' + s); });
   check('no hull is parked on a lintel at a spine, ring, cradle, refinery or skimmer',
         lintel.length === 0, lintel.join('; '));
-  check('the berths off a level floor are no more than the 40 measured 2026-11-03',
-        bad.length <= 40, bad.length + '');
+  /* 30 since 2026-11-04 (40 before): the navy yards' heavy bays stand on
+   * their hall's floor inside the door (Render.berthStandIn; there was
+   * nothing under them for 613-700 m), and six Syndicate throats on their
+   * slot's floor, not its roof (the lintel band a fifth of the box, not a
+   * tenth). Every one left is a bay whose own frame is not level - the
+   * art's `up` is off +z: the cylinders' arm B and C pods, rolled 60
+   * degrees round the hub, and the Syndicate yards' garages, 22 degrees.
+   * Every hull stands +z up, so there is no level floor in them to find;
+   * that is the art's to mend, or a tilted stand's. A level-framed bay off
+   * its floor is a failure outright. */
+  var tilted = function (s) {
+    var mm = /^(\S+) b(\d+)/.exec(s), id = mm[1], i = +mm[2];
+    var bb = Render.libPort(id).anchors.berths.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    })[i];
+    return !!(bb && bb.up && bb.up[2] < 0.99);
+  };
+  var levelBad = bad.filter(function (s) { return !tilted(s); });
+  /* And out of a stand moved in off its door (berthStandIn), the way she
+   * came: the push along the bay's normal from the hall floor is through
+   * the wall under the sill, so undocking runs the rail backwards and
+   * hands her over outside. */
+  var inStands = 0, outBad = [];
+  ['yard-navy-s', 'yard-navy-m', 'yard-navy-l'].forEach(function (id) {
+    Render.assignPort(role, id);
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      if (!Render.berthStandIn(id, i)) continue;
+      inStands++;
+      var sh = { pos: [0, 0, 0], vel: [0, 0, 0], fwd: [1, 0, 0], up: [0, 0, 1], right: [0, 1, 0], cleared: {} };
+      Sim.dockShip(sh, st, sys, 0, i);
+      Sim.undockShip(sh, sys, 0, 0.002);
+      var ok = !!(sh.arrival && sh.arrival.reverse), tt = 0;
+      while (sh.arrival && tt < 400) { tt += 0.5; Sim.stepArrival(sh, sys, tt); }
+      if (!ok || sh.arrival || !Sim.outsideStation(st, sh.pos, sys, tt)) outBad.push(id + ' b' + i);
+    }
+  });
+  Render.assignPort(role, null);
+  /* Four: yard-navy-s and -l have one heavy garage each, -m two. */
+  check('every navy yard heavy bay stands her on the hall floor inside, and lets her out the way she came',
+        inStands === 4 && outBad.length === 0, inStands + ' stands moved in; ' + outBad.join('; '));
+  check('every level-framed berth stands on a real floor', levelBad.length === 0, levelBad.join('; '));
+  check('the berths off a level floor are no more than the 30 measured 2026-11-04 (40 the day before), all in tilted bays',
+        bad.length <= 30, bad.length + '');
+})();
+
+/* ---- E: INDOORS AND BACK OUT (2026-11-04) ---------------------------------
+ * An arrival that goes in through the doors and then comes out again before
+ * it stops - the occupancy grid the game asks (Sim.outsideStation) says the
+ * hull was in the station and then in space - is a hull parked on a roof or
+ * routed out through a wall. At the cradles and the Syndicate yards: 24 of
+ * their 72 berths on 2026-11-03 (the cradles' outboard pods and the yards'
+ * S/M bays bridged "by elevator" through the hull, and the Syndicate S/M
+ * stands on their slots' roofs). Now the three tilted garages whose own
+ * frame has no level floor (above) - their stands are outdoors - and
+ * nothing else. */
+console.log('--- indoors and back out ---');
+(function () {
+  var sys = Gen.generateSystem('cut-sweep');
+  var st = sys.ports.filter(function (p) { return !p.surface && p.docking; })[0];
+  var role = Render.portRole(st), R0 = st.radius;
+  st.radius = 4.184;
+  var n = 0, bad = [];
+  MODELS.filter(function (id) { return /^(cradle|yard-syn)/.test(id); }).forEach(function (id) {
+    Render.assignPort(role, id);
+    var nb = Math.max(1, Gen.bayGeometry(st).berths);
+    for (var i = 0; i < nb; i++) {
+      var dur = Sim.arrivalTotal(st, i);
+      if (!(dur > 0)) continue;
+      n++;
+      var wasIn = false, after = 0;
+      for (var el = 0; el <= dur + 1e-6; el += 0.5) {
+        var pose = Sim.arrivalPose(st, sys, 0, i, Math.min(el, dur));
+        if (!pose) continue;
+        var out = Sim.outsideStation(st, pose.pos, sys, 0);
+        if (!out) wasIn = true; else if (wasIn && pose.leg >= 2) after++;
+      }
+      if (after) bad.push(id + ' b' + i);
+    }
+  });
+  Render.assignPort(role, null);
+  st.radius = R0;
+  console.log('  ' + n + ' arrivals, ' + bad.length + ' indoors and back out: ' + bad.join(', '));
+  check('no cradle or Syndicate-yard arrival goes indoors and back out, but the three tilted garages (24 on 2026-11-03)',
+        n >= 60 && bad.length <= 3 && bad.every(function (s) { return /^yard-syn-[ms] /.test(s); }), bad.join('; '));
 })();
 
 /* ---- THE RAIL WAITS OUTSIDE THE DOORS, ON THE LAMPS' LINE (2026-11-03) ----
@@ -2324,7 +2414,12 @@ console.log('--- the rail waits outside the doors, on the lamps\' line ---');
    * were left out of this sweep for it. Render.libPort now moves a model's
    * gate faces into the shell when that is where portDoors will find them
    * (gateFacesToShell), and the yards are swept like every other model. */
-  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id); });
+  /* AND THE NAVY AND SYNDICATE YARDS (2026-11-04), which are models of
+   * their own and were left out with the liveries: their heavy bays flew
+   * in over the lintel into the wall (yard-navy, 17 of its 60 approaches
+   * counting the S/M bays routed through them), and two Syndicate throats
+   * stood the hull in their shut leaves. */
+  var plain = MODELS.filter(function (id) { return !/-(navy|syn)-/.test(id) || /^yard-/.test(id); });
   ['yard-s', 'yard-m', 'yard-l'].forEach(function (id) {
     if (!global.PortLib[id]) return;
     var yd = Render.portDoors(id);

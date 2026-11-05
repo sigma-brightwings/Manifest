@@ -616,12 +616,37 @@
     if (Math.abs(n[2]) < 0.5 && Gen.berthOffset && Gen.bayGeometry) {
       var off = Gen.berthOffset(port, i);
       door[2] = off.z + (Gen.bayGeometry(port).lift || 0);
+      /* Unless her stand is inside, on a floor below the door (a high wall
+       * door, Render.berthStandIn, 2026-11-04): then the line in is through
+       * the middle of the doorway, and the stand's height would put it in
+       * the wall under the sill. */
+      if (standInOf(port, i)) door[2] = ap.mid[2];
+      /* ...AND STILL ON THE DOOR'S OWN PLANE (2026-11-04). Moved straight
+       * down a door tilted off the vertical (the Syndicate yards' throats,
+       * 10 degrees), the point leaves its plane by the drop times the
+       * normal's z: 0.005 radii, 21 m, at yard-syn-l once its S/M stands
+       * came off their slots' roofs onto their floors (86 m down), and the
+       * threshold, measured from it, stood the hull in the shut leaves. So
+       * it is slid back onto the plane level, along the normal's level part. */
+      var dz0 = door[2] - (ap.mid[2] + n[2] * g), h2 = 1 - n[2] * n[2];
+      if (h2 > 1e-6 && Math.abs(n[2]) > 1e-6) {
+        door[0] -= n[0] * dz0 * n[2] / h2;
+        door[1] -= n[1] * dz0 * n[2] / h2;
+      }
     }
     return {
       door: door,
       normal: n.slice(), entry: e.slice(),
       bent: (e[0] * n[0] + e[1] * n[1] + e[2] * n[2]) < 0.999
     };
+  }
+
+  /* The stand of a high wall door, moved in off its box (Render.berthStandIn),
+   * or null. */
+  function standInOf(port, i) {
+    var R = global.Render;
+    if (!R || !R.berthStandIn || !R.portModelFor || !port || port.surface) return null;
+    return R.berthStandIn(R.portModelFor(port), i || 0);
   }
 
   /* HOW FAR OUTSIDE THE LEAVES THE HULL WAITS for them to open, in station
@@ -5977,7 +6002,7 @@
     var span = function (a, b) {
       /* The transfer leg of a route through a heavy bay is its corners,
        * not the chord from the lift's foot to a stand across the hull. */
-      var pts = (routed && a === ROUTED_TRANSFER_LEG && path.through)
+      var pts = (path.through && ((routed && a === ROUTED_TRANSFER_LEG) || (!routed && a === 2)))
         ? [path[a]].concat(path.through, [path[b]]) : [path[a], path[b]];
       var s = 0;
       for (var q = 1; q < pts.length; q++) {
@@ -6352,6 +6377,38 @@
     if (k >= 1 && k - 1 < p10.through.length) p10.through[k - 1] = seat(A);
     if (k < p10.through.length) p10.through[k] = seat(B);
     p10.rideMover = best.node;
+
+    /* ON AND OFF AN INCLINED CAR ALONG ITS RAILS (2026-11-04). A car in a
+     * 45-degree bore (the cylinders' arms) stops at the bore's mouth, inside
+     * the tube: the tube's walls run past it on every side but the end. The
+     * route to the boarding stop was handed to clearRoute as one straight
+     * leg from wherever the hull last was, which comes in through the tube's
+     * side wall, and the route search had to find the mouth on a grid as
+     * coarse as the bore is narrow (12 thousandths of a radius a cell at
+     * cylinder-s, the bore 54 across): at arm B's hub end it never did.
+     * Measured at Waypoint Dock's radius, every cylinder bay on arm B and
+     * every arm-A bay before its bore was turned keel-down. So she drives
+     * onto the car the way the car runs: a corner out along its axis past
+     * the end of its run, by the car's own half-length and a hull's span,
+     * and straight in from there; and off it the same way at the far end.
+     * Not for an upright lift, which is boarded from the side. */
+    if (!(Math.abs(ax2[2]) > 0.2 && Math.abs(ax2[2]) < 0.95) || !(k >= 1) || k >= p10.through.length) return;
+    var hx = (best.max[0] - best.min[0]) / 2, hy = (best.max[1] - best.min[1]) / 2, hz = (best.max[2] - best.min[2]) / 2;
+    var carHalf = Math.abs(hx * ax2[0]) + Math.abs(hy * ax2[1]) + Math.abs(hz * ax2[2]);
+    /* The car's box is boxed round its tilted length, so the sum above is
+     * its whole half-length along the run or more; a hull's span beyond. */
+    var fh = fleetHalf(), r = port.radius || 1;
+    var out = carHalf * 0.5 + (fh.w * 2) / r;
+    var sOn = p10.through[k - 1], sOff = p10.through[k];
+    var sa = (sOn.x - best.mid[0]) * ax2[0] + (sOn.y - best.mid[1]) * ax2[1] + (sOn.z - best.mid[2]) * ax2[2];
+    var sb = (sOff.x - best.mid[0]) * ax2[0] + (sOff.y - best.mid[1]) * ax2[1] + (sOff.z - best.mid[2]) * ax2[2];
+    var sg = sa < sb ? -1 : 1;
+    function beyond(P, s) { return { x: P.x + ax2[0] * s, y: P.y + ax2[1] * s, z: P.z + ax2[2] * s }; }
+    var onC = beyond(sOn, sg * out), offC = beyond(sOff, -sg * out);
+    var t = p10.through;
+    p10.through = t.slice(0, k - 1).concat([onC, t[k - 1], t[k], offC], t.slice(k + 1));
+    /* The boarding stop moved one along: polyline index k + 1. */
+    p10.rideAt = k + 1;
   }
 
   /* THE TRANSFER THROUGH OPEN SPACE ONLY (2026-11-03). The route's corners
@@ -6685,7 +6742,17 @@
       var bentE = dp.bent ? (ap.exit || 1) : 0;
       var hold = along(Math.max(doorClear(port) * 2, bentE + holdLead(port)));
       var standO = { x: off.x, y: off.y, z: z };
-      return [hold, thr, thr, standO, standO];
+      var p5 = [hold, thr, thr, standO, standO];
+      /* LEVEL THROUGH THE DOOR, THEN DOWN (2026-11-04). A high wall door's
+       * stand is on the hall floor inside (standInOf): one straight leg from
+       * the threshold down to it would cut under the sill. So the enter leg
+       * has a corner: in at the doorway's height until she is over her
+       * stand, and down from there. `through` on a five-slot path is the
+       * enter leg's corners (arrivalPose, scaledLegs). */
+      if (standInOf(port, berth || 0) && dp.door[2] > z) {
+        p5.through = [{ x: off.x, y: off.y, z: dp.door[2] }];
+      }
+      return p5;
     }
 
     /* No modelled berth: in through the hatch. */
@@ -6735,6 +6802,11 @@
       /* Stop on the car, let it run, get off: see routePhases. */
       var rp = ridePoint(phs, Math.max(0, el - acc));
       loc = rp.loc; ridePhase = rp.phase;
+    } else if (leg === 2 && path.through && orbital && path.length === ORBITAL_LEGS.length) {
+      /* The enter leg of a high wall door: level in, then down. */
+      var plE = [a].concat(path.through, [b]);
+      var gotE = alongRoute(plE.map(function (p) { return { e: p.x, n: p.y, u: p.z }; }), u);
+      loc = { x: gotE.e, y: gotE.n, z: gotE.u };
     } else if (leg === ROUTED_TRANSFER_LEG && path.through && orbital &&
         path.length === ORBITAL_ROUTED_LEGS.length + 1) {
       var pl = [a].concat(path.through, [b]);
@@ -7377,6 +7449,21 @@
      * handed over held above it - the arrival backwards. There is no
      * instant way out, because there is no instant way through a shut
      * dome. */
+    /* OUT OF A HIGH WALL DOOR THE WAY SHE CAME IN (2026-11-04): up off the
+     * hall floor, level out through the doorway, and away. The push below
+     * runs along the bay's normal from where she stands, which from a stand
+     * on the floor inside is through the wall under the sill. */
+    var pathO = (!target.surface && !target.seaPlatform) ? arrivalPath(target, bR) : null;
+    if (pathO && pathO.through && pathO.length === ORBITAL_LEGS.length) {
+      ship.docked = null;
+      ship.dockOffset = null;
+      ship.departed = { port: target.id, berth: bR };
+      ship.arrival = { port: target.id, berth: bR, at: t, lead: 0, reverse: true,
+                       entry: bR, dur: arrivalTotal(target, bR) };
+      ship.thrust = V.zero();
+      ship.throttle = 0;
+      return target;
+    }
     if (target.seaPlatform && arrivalPath(target, bR)) {
       ship.docked = null;
       ship.dockOffset = null;
