@@ -2320,7 +2320,12 @@
         normal: bx.normal ? bx.normal.slice() : null,
         facing: bx.normal ? (bx.normal[1] < 0 ? 1 : -1) : 1,
         large: kk === biggest,
-        modelled: true
+        modelled: true,
+        /* On a tilted bay's level pad (Render.berthPad, 2026-11-04) she
+         * stands level: Sim.berthFacing takes the level part of the normal,
+         * which there points 10-60 degrees up or down and pitched her nose
+         * into the slope with it. */
+        level: !!(R2 && R2.berthPad && !port.surface && R2.berthPad(R2.portModelFor(port), i))
       };
     }
 

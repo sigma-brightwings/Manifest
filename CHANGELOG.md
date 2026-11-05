@@ -40,6 +40,76 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-04, level pads in the tilted bays: a deck as flat as any other, built out from the slope)
+
+Astra, of the 30 berths the fourth pass left with no level floor: "For
+sloped interiors build a landing pad which extends out from the angle,
+making it as flat as any of the other."
+
+- **Every tilted bay has a level landing pad.** The cylinders' arm B and C
+  pods and their heavy arm bays (rolled 60 degrees round the hub), the
+  Syndicate yards' five garages (22 degrees) and one of their roof throats
+  (10 degrees) had nothing level in them: every hull stands +z up, so the
+  hull was parked in the air 30-990 m over the slope, or in a garage's
+  doorway with the open hall behind her. Each now has a pad: a level slab
+  as thick as a floor plate (0.0016 radii, 2-11 m), square, big enough for
+  the longest hull at the smallest station a model is given (17.5 m either
+  side of her middle at 1.25 km), with a skirt under its edge, struts from
+  its corners and edges to the slope or wall it is built out from, a
+  hazard rim and lamps. The stand sits on it on a plinth, square to the
+  pad (it used to be built along the bay's own tilted normal: a tilted
+  plate), and the gallery and lift shafts a level bay has along its back
+  wall are left out, since in a bay tilted 22-60 degrees they hung in the
+  air.
+- **Measured, not modelled.** The pads are generated from each model's
+  own triangles when it is loaded (`Render.levelPads`): which bays need one
+  is the level-floor sweep's own three questions (nothing under the deck
+  reading, no headroom over it, or a floor lower in the bay with most of
+  the bay clear over it), asked only where the bay's frame is tilted, so a
+  ring's heavy bay is left alone. Where it goes is searched for, nearest
+  the old stand first: the slab and a hull's clear height over it may
+  cross no triangle and no door leaf's box as far as the leaf runs, the
+  pad must be in the bay's own room and in sight of it, and at least two
+  struts must reach structure. No seed, no draw and no art re-export: a
+  pure function of the model and the berth. The pad is appended to the
+  shell before anything reads it, so it is drawn, collided with, voxelised
+  into the solidity grid and routed round like the rest of the station.
+- **Up beside the pad, then across onto it.** The cylinder pods are
+  reached from their bore's car through an opening in the pod's floor, and
+  a pad over the opening was a lid on it (cylinder-m b1: no open route
+  found). There the pad is put beside where she comes up, by her own
+  half-length, and the rail brings her up there and slides her level onto
+  it (`Sim padLanding`).
+- **She stands level on it.** A docked hull faces along her bay's normal
+  (`Sim.berthFacing`), and in a tilted bay that pitched her 10-60 degrees
+  nose-down into the slope (or nose-up in a garage). On a pad she faces the
+  normal's level part (`Gen.berthOffset` marks the berth `level`), docked
+  and on the rail in.
+- **The garages' arrivals stay indoors.** Their stands were in the open
+  hall just inside the door, which the occupancy grid counts as open space
+  (it is open to it at the hall's ends), so the hull went in through the
+  doorway's cut and back out to stand. Each stand is now on a pad built out
+  from the leaning wall just inside the door; the pad is structure, the
+  doorway's cut runs through it, and the stand reads as in the doorway.
+- **Cost.** Placing the pads is done once per model, when its art is first
+  built (`libPort`): about a second more for a cylinder or a Syndicate
+  yard in node (cylinder-m 0.23 s before, 1.3 s now; yard-syn-l 0.28 s,
+  1.4 s), 0.1 s for a ring, whose tilted heavy bay is read and needs none.
+  It is paid in one frame, not sliced like the deck and route jobs, and
+  that is still owed.
+
+Measured (the sweeps in berths.test.js and interiors.test.js):
+
+- Berths off a level floor: 30 before, 0 now (the test is tightened to 0).
+- Cradle and Syndicate-yard arrivals that go indoors and back out: 3 of 72
+  before, 0 now (tightened to 0).
+- Berths with an inner leg through structure: 0 of 166 before, 0 now.
+- Approaches through something: 0 of 166 before, 0 now.
+
+**Saves:** survive. Nothing stored changed: the pads, stands and routes are
+worked out from the model each session. A ship saved docked in a tilted bay
+is re-docked on load (`Sim.dockShip`, as always), on her pad.
+
 ### Changed (2026-11-04, the economy retune: narrower spreads on dear goods, lots priced down the shelf, the jump pays more, bigger hulls dearer, a bigger hard-start purse)
 
 The 2026-11-03 measurements: a hand-flown Talon cleared about 32,000 cr a run,

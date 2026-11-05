@@ -1221,6 +1221,10 @@
       var got = thickenSheets(out[k]);
       if (got) { out[k] = got; out.sheetsThickened += got.thickened; }
     });
+    /* A level pad in every tilted bay that has no floor (levelPads,
+     * 2026-11-04): appended to the shell before anything reads it, so it is
+     * drawn, collided with and routed round like the rest of the model. */
+    if (src.kind === 'orbital' && !src.entrances && !/-site-[sml]$/.test(role)) levelPads(role, out);
     PORT_CACHE[role] = out;
     return out;
   }
@@ -9079,7 +9083,12 @@
      * the stand goes with her, onto the hall floor. */
     var sIn = berthStandIn(role, k);
     var o = [bx.mid[0] + (sIn ? sIn[0] : 0), bx.mid[1] + (sIn ? sIn[1] : 0), deck + lift];
-    var f = bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
+    /* ON A TILTED BAY'S LEVEL PAD (levelPads, 2026-11-04): square to the
+     * pad, which is level - the bay's own normal there points 30-60 degrees
+     * up or down, and the stand built along it was a tilted plate. */
+    var padOf = PAD[role + '#' + k] || null;
+    var f = padOf ? [padOf.f[0], padOf.f[1], 0]
+          : bx.normal ? [bx.normal[0], bx.normal[1], bx.normal[2]] : [1, 0, 0];
     var fl = Math.sqrt(f[0] * f[0] + f[1] * f[1] + f[2] * f[2]) || 1;
     f = [f[0] / fl, f[1] / fl, f[2] / fl];
     var u = [0, 0, 1];
@@ -9117,10 +9126,19 @@
         SIGN = '!#7ed3ff', CLAMP = '!#6e7683';
 
     var padA = 2.2 * L, padB = 1.4 * L, padT = 0.012 * L;   // 30 cm of plate
+    /* On a level pad, no bigger than the pad: it is one size in radii (the
+     * smallest station's hull and a margin), so at a small station the
+     * stand's 110 m would hang off its edge. */
+    var padLim = padOf ? padOf.half * 0.92 : Infinity;
+    padA = Math.min(padA, padLim); padB = Math.min(padB, padLim);
     /* The pad sits ON the deck, not in it: half its thickness up, plus a
      * skin, or it z-fights the plate it is bolted to at every distance. */
     var padC = padT + 0.004 * L;
     pushBox(m, o, f, r, u, 0, 0, padC, padA, padB, padT, PLATE);
+    /* And on a level pad its lift is a plinth: the pad's top is the deck
+     * itself, not structure with plating over it, and a plate hung a lift
+     * over the pad with nothing between read as floating. */
+    if (padOf) pushBox(m, o, f, r, u, 0, 0, -lift / 2, padA * 0.9, padB * 0.9, lift / 2, KERB);
 
     /* A KERB ROUND ALL FOUR SIDES. One rectangle the eye can find is worth
      * more than any amount of surface detail: it is what turns "floor" into
@@ -9165,9 +9183,12 @@
      * reason the far wall now has something in front of it to be far
      * behind. */
     var mastH = 0.8 * L;
+    /* On a level pad, inside its edge: the hazard rim and lamps are the
+     * pad's own, round the plinth. */
+    var mastLim = padOf ? padOf.half - 0.04 * L : Infinity;
     for (var ma = -1; ma <= 1; ma += 2) {
       for (var mb2 = -1; mb2 <= 1; mb2 += 2) {
-        var aa = ma * (padA + 0.12 * L), bb = mb2 * (padB + 0.12 * L);
+        var aa = ma * Math.min(padA + 0.12 * L, mastLim), bb = mb2 * Math.min(padB + 0.12 * L, mastLim);
         pushBox(m, o, f, r, u, aa, bb, mastH * 0.5 + barC,
                 0.028 * L, 0.028 * L, mastH * 0.5, POST);
         pushBox(m, o, f, r, u, aa, bb, mastH + barC,
@@ -9185,7 +9206,7 @@
      * bulkhead (below) say it in numerals, so the two would have disagreed
      * about what this berth is called. */
     var bayNo = String(berth + 1);
-    var sgA = -(padA + 0.45 * L);
+    var sgA = -Math.min(padA + 0.45 * L, mastLim);
     pushBox(m, o, f, r, u, sgA, 0, 0.35 * L + barC, 0.025 * L, 0.025 * L, 0.35 * L, POST);
     pushBox(m, o, f, r, u, sgA, 0, 0.75 * L + barC, 0.02 * L, 0.30 * L, 0.13 * L, SIGN);
     var boardCell = 0.035 * L;
@@ -9220,7 +9241,10 @@
       boxR = Math.abs(f[0]) > 0.5 ? exY : exX;
       boxA = Math.abs(f[0]) > 0.5 ? exX : exY;
     }
-    if (boxR > 0 && boxU > 0 && boxA > 0) {
+    /* Not on a level pad: the gallery and lift shafts stand against the
+     * back of a level bay, measured off its box, and in a bay tilted 22-60
+     * degrees that is a wall of windows hung in the air. */
+    if (boxR > 0 && boxU > 0 && boxA > 0 && !padOf) {
       var back = -boxA * 0.94;                      // the wall behind the stand
       var gallH = Math.min(boxU * 0.22, 1.1 * L);
       var gallC = deckRel + gallH * 0.5 + 0.9 * L;  // above head height off the deck
@@ -9828,8 +9852,12 @@
     var k = ((i % mb.length) + mb.length) % mb.length;
     return DECK[role + '#' + k] !== undefined;
   }
-  function* berthDeckJob(role, i) {
-    var lib = libPort(role);
+  /* `raw` (levelPads only): read the deck off `raw.lib`, the model as it is
+   * being built and before it is cached, into `raw.deck` / `raw.standIn`
+   * and not the caches - which would otherwise hold the reading from
+   * before the pad was there. */
+  function* berthDeckJob(role, i, raw) {
+    var lib = raw ? raw.lib : libPort(role);
     var mb = lib && lib.anchors && lib.anchors.berths;
     if (!mb || !mb.length) return null;
     var sorted = mb.slice().sort(function (a, b) {
@@ -9837,15 +9865,34 @@
     });
     var k = ((i % sorted.length) + sorted.length) % sorted.length;
     var key = role + '#' + k;
+    var DECK0 = DECK, STAND_IN0 = STAND_IN;
+    if (raw) { DECK = raw.deck; STAND_IN = raw.standIn; }
+    try {
+      return yield* berthDeckBody(role, k, key, lib, sorted, raw);
+    } finally {
+      if (raw) { DECK = DECK0; STAND_IN = STAND_IN0; }
+    }
+  }
+  function* berthDeckBody(role, k, key, lib, sorted, raw) {
     if (DECK[key] !== undefined) return DECK[key];
 
     var b = sorted[k];
     if (!b || !b.mid || !b.min || !b.max) { DECK[key] = null; return null; }
+    /* A LEVEL PAD IN A TILTED BAY (levelPads, 2026-11-04): the deck is the
+     * pad's top, and the stand is wherever the pad was built. */
+    var pd = raw ? null : PAD[key];
+    if (pd) {
+      DECK[key] = pd.top;
+      STAND_IN[key] = pd.shift;
+      return pd.top;
+    }
     /* A BAY THAT IS A CARRIAGE stands its hull on the carriage's own deck
      * (2026-11-03): cast down from the box top, the yards' upper carriage
      * bays found the RAIL their bogie runs on (0.36 radii, yard-m) - the
-     * hull was parked on the incline over her carriage. */
-    var cf0 = carriageFor(role, b.node);
+     * hull was parked on the incline over her carriage. Never tilted, so
+     * never asked while the model is still being built (`raw`), when
+     * portDoors - which carriageFor reads - would build it a second time. */
+    var cf0 = raw ? null : carriageFor(role, b.node);
     if (cf0) { DECK[key] = cf0.deck; return cf0.deck; }
 
     /* Start a hair under the box's own ceiling so the cast begins in the
@@ -10063,6 +10110,451 @@
     var key = role + '#' + k;
     if (DECK[key] === undefined) berthDeck(role, i);
     return STAND_IN[key] || null;
+  }
+
+  /* ---- A LEVEL PAD IN A TILTED BAY (2026-11-04) -------------------------
+   *
+   * Astra: "For sloped interiors build a landing pad which extends out from
+   * the angle, making it as flat as any of the other."
+   *
+   * Thirty berths had no level floor at all. They are bays whose own frame
+   * is tilted - the cylinders' arm B and C pods and their heavy arm bays,
+   * rolled 60 degrees round the hub, and the Syndicate yards' garages and
+   * one roof throat, 10-22 degrees - and every hull stands +z up, so there
+   * was nothing in them to stand on: berthDeck fell back to its box's top,
+   * and the hull was parked in the air 30-990 m over the slope, or in the
+   * doorway, outdoors (three of the yards' arrivals went in through the door
+   * and back out to their stand).
+   *
+   * So each such bay is given a pad: a level slab, as thick as a floor
+   * plate, built out from the sloped floor or wall on struts, with a hazard
+   * edge and lamps round it like every other stand. It is part of the
+   * model - appended to the shell the walls are drawn from and the solid
+   * shell the hull collides with, before either is cached - so the walls,
+   * the solidity grid, the route search and every sweep see it as structure
+   * without being told about it; and berthDeck, Gen.berthOffset,
+   * Sim.berthDoor and the stand dressing read its top as the deck (PAD).
+   *
+   * A PURE FUNCTION OF THE MODEL AND THE BERTH: no draw, no seed, nothing
+   * the art has to be re-exported for. It is measured, and re-measured the
+   * same way every load:
+   *
+   *   - which bays: a frame tilted off +z (the anchor's `up`) where the deck
+   *     reading has nothing under it, no headroom over it, or a floor lower
+   *     in the bay with most of the bay clear over it - the three ways
+   *     berths.test.js's level-floor sweep fails a stand. A ring's heavy
+   *     bay has a horizontal `up` too, and stands on its hall floor: no pad.
+   *   - where: on a grid of shifts from the stand, and of heights through
+   *     the bay, the slab and the clear height over it must cross no
+   *     triangle and no door leaf's box, swept as far as it runs; the stand
+   *     must be enclosed (not out past the doors); and struts from its
+   *     corners must reach structure. Of those, the one nearest the old
+   *     stand, then with the shortest struts, wins.
+   *   - how big: square, for the longest hull at the smallest station a
+   *     model is given (PAD_R_KM), or at the level-floor sweep's 2 km where
+   *     the bay is too small for that. The model is normalised, so a pad is
+   *     one size in radii at every station: big enough at the smallest. */
+  var PAD = {};
+  var PAD_SLAB = 0.0016;            // radii: 2-7 m of plate, 2x a thickened sheet
+  var PAD_R_KM = [1.25, 2.0];       // the smallest station generated (1.26 km), then the sweep's
+  var PAD_REACH = 0.25;             // radii of triangles kept round a bay for the search
+  var PAD_STRUT_MAX = 0.12;         // radii: the longest a support may run to the slope
+  var PAD_SHIFT = 0.002, PAD_SHIFT_N = 30, PAD_Z_STEP = 0.0005;
+
+  /* What a hull needs over the pad, in km: the stand's own height, the
+   * tallest hull on her gear, and 6 m (gear, and room to see her by). */
+  function padNeedKm() {
+    var hmax = 0, half = 0;
+    Object.keys(HULL_ASSIGN).forEach(function (k) {
+      var s = hullSpan(k);
+      if (s.h > hmax) hmax = s.h;
+      if (Math.max(s.l, s.w) / 2 > half) half = Math.max(s.l, s.w) / 2;
+    });
+    return { head: standTopKm() + hmax + 0.006, half: half + 0.005, hullH: hmax };
+  }
+
+  /* Triangles near a point, as flat [a, b, c] triples, from the drawn shell
+   * (whose floors are slabs) and the solid one (which has the cars at rest). */
+  function padTris(lib, o, reach) {
+    var out = [];
+    [lib.shell, lib.solidShell !== lib.shell ? lib.solidShell : null].forEach(function (m) {
+      if (!m || !m.f) return;
+      for (var i = 0; i < m.f.length; i++) {
+        var tri = m.f[i];
+        for (var j = 1; j + 1 < tri.length; j++) {
+          var a = m.v[tri[0]], b = m.v[tri[j]], c = m.v[tri[j + 1]];
+          if (!a || !b || !c) continue;
+          var far = false;
+          for (var ax = 0; ax < 3 && !far; ax++) {
+            if (Math.min(a[ax], b[ax], c[ax]) > o[ax] + reach || Math.max(a[ax], b[ax], c[ax]) < o[ax] - reach) far = true;
+          }
+          if (!far) out.push([a, b, c]);
+        }
+      }
+    });
+    return out;
+  }
+
+  /* Vertical columns through those triangles, binned in plan so a column
+   * costs one bin: every height a vertical line at (x, y) crosses a
+   * surface, sorted. The same barycentric test berths.test.js's floor
+   * sweep asks, so the pad is found the way it will be checked. */
+  function padColumns(T, o, reach) {
+    var B = 0.004, bins = {};
+    /* Clipped to the search's own reach: a hull plate half a radius across
+     * would otherwise be filed in fifteen thousand bins nobody asks about. */
+    var bx0 = Math.floor((o[0] - reach) / B), bx1 = Math.floor((o[0] + reach) / B);
+    var by0 = Math.floor((o[1] - reach) / B), by1 = Math.floor((o[1] + reach) / B);
+    T.forEach(function (t, ti) {
+      var x0 = Math.max(bx0, Math.floor(Math.min(t[0][0], t[1][0], t[2][0]) / B)), x1 = Math.min(bx1, Math.floor(Math.max(t[0][0], t[1][0], t[2][0]) / B));
+      var y0 = Math.max(by0, Math.floor(Math.min(t[0][1], t[1][1], t[2][1]) / B)), y1 = Math.min(by1, Math.floor(Math.max(t[0][1], t[1][1], t[2][1]) / B));
+      for (var x = x0; x <= x1; x++) for (var y = y0; y <= y1; y++) (bins[x + ',' + y] = bins[x + ',' + y] || []).push(ti);
+    });
+    return function (x, y) {
+      var list = bins[Math.floor(x / B) + ',' + Math.floor(y / B)] || [], zs = [];
+      for (var q = 0; q < list.length; q++) {
+        var t = T[list[q]], a = t[0], b = t[1], c = t[2];
+        var d0 = (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]);
+        if (Math.abs(d0) < 1e-14) continue;
+        var u = ((x - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (y - a[1])) / d0;
+        var v = ((b[0] - a[0]) * (y - a[1]) - (x - a[0]) * (b[1] - a[1])) / d0;
+        if (u < 0 || v < 0 || u + v > 1) continue;
+        zs.push(a[2] + u * (b[2] - a[2]) + v * (c[2] - a[2]));
+      }
+      return zs.sort(function (p, q2) { return p - q2; });
+    };
+  }
+
+  /* A cast from `o` along unit `d`, out to maxT: the distance to the first
+   * surface, or -1. Through a coarse 3D binning of T built on first use, so
+   * a short cast tests the handful of triangles near it and not all of them. */
+  var PAD_CELL = 0.01;
+  function padCast(T, o, d, maxT) {
+    if (!T.cells) {
+      var cells = T.cells = {};
+      for (var ti = 0; ti < T.length; ti++) {
+        var t = T[ti], lo = [], hi = [];
+        for (var ax = 0; ax < 3; ax++) {
+          lo[ax] = Math.floor(Math.min(t[0][ax], t[1][ax], t[2][ax]) / PAD_CELL);
+          hi[ax] = Math.floor(Math.max(t[0][ax], t[1][ax], t[2][ax]) / PAD_CELL);
+        }
+        /* A triangle bigger than the search is filed in the "big" list,
+         * which every cast tests: binning a plate half a radius across into
+         * a hundred thousand cells costs more than testing it every time. */
+        if ((hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) * (hi[2] - lo[2] + 1) > 64) { (cells.big = cells.big || []).push(ti); continue; }
+        for (var x = lo[0]; x <= hi[0]; x++) for (var y = lo[1]; y <= hi[1]; y++) for (var z = lo[2]; z <= hi[2]; z++) {
+          var k = x + ',' + y + ',' + z;
+          (cells[k] = cells[k] || []).push(ti);
+        }
+      }
+      T.mark = new Int32Array(T.length);
+      T.stamp = 0;
+    }
+    var best = maxT, stamp = ++T.stamp, mark = T.mark, C = T.cells;
+    function test(list) {
+      for (var q = 0; q < list.length; q++) {
+        var i = list[q];
+        if (mark[i] === stamp) continue;
+        mark[i] = stamp;
+        var h = boomHit(o, d, T[i][0], T[i][1], T[i][2]);
+        if (h > 0 && h < best) best = h;
+      }
+    }
+    if (C.big) test(C.big);
+    var e = [o[0] + d[0] * maxT, o[1] + d[1] * maxT, o[2] + d[2] * maxT];
+    var c0 = [], c1 = [];
+    for (var a2 = 0; a2 < 3; a2++) {
+      c0[a2] = Math.floor(Math.min(o[a2], e[a2]) / PAD_CELL);
+      c1[a2] = Math.floor(Math.max(o[a2], e[a2]) / PAD_CELL);
+    }
+    for (var cx = c0[0]; cx <= c1[0]; cx++) for (var cy = c0[1]; cy <= c1[1]; cy++) for (var cz = c0[2]; cz <= c1[2]; cz++) {
+      var l = C[cx + ',' + cy + ',' + cz];
+      if (l) test(l);
+    }
+    return best < maxT ? best : -1;
+  }
+
+  /* Does a deck reading leave a hull standing on something? The level-floor
+   * sweep's three questions (berths.test.js), at the sweep's own radius. */
+  function padNeeded(col, b, x, y, z0, need, R) {
+    var hullH = need.hullH / R, standH = (standTopKm() + need.hullH / 2 + 0.002) / R;
+    var zs = col(x, y);
+    var below = zs.filter(function (z) { return z < z0 - 1e-5; });
+    var above = zs.filter(function (z) { return z > z0 + 1e-5; });
+    var onIt = zs.some(function (z) { return Math.abs(z - z0) <= 1e-5; });
+    if (!onIt && (!below.length || z0 - below[below.length - 1] > hullH * 0.75)) return 'nothing under her';
+    if (above.length && above[0] - z0 < standH + hullH * 0.5) return 'no headroom';
+    var boxH = b.max[2] - b.min[2], under = Math.max(0.004, boxH * 0.03);
+    for (var q = 0; q < zs.length; q++) {
+      var z = zs[q];
+      if (z >= z0 - hullH || z < b.min[2] - under) continue;
+      var room = zs[q + 1] === undefined ? Infinity : zs[q + 1] - z;
+      if (room >= Math.max(0.03, boxH * 0.6)) return 'a floor under her';
+    }
+    return null;
+  }
+
+  /* Every height a pad centred at (cx, cy) fits at, best first. */
+  function padCandidates(col, b, gates, cx, cy, x0, y0, z0, A, H, f, r) {
+    var boxH = b.max[2] - b.min[2], under = Math.max(0.004, boxH * 0.03);
+    var ext = A * (Math.abs(f[0]) + Math.abs(r[0])), eyt = A * (Math.abs(f[1]) + Math.abs(r[1]));
+    /* Out of every door leaf's way, wherever it runs. */
+    function inLeaf(zt) {
+      for (var g = 0; g < gates.length; g++) {
+        var gb = gates[g], tr = gb.travel || 0;
+        if (cx + ext < gb.min[0] - tr || cx - ext > gb.max[0] + tr) continue;
+        if (cy + eyt < gb.min[1] - tr || cy - eyt > gb.max[1] + tr) continue;
+        if (zt + H < gb.min[2] - tr || zt - PAD_SLAB > gb.max[2] + tr) continue;
+        return true;
+      }
+      return false;
+    }
+    var cols = [];
+    for (var i = -2; i <= 2; i++) {
+      for (var j = -2; j <= 2; j++) {
+        cols.push(col(cx + f[0] * A * i / 2 + r[0] * A * j / 2, cy + f[1] * A * i / 2 + r[1] * A * j / 2));
+      }
+    }
+    var out = [], shift = Math.sqrt((cx - x0) * (cx - x0) + (cy - y0) * (cy - y0));
+    /* No higher than the top of the bay's own box: the deck is a berth's
+     * own, inside the anchor it belongs to (berths.test.js asks it of every
+     * deck); as low as the box's floor tolerance and a little under, where a
+     * routed pod's stand comes up through it. */
+    var zLo = b.min[2] - under - 0.02, zHi = b.max[2];
+    for (var zt = zHi; zt >= zLo; zt -= PAD_Z_STEP) {
+      var clear = true;
+      for (var c = 0; c < cols.length && clear; c++) {
+        var zs = cols[c];
+        for (var q = 0; q < zs.length; q++) {
+          if (zs[q] > zt - PAD_SLAB - 1e-4 && zs[q] < zt + H) { clear = false; break; }
+        }
+      }
+      if (!clear) continue;
+      if (inLeaf(zt)) continue;
+      /* Not hanging over a floor of its own bay (the third question). */
+      var zc = cols[12], hang = false;
+      for (var q2 = zc.length - 1; q2 >= 0; q2--) {
+        if (zc[q2] >= zt - PAD_SLAB) continue;
+        hang = zc[q2] >= b.min[2] - under && zt - PAD_SLAB - zc[q2] >= Math.max(0.03, boxH * 0.6);
+        break;
+      }
+      if (hang) continue;
+      out.push({ cx: cx, cy: cy, top: zt, A: A, H: H, f: f, r: r, score: Math.abs(zt - z0) + shift });
+    }
+    return out.sort(function (p, q3) { return p.score - q3.score; });
+  }
+
+  /* The pad for berth `b`, or null when no level slab fits in it. */
+  function padPlace(T, col, b, gates, x0, y0, z0, need, routed) {
+    var n = b.normal || [1, 0, 0], hn = Math.sqrt(n[0] * n[0] + n[1] * n[1]);
+    /* Square to the bay's way out where it has a level part; a bay that
+     * opens up or down, square to the model. */
+    var f = hn > 0.3 ? [n[0] / hn, n[1] / hn] : [1, 0];
+    var r = [-f[1], f[0]];
+    var boxH = b.max[2] - b.min[2], under = Math.max(0.004, boxH * 0.03);
+    var best = null;
+    for (var ri = 0; ri < PAD_R_KM.length && !best; ri++) {
+      var R = PAD_R_KM[ri], A = need.half / R, H = need.head / R;
+      /* The centres to try, nearest the old stand first: a pad is wanted
+       * where the hull already stands, and the search stops at the first
+       * ring of shifts that cannot beat what it has (the score is the
+       * height moved plus the shift). */
+      /* A ROUTED BAY KEEPS ITS WAY UP (cylinder arm B and C pods): the hull
+       * is carried up to her stand from the bore under the pod, through an
+       * opening in its floor, and a pad over the opening is a lid on it -
+       * the route search found no way round (cylinder-m b1). So there the
+       * pad is put beside where she comes up, by her own half-length, and
+       * she slides onto it at her stand's height (Sim padLanding). */
+      var keep = routed ? A + need.half * 0.8 / R : 0;
+      var centres = [];
+      for (var sf = -PAD_SHIFT_N; sf <= PAD_SHIFT_N; sf++) {
+        for (var sr = -PAD_SHIFT_N; sr <= PAD_SHIFT_N; sr++) {
+          var cx0 = x0 + f[0] * sf * PAD_SHIFT + r[0] * sr * PAD_SHIFT,
+              cy0 = y0 + f[1] * sf * PAD_SHIFT + r[1] * sr * PAD_SHIFT;
+          if (keep && Math.max(Math.abs(sf), Math.abs(sr)) * PAD_SHIFT < keep - 1e-9) continue;
+          centres.push({ cx: cx0, cy: cy0, d: Math.sqrt((cx0 - x0) * (cx0 - x0) + (cy0 - y0) * (cy0 - y0)) });
+        }
+      }
+      centres.sort(function (p, q) { return p.d - q.d; });
+      var tried = {};
+      for (var ci = 0; ci < centres.length; ci++) {
+        if (best && best.score <= centres[ci].d) break;
+        var cands = padCandidates(col, b, gates, centres[ci].cx, centres[ci].cy, x0, y0, z0, A, H, f, r);
+        /* The three best heights at each centre: a centre whose best is out
+         * of sight of the bay is not rescued by a worse one. */
+        for (var k = 0; k < cands.length && k < 3; k++) {
+          var cd = cands[k];
+          if (best && cd.score >= best.score) break;
+          if (tried[cd.cx + ',' + cd.cy + ',' + cd.top]) continue;
+          tried[cd.cx + ',' + cd.cy + ',' + cd.top] = true;
+          /* In the bay's own room: no further out along its way out than the
+           * anchor's middle, and in plain sight of it - nothing between the
+           * middle of her clear height and the anchor's. A pad out past the
+           * doors, or through a wall in the next room, is not this bay's. */
+          var mid = [cd.cx, cd.cy, cd.top + cd.H * 0.5];
+          if ((cd.cx - b.mid[0]) * n[0] + (cd.cy - b.mid[1]) * n[1] > PAD_SHIFT * 0.5) continue;
+          var toMid = [b.mid[0] - mid[0], b.mid[1] - mid[1], b.mid[2] - mid[2]];
+          var dm = Math.sqrt(toMid[0] * toMid[0] + toMid[1] * toMid[1] + toMid[2] * toMid[2]);
+          if (dm > 1e-6 && padCast(T, mid, [toMid[0] / dm, toMid[1] / dm, toMid[2] / dm], dm) > 0) continue;
+          /* ...and the slide from where she comes up onto it is in the open,
+           * at her middle and her top. */
+          if (keep) {
+            var sH = (standTopKm() + need.hullH / 2 + 0.002) / R, slid = false;
+            [sH, cd.H * 0.9].forEach(function (hz) {
+              var o2 = [x0, y0, cd.top + hz], dd = [cd.cx - x0, cd.cy - y0, 0];
+              var ln = Math.sqrt(dd[0] * dd[0] + dd[1] * dd[1]);
+              if (padCast(T, o2, [dd[0] / ln, dd[1] / ln, 0], ln) > 0) slid = true;
+            });
+            if (slid) continue;
+          }
+          var struts = padStruts(T, cd);
+          if (struts.length < 2) continue;
+          cd.struts = struts;
+          cd.R = R;
+          best = cd;
+          break;
+        }
+      }
+    }
+    return best;
+  }
+
+  /* From each of the slab's four bottom corners (and the middle of each
+   * edge) to the nearest structure: down, down and out, or straight out to
+   * a wall - the shortest within PAD_STRUT_MAX. */
+  function padStruts(T, cd) {
+    var f = cd.f, r = cd.r, A = cd.A * 0.85, zb = cd.top - PAD_SLAB, out = [];
+    [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (s) {
+      var o = [cd.cx + f[0] * A * s[0] + r[0] * A * s[1], cd.cy + f[1] * A * s[0] + r[1] * A * s[1], zb];
+      var hx = f[0] * s[0] + r[0] * s[1], hy = f[1] * s[0] + r[1] * s[1], hl = Math.sqrt(hx * hx + hy * hy);
+      var dirs = [[0, 0, -1]];
+      if (hl > 1e-9) {
+        hx /= hl; hy /= hl;
+        dirs.push([hx * 0.7071, hy * 0.7071, -0.7071], [hx * 0.5, hy * 0.5, -0.866], [hx, hy, 0]);
+      }
+      var bestT = -1, bestD = null;
+      dirs.forEach(function (d) {
+        var t = padCast(T, o, d, PAD_STRUT_MAX);
+        if (t > 0 && (bestT < 0 || t < bestT)) { bestT = t; bestD = d; }
+      });
+      if (bestT > 0) out.push({ from: o, to: [o[0] + bestD[0] * bestT, o[1] + bestD[1] * bestT, o[2] + bestD[2] * bestT], len: bestT });
+    });
+    return out;
+  }
+
+  /* The pad's own mesh, in the model's normalised frame, appended to `m`. */
+  function padMesh(m, cd) {
+    var o = [cd.cx, cd.cy, cd.top - PAD_SLAB / 2];
+    var f = [cd.f[0], cd.f[1], 0], r = [cd.r[0], cd.r[1], 0], u = [0, 0, 1];
+    var A = cd.A, T2 = PAD_SLAB / 2;
+    /* The hazard gold a shade lighter than the stand's #c9b44a: this is the
+     * station's own mesh, which takes its owner's livery (accented), and a
+     * gold inside the accent band (lightness 0.62 or under) came out
+     * Syndicate red at a Syndicate yard. Hazard marks are yellow in every
+     * navy (see accented). */
+    var PLATE = '#5b616b', EDGE = '#40454d', MARK = '!#f0dc60', DARK = '!#23262c', LAMP = '!#ffe6a8', STRUT = '#4d535c';
+    pushBox(m, o, f, r, u, 0, 0, 0, A, A, T2, PLATE);
+    /* The hazard edge, flush with the top: a strip a twentieth of the pad
+     * wide round all four sides, in bars. Laid in the plate's top face
+     * (its top a hair over it) so nothing stands proud of the deck. */
+    var w = A * 0.05, bars = 12;
+    for (var side = 0; side < 4; side++) {
+      for (var k = 0; k < bars; k++) {
+        var t = -A + (k + 0.5) * (2 * A / bars), col = k % 2 ? DARK : MARK;
+        var a = side < 2 ? t : (side === 2 ? A - w : -A + w), bb = side < 2 ? (side === 0 ? A - w : -A + w) : t;
+        pushBox(m, o, f, r, u, a, bb, T2 + 0.00002, side < 2 ? A / bars : w, side < 2 ? w : A / bars, 0.00002, col);
+      }
+    }
+    /* Lamps at the corners and the middle of each edge, set in the rim. */
+    [[1, 1], [1, -1], [-1, 1], [-1, -1], [1, 0], [-1, 0], [0, 1], [0, -1]].forEach(function (s) {
+      pushBox(m, o, f, r, u, s[0] * (A - w * 0.5), s[1] * (A - w * 0.5), T2 + 0.0001, w * 0.4, w * 0.4, 0.0001, LAMP);
+    });
+    /* A skirt under the plate's edge, so seen from below it reads as a deck
+     * with depth and not a sheet. */
+    pushBox(m, o, f, r, u, 0, 0, -T2 - PAD_SLAB * 0.4, A * 0.92, A * 0.92, PAD_SLAB * 0.4, EDGE);
+    /* The struts: a square section a third of the slab's thickness, from
+     * under the pad into the structure it found (a little past, so it is
+     * seated rather than touching). */
+    (cd.struts || []).forEach(function (s) {
+      var d = [s.to[0] - s.from[0], s.to[1] - s.from[1], s.to[2] - s.from[2]];
+      var L = Math.sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]);
+      if (!(L > 1e-6)) return;
+      d = [d[0] / L, d[1] / L, d[2] / L];
+      var p = Math.abs(d[2]) < 0.9 ? [0, 0, 1] : [1, 0, 0];
+      var e = [d[1] * p[2] - d[2] * p[1], d[2] * p[0] - d[0] * p[2], d[0] * p[1] - d[1] * p[0]];
+      var el = Math.sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+      e = [e[0] / el, e[1] / el, e[2] / el];
+      var g = [d[1] * e[2] - d[2] * e[1], d[2] * e[0] - d[0] * e[2], d[0] * e[1] - d[1] * e[0]];
+      var hw = PAD_SLAB * 0.33, len = L + hw * 2;
+      var mid = [s.from[0] + d[0] * L / 2, s.from[1] + d[1] * L / 2, s.from[2] + d[2] * L / 2];
+      pushBox(m, mid, d, e, g, 0, 0, 0, len / 2, hw, hw, STRUT);
+    });
+  }
+
+  /* The level pad of berth `i`, or null: { top, cx, cy, half, f, r, shift,
+   * ... } in the model's normalised frame (levelPads). */
+  function berthPad(role, i) {
+    var lib = libPort(role), mb = lib && lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length) return null;
+    var k = ((i % mb.length) + mb.length) % mb.length;
+    return PAD[role + '#' + k] || null;
+  }
+
+  /* Every tilted bay of a model being built (libPort, before it is cached)
+   * that has no level floor gets its pad, appended to the shell and the
+   * solid shell. PAD records it for berthDeck; `lib.pads` for the dressing
+   * and the tests. */
+  function levelPads(role, lib) {
+    var mb = lib.anchors && lib.anchors.berths;
+    if (!mb || !mb.length || !lib.shell) return;
+    var sorted = mb.slice().sort(function (a, b) {
+      return a.mid[0] - b.mid[0] || a.mid[1] - b.mid[1] || a.mid[2] - b.mid[2];
+    });
+    var need = padNeedKm(), raw = { lib: lib, deck: {}, standIn: {} };
+    var gates = ((lib.anchors.gates || []).concat(lib.anchors.innerGates || [])).filter(function (g) { return g && g.min && g.max; });
+    var add = { v: [], f: [], c: [] }, pads = [];
+    for (var k = 0; k < sorted.length; k++) {
+      var key = role + '#' + k, b = sorted[k];
+      PAD[key] = null;
+      if (!b.up || !(Math.abs(b.up[2]) < 0.99) || !b.min || !b.max) continue;
+      var z0 = drainJob(berthDeckJob(role, k, raw));
+      if (typeof z0 !== 'number') continue;
+      var sIn = raw.standIn[key];
+      var x0 = b.mid[0] + (sIn ? sIn[0] : 0), y0 = b.mid[1] + (sIn ? sIn[1] : 0);
+      var T = padTris(lib, [x0, y0, z0], PAD_REACH);
+      var col = padColumns(T, [x0, y0, z0], PAD_SHIFT * PAD_SHIFT_N + 3 * need.half / PAD_R_KM[0]);
+      var why = padNeeded(col, b, x0, y0, z0, need, PAD_R_KM[PAD_R_KM.length - 1]);
+      if (!why) continue;
+      var cd = padPlace(T, col, b, gates, x0, y0, z0, need, !!(b.via && b.via.length));
+      if (!cd) { pads.push({ berth: k, node: b.node, why: why, none: true }); continue; }
+      var dx = cd.cx - b.mid[0], dy = cd.cy - b.mid[1];
+      var pad = { berth: k, node: b.node, why: why, top: cd.top, cx: cd.cx, cy: cd.cy, half: cd.A,
+                  head: cd.H, sizedFor: cd.R, f: cd.f.slice(), r: cd.r.slice(), struts: cd.struts.length,
+                  strutLen: cd.struts.reduce(function (s, q) { return Math.max(s, q.len); }, 0),
+                  was: z0, from: (b.via && b.via.length) ? [x0, y0] : null, shift: (Math.abs(dx) > 1e-9 || Math.abs(dy) > 1e-9) ? [dx, dy] : null };
+      PAD[key] = pad;
+      pads.push(pad);
+      padMesh(add, cd);
+    }
+    lib.pads = pads;
+    /* No pad: the model is as it was read, so what was read stands. */
+    if (!add.f.length) {
+      Object.keys(raw.deck).forEach(function (k2) {
+        if (DECK[k2] === undefined) { DECK[k2] = raw.deck[k2]; STAND_IN[k2] = raw.standIn[k2] || null; }
+      });
+      return;
+    }
+    function append(m) {
+      var base = m.v.length;
+      var o = { v: m.v.concat(add.v), f: m.f.concat(add.f.map(function (f) { return [f[0] + base, f[1] + base, f[2] + base]; })),
+                c: (m.c || []).concat(add.c) };
+      if (m.oi) o.oi = m.oi.concat(add.f.map(function () { return -1; }));
+      for (var key2 in m) if (!(key2 in o)) o[key2] = m[key2];
+      return o;
+    }
+    var same = lib.solidShell === lib.shell;
+    lib.shell = append(lib.shell);
+    lib.solidShell = same ? lib.shell : (lib.solidShell ? append(lib.solidShell) : lib.shell);
   }
 
   /* The table for one berth of one model, in PORT RADII, built on first
@@ -17348,7 +17840,7 @@
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail,
     portSolidity: portSolidity,
-    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
+    clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthPad: berthPad, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
     },
     portSections: portSections,
