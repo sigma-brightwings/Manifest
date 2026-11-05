@@ -40,7 +40,7 @@ before they update.
 
 ## Unreleased
 
-### Changed (2026-11-04, the economy retune: narrower spreads on dear goods, lots priced down the shelf, the jump pays more, bigger hulls dearer)
+### Changed (2026-11-04, the economy retune: narrower spreads on dear goods, lots priced down the shelf, the jump pays more, bigger hulls dearer, a bigger hard-start purse)
 
 The 2026-11-03 measurements: a hand-flown Talon cleared about 32,000 cr a run,
 the best 64 t run inside a home system about 133,000, and a Tallyman cost
@@ -106,6 +106,37 @@ somewhat; keep longer trips paying more than short ones.
   capital-free work is what a pilot with no capital lives on. Passage (it
   needs a 14,500 cr habitation unit) and the navy's licensed fuel haul are
   unchanged.
+- **The hard start's purse is 7,000 cr** (was 3,200; `generate.js`
+  `SHIP_SPEC.credits`, now the only place it is written). The retune cut
+  Halloway's first run from 3,338 cr median to 1,265, because a first hold
+  is ROI-bound: the purse buys a few tonnes of the best good, so any
+  narrowing lands on it in full. Astra chose **both** remedies offered: a
+  bigger purse, and a gentler near-supply rule for cheap goods. start.js
+  (`classicCredits`, the HARD row, the after-lessons profit), `sim.js`'s
+  new ship, `measure-economy.cjs` and the tests all read the purse from
+  there; FLIGHT-CARD says 7,000. Swept on the tutorial's 39 openings, with
+  the ramp below: 5,000 → 2,133 median, 6,000 → 2,675, **7,000 → 2,940**,
+  8,000 → 3,350. Rule 2 is untouched (each focus at a difficulty is still
+  worth the same), and Hard is still the poorest start by worth at list:
+  45.3k, against Normal 71.4k and Easy 138.8k. One oddity, noted in
+  start.js and left: the Normal Bollard, the dearest Normal kit, carries
+  the bare 6,000 floor in cash, 1,000 less than a Hard Talon. She is
+  26k richer in worth, all of it in a mining hull.
+- **Near supply ramps in instead of switching on** (`economy.js`
+  `NEAR_HI` 700, `nearKeep`). It was a hard cut at 200 cr/t: chemicals
+  (210) kept a quarter of their premium, textiles (190) all of it. Now the
+  share kept falls with log value from all of it at 200 to the quarter at
+  700: alloys keep 0.83, farm machinery 0.48, rare earths 0.30, and
+  fissiles and everything dearer get the full rule as before. The ramp
+  mostly lifts the **worst** first runs: at a 7,000 purse, p10 507 cr with
+  the cut and 1,426 with the ramp. Ramp tops swept: 500, 700 and 1,000
+  left the best in-system run at 42–43% median; 2,000 put it at 54% and
+  5,000 at 62%, giving the mid game back what the retune took. 700 is the
+  top of the range that moved nothing past the first run.
+- **Waste runs left as they are** — Astra's choice ("leave it"). A waste
+  run still pays 8.9k median with no outlay. It was about seven times a
+  new pilot's first trade run at the 3,200 purse; with the first run now
+  2,940 it is about three times, where it was before the retune.
 
 **The numbers** (40 seeds, home system, t = 10 days, unless noted):
 
@@ -119,8 +150,9 @@ somewhat; keep longer trips paying more than short ones.
 | waste run in-system (paid to load, fee to dump) | 8.9k median | 8.9k (unchanged) |
 | milfuel run in-system (97 systems, 6 stars a seed) | 22.6k median | 22.6k (exempt) |
 | the best lane flown again, one round trip a day: runs 1–4 | 100 / 56 / 22 / 8% | 100 / 30 / 4 / 3% |
-| **Halloway's first run** (39 openings, 3,200 cr Talon): profit, median | 3,338 (min 0, max 7,972) | **1,265** (min 137, max 2,997), on 3.1k |
-| the hard start to a Tallyman, best affordable run twice a day, lanes wearing | 3 runs | **8 runs** |
+| **Halloway's first run** (39 openings, 3,200 cr Talon): profit, median | 3,338 (min 0, max 7,972) | 1,265 (min 137, max 2,997), on 3.1k |
+| — with the 7,000 cr purse and the near-supply ramp: median (p10 / p90) | | **2,940** (1,426 / 5,508; min 137, max 7,366), on 6.7k |
+| the hard start to a Tallyman, best affordable run twice a day, lanes wearing | 3 runs | 8 runs; **6** from 7,000 cr |
 | haul / courier contract pay, median | 696 / 3,309 | 522 / 2,482 |
 
 **The yard in runs** (a "good run" is the best mixed hold a hull can carry
@@ -157,18 +189,33 @@ was about a twentieth). Both came down with the margins, and the house's own
 extra depth came down from 4x to 1.7x so that its bottom ranks stay a bad
 bet and a risky one rather than a certain loss.
 
-**Odd, and left for a decision:** the first run took the biggest cut of
-anything. It is ROI-bound (3,200 cr buys a few tonnes of whatever is best),
-so any narrowing of returns lands on it in full. The alternatives are a
-bigger hard-start purse (`Gen.SHIP_SPEC.credits`, which start.js rule 1 and
-many tests pin at 3,200) or a gentler `NEAR_SUPPLY`. With near-supply off,
-the first run is 1,774. Also, the waste run is unchanged and now pays about
-seven times a 3,200 cr pilot's first trade run with no outlay at all. It was
-about three times before.
+**The first run, decided** (Astra, 2026-11-04: both remedies; waste left
+alone). The purse and the ramp, before and after, 40 seeds as above:
+
+| | retune, 3,200 cr, hard cut | **7,000 cr, ramp to 700** |
+|---|---|---|
+| Halloway's first run, walked: median (p10 / p90) | 1,265 (331 / 2,540) | **2,940** (1,426 / 5,508) |
+| — the purse alone (7,000, hard cut) | | 2,735 (507 / 5,508) |
+| — the ramp alone (3,200) | | 1,389 (370 / 2,574) |
+| best in-system run, 64 t, walked: return p10 / median / p90 | 20 / 42 / 60% | 20 / 42 / 60% |
+| — its profit, median | 31k | 31k |
+| next door / at home, per seed, median (p10) | 1.34× (0.84×) | 1.34× (0.84×) |
+| runs per step: Talon→Tallyman / →Mule / →Longhaul / →Leviathan | 2.2 / 1.1 / 2.3 / 7.3 | 2.2 / 1.1 / 2.3 / 7.3 |
+| the best lane flown again, runs 1–4 | 100 / 30 / 4 / 3% | 100 / 30 / 4 / 3% |
+| the hard start to a Tallyman | 8 runs | 6 runs |
+| waste run in-system | 8.9k (7× the first run) | 8.9k (3×) |
+
+The mid and late game did not move: every line past the first run is the
+same to the percent, and the yard's good runs moved by under 1k (a
+Longhaul's in-system run 56k → 57k). Cargo contracts stay at 0.75; they
+are still worth having beside a first run of 2,940.
 
 **Saves:** survive. No field added or removed and no version bump. An old
 career keeps its credits, cargo and hulls; prices are simply what they are
-now. A hull bought at the old price trades in at 70% of the new list price.
+now. The bigger purse is for new careers only: a career saved before this
+keeps the money it has, and nothing tops it up to 7,000. A system's
+near-supply shares are worked out when it is generated, so an old save
+gets the ramp the next time a system loads. A hull bought at the old price trades in at 70% of the new list price.
 A market's ledger (the player's footprint) keeps decaying as before.
 
 ### Fixed (2026-11-03, the open UI items: labels that overprinted, a lent bay that was forgotten, a hull on her tail, the sea's glint and domes)
