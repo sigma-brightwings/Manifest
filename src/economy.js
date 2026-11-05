@@ -337,7 +337,7 @@
    *
    * WHY THE STAPLES ARE LEFT ALONE. Their return stays high and does no
    * harm, because the hold caps them — 64 t of fish clears a few thousand
-   * credits however wide its spread — and they are what a 3,200 cr Talon
+   * credits however wide its spread — and they are what a hard-start Talon
    * can afford a full hold of, which is the hard start's whole living.
    *
    * SWEPT, forty seeds, 64 t, walked: REF 100, 200, 250, 300, 500, 600 and
@@ -357,7 +357,36 @@
   /* In one object so a measuring tool can sweep them without a second
    * copy of the formula (tools/measure-economy.cjs reads ECO_* overrides
    * into it before it generates anything). The game never writes it. */
-  var TUNE = { ref: VALUE_REF, slope: VALUE_SLOPE, kmin: VALUE_KMIN, nearSupply: NEAR_SUPPLY, nearRef: VALUE_REF };
+  /* NEAR SUPPLY RAMPS IN, it does not switch on (2026-11-04). The rule was
+   * a hard cut at VALUE_REF: chemicals at 210 cr/t kept a quarter of their
+   * premium and textiles at 190 kept all of it. The goods just over the
+   * line are what a new pilot's purse buys a hold of, and it was the cut,
+   * not the rule, that hurt the first run most: the worst tenth of
+   * Halloway's openings (p10) cleared 507 cr at a 7,000 purse with the cut
+   * and 1,426 with a ramp. So the share kept falls with log value from all
+   * of it at VALUE_REF to NEAR_SUPPLY at NEAR_HI: alloys (265) keep 0.83,
+   * farm machinery (480) 0.48, rare earths (640) 0.30, and fissiles,
+   * computers, robotics and up the full rule as before.
+   *
+   * SWEPT, tutorial median / p10 at a 7,000 purse, then the best 64 t
+   * in-system run's median return (40 seeds): cut 2,735 / 507, 42%; ramp
+   * to 500 2,916 / 1,426, 42%; to 700 2,940 / 1,426, 42%; to 1000 2,955 /
+   * 1,426, 43%; to 2000 54%; to 5000 62%. The ramp's top stops where the
+   * mid game starts to move: past ~1,000 the high-tech lanes the retune
+   * narrowed get their premium back. 700, the top of the range that left
+   * every mid-game number where it was. */
+  var NEAR_HI = 700;
+  var TUNE = { ref: VALUE_REF, slope: VALUE_SLOPE, kmin: VALUE_KMIN, nearSupply: NEAR_SUPPLY, nearRef: VALUE_REF, nearHi: NEAR_HI };
+  /* The share of an import premium a near-supplied good keeps: all of it
+   * up to nearRef, NEAR_SUPPLY from nearHi, falling with log value between.
+   * nearHi at or under nearRef is the old hard cut. */
+  function nearKeep(com) {
+    var b = Math.abs(com.base), lo = TUNE.nearRef || 0, hi = Math.max(lo, TUNE.nearHi || 0);
+    if (lo && b <= lo) return 1;
+    if (!(b < hi)) return TUNE.nearSupply;
+    var f = Math.log(b / lo) / Math.log(hi / lo);
+    return 1 - f * (1 - TUNE.nearSupply);
+  }
   function structureFor(com) {
     /* THE SPECIALS KEEP THEIR OWN RULES, as they do in signature(). Military
      * fuel is rationed by its shelf (shelfMax), not its price, and the
@@ -833,8 +862,9 @@
    * system makes is a different shortage: it is served from across a jump,
    * and it is dear because the jump is.
    *
-   * So an import worth more than VALUE_REF a tonne that another port of
-   * the same system exports keeps only NEAR_SUPPLY of its premium — `local` and the shelf's resting fill both
+   * So an import worth more than NEAR_HI a tonne that another port of
+   * the same system exports keeps only NEAR_SUPPLY of its premium (between
+   * VALUE_REF and NEAR_HI, a share ramping down to it: nearKeep) — `local` and the shelf's resting fill both
    * drawn toward neutral, as the signature softens a sideline — and an
    * import the system cannot supply keeps all of it. The in-system lane is
    * still there and still pays; the jump pays more, because it is the only
@@ -847,8 +877,7 @@
    * player founds (stations.js) gets its signature and not this pass; it
    * is one port and the system round it is already priced. */
   function nearSupply(sys) {
-    var keep = TUNE.nearSupply;
-    if (!(keep < 1)) return;
+    if (!(TUNE.nearSupply < 1)) return;
     var ports = (sys && sys.ports) || [], made = {};
     for (var i = 0; i < ports.length; i++) {
       var m = ports[i].market;
@@ -862,7 +891,8 @@
         var r = mk.rows[c2], com = BY_ID[c2];
         if (!r.importer || !com || com.waste || com.milfuel || com.contraband) continue;
         if (!made[c2]) continue;
-        if (TUNE.nearRef && Math.abs(com.base) <= TUNE.nearRef) continue;
+        var keep = nearKeep(com);
+        if (!(keep < 1)) continue;
         r.local = 1 + (r.local - 1) * keep;
         r.base = 0.5 + (r.base - 0.5) * keep;
         r.nearSupply = true;
@@ -2457,7 +2487,7 @@
     lotPrice: lotPrice, LOT_SLICES: LOT_SLICES,
     /* The value-density spread and the near-supply pass (2026-11-04). */
     TUNE: TUNE, structureFor: structureFor, nearSupply: nearSupply,
-    VALUE_REF: VALUE_REF, VALUE_SLOPE: VALUE_SLOPE, VALUE_KMIN: VALUE_KMIN, NEAR_SUPPLY: NEAR_SUPPLY,
+    VALUE_REF: VALUE_REF, VALUE_SLOPE: VALUE_SLOPE, VALUE_KMIN: VALUE_KMIN, NEAR_SUPPLY: NEAR_SUPPLY, NEAR_HI: NEAR_HI, nearKeep: nearKeep,
     LEDGER_HALFLIFE: LEDGER_HALFLIFE,
     priceList: priceList,
     priceMark: priceMark,

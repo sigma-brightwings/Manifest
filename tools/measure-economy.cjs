@@ -4,6 +4,7 @@
  *     node tools/measure-economy.cjs wear 40         how fast the best lane wears out, run after run
  *     node tools/measure-economy.cjs tutorial        Halloway's first run, 40 openings (the test's seeds)
  *     node tools/measure-economy.cjs ships 40        how many good runs each step up the yard costs
+ *     node tools/measure-economy.cjs climb 40        the hard start to a Tallyman, in runs
  *     node tools/measure-economy.cjs all 40
  *
  * WHY THIS EXISTS. The 2026-11-03 sweep that started the retune priced a
@@ -36,9 +37,14 @@ var Combat = require(S + 'combat.js');
 /* ECO_REF, ECO_SLOPE, ECO_KMIN, ECO_NEAR, ECO_NEARREF: sweep the levers
  * (economy.js TUNE) without editing the game. Set before anything is
  * generated, because the near-supply pass runs at generation. */
-[['ECO_REF', 'ref'], ['ECO_SLOPE', 'slope'], ['ECO_KMIN', 'kmin'], ['ECO_NEAR', 'nearSupply'], ['ECO_NEARREF', 'nearRef']].forEach(function (e) {
+[['ECO_REF', 'ref'], ['ECO_SLOPE', 'slope'], ['ECO_KMIN', 'kmin'], ['ECO_NEAR', 'nearSupply'], ['ECO_NEARREF', 'nearRef'], ['ECO_NEARHI', 'nearHi']].forEach(function (e) {
   if (process.env[e[0]] !== undefined) Eco.TUNE[e[1]] = +process.env[e[0]];
 });
+/* The hard start's purse, read from the one place the game keeps it
+ * (generate.js SHIP_SPEC.credits) so this tool cannot measure a start the
+ * game no longer issues. ECO_PURSE sweeps it. */
+if (process.env.ECO_PURSE !== undefined) Gen.SHIP_SPEC.credits = +process.env.ECO_PURSE;
+var PURSE = Gen.SHIP_SPEC.credits;
 
 var mode = process.argv[2] || 'all';
 var SEEDS = +(process.argv[3] || 40), HOLD = +(process.argv[4] || 64);
@@ -222,7 +228,7 @@ function tutorial() {
   var T = require(S + 'tutorial.js');
   var seeds = ['kawartha'];
   for (var s = 0; s < 39; s++) seeds.push('tut-' + s);
-  var board = [], walked = [], outlay = [];
+  var board = [], walked = [], outlay = [], goods = {};
   seeds.forEach(function (sd) {
     var galaxy = Galaxy.build(sd), star = galaxy.home;
     var sys = Gen.generateSystem(star.seed, Galaxy.systemOpts(galaxy, star));
@@ -232,18 +238,20 @@ function tutorial() {
     var station = host.children.filter(function (c) { return c.kind === 'station' && !c.surface && c.orbit; })[0];
     var port = sys.ports.filter(function (p) { return p.surface && p.parentBody === host && p.market; })[0] || station;
     if (!port) return;
-    var p = T.plan(sys, port, 0, 3200, 64);
+    var p = T.plan(sys, port, 0, PURSE, 64);
     if (!p.cid) return;
-    var nn = Math.min(64, Math.floor(3200 / p.buy), Math.floor(Eco.stock(port, p.cid, 0)));
+    var nn = Math.min(64, Math.floor(PURSE / p.buy), Math.floor(Eco.stock(port, p.cid, 0)));
     board.push((p.sell - p.buy) * nn);
-    var L = lot(port, p.dest, p.cid, 0, 64, true, 3200);
+    goods[p.cid] = (goods[p.cid] || 0) + 1;
+    var L = lot(port, p.dest, p.cid, 0, 64, true, PURSE);
     walked.push(L ? L.gain - L.cost : 0);
     outlay.push(L ? L.cost : 0);
   });
-  console.log('--- Halloway\'s first run, ' + board.length + ' openings, 3,200 cr Talon ---');
+  console.log('--- Halloway\'s first run, ' + board.length + ' openings, ' + PURSE + ' cr Talon ---');
   console.log('   board (as tutorial.test prints it)  min/med/max ' + k(q(board, 0)) + ' / ' + k(q(board, 0.5)) + ' / ' + k(q(board, 1)));
-  console.log('   walked (what the terminal charges)  min/med/max ' + k(q(walked, 0)) + ' / ' + k(q(walked, 0.5)) + ' / ' + k(q(walked, 1)) +
+  console.log('   walked (what the terminal charges)  min/p10/med/p90/max ' + [0, 0.1, 0.5, 0.9, 1].map(function (f) { return k(q(walked, f)); }).join(' / ') +
               '   outlay med ' + k(q(outlay, 0.5)));
+  console.log('   goods ' + Object.keys(goods).sort(function (a, b) { return goods[b] - goods[a]; }).map(function (g) { return g + ' ' + goods[g] + ' (' + Eco.BY_ID[g].base + ')'; }).join(', '));
 }
 
 /* What a step up costs in runs: the next hull's yard price, less the
@@ -318,14 +326,14 @@ function ships(n) {
   });
 }
 
-/* THE HARD START, CLIMBED: 3,200 cr and a Talon, the best walked run the
+/* THE HARD START, CLIMBED: the hard start's purse and a Talon, the best walked run the
  * money covers each day (in-system), every trade pressed into both
  * markets so the lanes wear as they would, until the purse buys the
  * Tallyman at the yard less the Talon's trade-in. Counts runs. */
 function climb(n) {
   var need = Combat.buyPrice('trader') - Math.round(Combat.HULLS.talon.price * 0.7), out = [], stuck = 0;
   for (var s = 0; s < n; s++) {
-    var h = homeOf('seed' + s), ports = h.sys.ports.filter(trades), cr = 3200, t = T0, runsN = 0;
+    var h = homeOf('seed' + s), ports = h.sys.ports.filter(trades), cr = PURSE, t = T0, runsN = 0;
     while (cr < need && runsN < 80) {
       var w = bestRun(ports, ports, t, 64, true, cr);
       runsN++;
