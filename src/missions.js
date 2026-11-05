@@ -34,6 +34,29 @@
   var STANDING_WIN = { haul: 3, courier: 5, disposal: 4, passage: 4 };
   var STANDING_LOSS = 7;
   var FINE_FRACTION = 0.5;
+  /* WHAT A CARGO CONTRACT PAYS, against what the market pays (2026-11-04).
+   * The fees below are flat tables, not prices, so the economy retune
+   * (economy.js VALUE_REF) did not touch them — and that was itself a
+   * change: a good trade run fell to about a third of what it was (103k ->
+   * 31k, median best in-system run on a Talon) and Halloway's first run to
+   * about two fifths (3,338 -> 1,265), so a contract kept whole was worth
+   * two and a half to three times as much NEXT TO trading as it had been.
+   * Measured on forty home systems over three board windows: a haul pays
+   * 696 median, a courier parcel 3,309, and a Talon's hold of in-system
+   * hauls about 3,500 against a 3,200 cr pilot's first trade run of 1,265.
+   * (The same day the hard purse went to 7,000 and that first run back to
+   * 2,940 median; the hauls were left at 0.75 — capital-free work stays
+   * worth having beside it, and nothing about a contract changed.)
+   *
+   * 0.75, not the 0.35 that would restore the old ratio, ON PURPOSE. The
+   * retune hit the hard start hardest, and capital-free work is what a
+   * pilot with no capital lives on: so contracts come down a quarter and
+   * stay the stronger option for the first few days, which is the right
+   * way round — they fade as your money grows, because a funded hold
+   * trading clears ten times a hold of hauls. Passage (it needs a 14,500 cr
+   * habitation unit, so it is not starter work) and the navy's licensed
+   * fuel haul (priced as a share of the slug's list price) are left alone. */
+  var CARGO_PAY = 0.75;
 
   /* The courier parcel is a commodity the market has never heard of: it can
    * sit in the hold and be jettisoned like anything else, but no port lists
@@ -538,7 +561,7 @@
           from: port.id, fromName: port.name,
           toPortId: dst.id, toName: dst.name,
           faction: port.faction || null,
-          pay: Math.round(tonnes * rng.range(28, 55) + 250),
+          pay: Math.round((tonnes * rng.range(28, 55) + 250) * CARGO_PAY),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
           core: tonnes + 't ' + (Eco.BY_ID[cid] ? Eco.BY_ID[cid].name : cid) +
                 ' to ' + dst.name
@@ -558,7 +581,7 @@
           from: port.id, fromName: port.name,
           toStarId: star.id, toName: star.name + ' system',
           faction: port.faction || null,
-          pay: Math.round(rng.range(1800, 4800)),
+          pay: Math.round(rng.range(1800, 4800) * CARGO_PAY),
           deadline: t - (t % WINDOW) + COURIER_DEADLINE,
           core: 'sealed parcel to the ' + star.name + ' system'
         });
@@ -574,7 +597,7 @@
           from: port.id, fromName: port.name,
           toPortId: tk.id, toName: tk.name,
           faction: port.faction || null,
-          pay: Math.round(wt * rng.range(60, 95)),
+          pay: Math.round(wt * rng.range(60, 95) * CARGO_PAY),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
           core: wt + 't reactor waste to ' + tk.name
         });

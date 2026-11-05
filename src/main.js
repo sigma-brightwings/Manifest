@@ -5586,7 +5586,15 @@
             row.stock < 1 ? 'None in stock' : 'Not enough credits', 2);
         return;
       }
-      var cost = tonnes * row.buy;
+      /* PRICED DOWN THE SHELF (2026-11-04, Economy.lotPrice): the row's
+       * price is the first tonne's, and each tonne after it costs what the
+       * shelf asks once the ones before it have gone — which is why a lot
+       * can come to more than tonnes x the board, and why it is cut here to
+       * what the money covers rather than refused. */
+      var lot = Eco.lotPrice ? Eco.lotPrice(port, cid, tonnes, +1, G.t, G.ship.credits) : null;
+      if (lot) tonnes = lot.qty;
+      if (tonnes <= 0) { say('Not enough credits', 2); return; }
+      var cost = lot ? Math.round(lot.cr) : tonnes * row.buy;
       G.ship.credits -= cost;
       G.ship.cargo[cid] = heldTonnes(cid) + tonnes;
       Eco.applyTrade(port, cid, tonnes, G.t);
@@ -5631,8 +5639,13 @@
         return;
       }
       var hotSold = fenceHere ? Math.min(qty, hotN) : 0;
-      var gain = (qty - hotSold) * row.sell +
-                 (hotSold > 0 && row.sell > 0 ? Math.round(hotSold * row.sell * Clm.fenceOreMult(G.sys)) : hotSold * row.sell);
+      /* The whole lot down the shelf, as a purchase is: a delivery fills the
+       * importer it is sold to, and the last tonnes fetch what a fuller
+       * shelf pays (Economy.lotPrice). */
+      var sl = Eco.lotPrice ? Eco.lotPrice(port, cid, qty, -1, G.t) : null;
+      var each = sl ? sl.each : row.sell;
+      var gain = Math.round((qty - hotSold) * each +
+                 (hotSold > 0 && each > 0 ? hotSold * each * Clm.fenceOreMult(G.sys) : hotSold * each));
       if (gain < 0 && G.ship.credits + gain < 0) {
         say('Disposal fee exceeds your credits', 3);
         return;

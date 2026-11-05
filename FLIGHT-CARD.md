@@ -171,7 +171,7 @@ and its channel carries **Market**. At a distance the same row reads *Request
 market data* and just tells you what the place deals in — you have to be on the
 deck to open the exchange. Arrow keys buy and sell, `F` refuels.
 Look for **Radioactive waste**: industrial worlds *pay you* to take it. Roughly
-9,000 credits a run against your 3,200 starting balance, if you can find a
+9,000 credits a run against your 7,000 starting balance, if you can find a
 reprocessing plant to dump it at.
 
 **7b. `Y` — the trade analyser** (1,000 cr at any yard, a utility slot).

@@ -263,7 +263,12 @@
         return 'First rule: never fly empty. ' + tut.homeName + ' makes ' + goodName(tut.cid).toLowerCase() +
           ' — about ' + cr(tut.buyAt) + ' a tonne here — and ' + tut.destName + ' pays near ' +
           cr(tut.sellAt) + '. Comms is F4, and you\'re already on ' + tut.homeName +
-          '\'s channel. Pick Market and fill what you can afford. Keep a little back for fuel and fines.';
+          '\'s channel. Pick Market and fill what you can afford. Keep a little back for fuel and fines. ' +
+          /* The desk prices a lot down the shelf (Economy.lotPrice,
+           * 2026-11-04), so the first lesson in buying says so: the price on
+           * the board is the first tonne's, and a full hold pays a little
+           * more for its last. */
+          'Every tonne you take puts the next one up a little — the board\'s price is the first tonne\'s.';
       },
       goal: function (G, tut) {
         return 'F4 → Market → ' + goodName(tut.cid) + '  ·  → buys, Shift+→ ten, Home fills  ·  Esc to close';

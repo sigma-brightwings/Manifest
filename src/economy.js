@@ -293,6 +293,114 @@
   var FUEL_ID = 'hydrogen';
   var SPREAD = 0.09;            // bid/ask gap, fraction of mid price
   var LEDGER_HALFLIFE = 4 * DAY; // how fast a market forgets what you did
+  /* ---- HOW FAR A PRICE MAY STRAY, BY WHAT A TONNE IS WORTH (2026-11-04) --
+   * Measured on 2026-11-03 across forty home systems, walking a 64 t hold
+   * tonne by tonne down both shelves (tools/measure-economy.cjs): the best
+   * run between two ports of the same system returned 160% on its outlay,
+   * median, and 263% at the top — a run more than doubled your money, and
+   * a Tallyman cost about half of one. Astra was asked how far to bring it
+   * down and chose "both, milder": narrower spreads, deliveries that move
+   * the price harder, dearer big hulls, and longer trips still paying more.
+   *
+   * WHERE THE SPREAD CAME FROM. A port's mid is base x local x scarcity,
+   * and the two factors say the same thing twice: a producer is cheap by
+   * structure (local 0.66-0.78 on a major export) AND sits on a full shelf
+   * (fill 0.78+, scarcity 0.76 or less), and a hungry importer is dear by
+   * structure (1.22+) AND runs near empty (scarcity 1.29+). Multiplied,
+   * the best pair in a system was a bid 2.4 to 5 times its ask — for every
+   * good alike, a tonne of AI cores the same as a tonne of water.
+   *
+   * WHICH IS THE WRONG WAY ROUND FOR A DEAR TONNE. What lets a price differ
+   * between two places is what it costs to move the thing between them,
+   * and that cost is per TONNE: the haul is most of what a tonne of water
+   * is worth and nothing much of what a tonne of AI cores is. So a bulk
+   * staple's price can wander a long way from list — the gap is the
+   * freight — while a dense, valuable good's cannot, because anybody with
+   * a hold would close it. Every best run in the 11-03 sweep was high-tech
+   * (AI cores, fusion, robotics, luxuries, gene therapies, computers,
+   * fissiles) and waste never was, which is what a spread that ignores
+   * value density predicts.
+   *
+   * So the price structure is raised to a power that falls with value:
+   *
+   *     mid = base x (local x scarcity) ^ k
+   *     k   = 1 - VALUE_SLOPE x log10(base / VALUE_REF), within [VALUE_KMIN, 1]
+   *
+   * At or under VALUE_REF (water, grain, livestock, timber, fish, ores,
+   * hydrogen, textiles) nothing moves at all; alloys keep k = 0.95,
+   * farm machinery 0.85, fissiles 0.72, robotics 0.64, fusion 0.60,
+   * luxuries 0.56, gene therapies 0.50, AI cores 0.47, and military fuel
+   * the 0.4 floor. A POWER, not a scale, because it keeps every ordering and every
+   * sign: the cheapest port is still the cheapest, a premium is still a
+   * premium, only the size of the gap has changed. Waste does not pass
+   * through here (wastePrice) and is unchanged.
+   *
+   * WHY THE STAPLES ARE LEFT ALONE. Their return stays high and does no
+   * harm, because the hold caps them — 64 t of fish clears a few thousand
+   * credits however wide its spread — and they are what a hard-start Talon
+   * can afford a full hold of, which is the hard start's whole living.
+   *
+   * SWEPT, forty seeds, 64 t, walked: REF 100, 200, 250, 300, 500, 600 and
+   * SLOPE 0.3-1.0. With REF over ~450, farm machinery (480) kept its whole
+   * spread and was a 160-196% run in two seeds; at SLOPE 0.45 the median
+   * best run fell to 37%, low in the 30-60% band asked for. */
+  var VALUE_REF = 200, VALUE_SLOPE = 0.4, VALUE_KMIN = 0.4;
+  /* The import premium kept by a good another port of the same system
+   * exports (see nearSupply). Swept 1, 0.6, 0.5, 0.4, 0.35, 0.3, 0.25, 0.2
+   * and 0: at 0.25 the best run next door pays 1.34x the best at home,
+   * median, against 1.22x before; 0.2 bought a little more distance and
+   * took another tenth off Halloway's first run, 0 left in-system trade a
+   * matter of the exporter's discount alone. Applied only over VALUE_REF,
+   * for the same reason as the power above: a staple's in-system haul is
+   * still a real share of its price. */
+  var NEAR_SUPPLY = 0.25;
+  /* In one object so a measuring tool can sweep them without a second
+   * copy of the formula (tools/measure-economy.cjs reads ECO_* overrides
+   * into it before it generates anything). The game never writes it. */
+  /* NEAR SUPPLY RAMPS IN, it does not switch on (2026-11-04). The rule was
+   * a hard cut at VALUE_REF: chemicals at 210 cr/t kept a quarter of their
+   * premium and textiles at 190 kept all of it. The goods just over the
+   * line are what a new pilot's purse buys a hold of, and it was the cut,
+   * not the rule, that hurt the first run most: the worst tenth of
+   * Halloway's openings (p10) cleared 507 cr at a 7,000 purse with the cut
+   * and 1,426 with a ramp. So the share kept falls with log value from all
+   * of it at VALUE_REF to NEAR_SUPPLY at NEAR_HI: alloys (265) keep 0.83,
+   * farm machinery (480) 0.48, rare earths (640) 0.30, and fissiles,
+   * computers, robotics and up the full rule as before.
+   *
+   * SWEPT, tutorial median / p10 at a 7,000 purse, then the best 64 t
+   * in-system run's median return (40 seeds): cut 2,735 / 507, 42%; ramp
+   * to 500 2,916 / 1,426, 42%; to 700 2,940 / 1,426, 42%; to 1000 2,955 /
+   * 1,426, 43%; to 2000 54%; to 5000 62%. The ramp's top stops where the
+   * mid game starts to move: past ~1,000 the high-tech lanes the retune
+   * narrowed get their premium back. 700, the top of the range that left
+   * every mid-game number where it was. */
+  var NEAR_HI = 700;
+  var TUNE = { ref: VALUE_REF, slope: VALUE_SLOPE, kmin: VALUE_KMIN, nearSupply: NEAR_SUPPLY, nearRef: VALUE_REF, nearHi: NEAR_HI };
+  /* The share of an import premium a near-supplied good keeps: all of it
+   * up to nearRef, NEAR_SUPPLY from nearHi, falling with log value between.
+   * nearHi at or under nearRef is the old hard cut. */
+  function nearKeep(com) {
+    var b = Math.abs(com.base), lo = TUNE.nearRef || 0, hi = Math.max(lo, TUNE.nearHi || 0);
+    if (lo && b <= lo) return 1;
+    if (!(b < hi)) return TUNE.nearSupply;
+    var f = Math.log(b / lo) / Math.log(hi / lo);
+    return 1 - f * (1 - TUNE.nearSupply);
+  }
+  function structureFor(com) {
+    /* THE SPECIALS KEEP THEIR OWN RULES, as they do in signature(). Military
+     * fuel is rationed by its shelf (shelfMax), not its price, and the
+     * chain's arithmetic (ENRICH_MARGIN) was measured against market
+     * prices; under the floor exponent its best run fell from 22,565 cr to
+     * 5,229 (median, 97 systems), below a waste run — the dearest cargo in
+     * the game a worse living than the cheapest. Contraband's spread is
+     * the price of the risk of carrying it, which is not a freight cost
+     * and is not this rule's to narrow. */
+    if (com.milfuel || com.contraband) return 1;
+    var b = Math.abs(com.base);
+    if (!(TUNE.slope > 0) || !(b > TUNE.ref)) return 1;
+    return Math.min(1, Math.max(TUNE.kmin, 1 - TUNE.slope * Math.log(b / TUNE.ref) / Math.LN10));
+  }
 
   /* ---- what a world can make ------------------------------------------
    * Keyed off the planet type the port orbits. These are the things the
@@ -735,6 +843,61 @@
   function applySignatures(sys) {
     var ports = (sys && sys.ports) || [];
     for (var i = 0; i < ports.length; i++) if (ports[i].market) signature(ports[i].market.rows);
+    nearSupply(sys);
+  }
+
+  /* ---- A SHORTAGE NEXT DOOR IS A SHORT HAUL (2026-11-04) ----------------
+   * Astra, choosing how far to bring a run down: keep "longer trips (across
+   * systems) paying more than short ones." Measured before this, they
+   * barely did: the best run to one of the three nearest claimed stars paid
+   * 1.22x the best run inside the home system, median over forty seeds, and
+   * in one seed in ten the jump paid LESS once its hydrogen was counted.
+   *
+   * The reason is that a port's price knew nothing about its neighbours.
+   * A colony short of robotics priced the shortage as if the nearest
+   * factory were light years off when it was an afternoon's cruise across
+   * the same system — and the traffic that system already flies (and the
+   * houses, and every other captain with a hold) would have been closing
+   * that gap long before you arrived. A shortage of something NOBODY in the
+   * system makes is a different shortage: it is served from across a jump,
+   * and it is dear because the jump is.
+   *
+   * So an import worth more than NEAR_HI a tonne that another port of
+   * the same system exports keeps only NEAR_SUPPLY of its premium (between
+   * VALUE_REF and NEAR_HI, a share ramping down to it: nearKeep) — `local` and the shelf's resting fill both
+   * drawn toward neutral, as the signature softens a sideline — and an
+   * import the system cannot supply keeps all of it. The in-system lane is
+   * still there and still pays; the jump pays more, because it is the only
+   * thing that can fill that shelf. Exports are left alone: a cheap
+   * producer is cheap whoever is buying, and the haul away from it is the
+   * same haul either way.
+   *
+   * NO DRAWS, a pure pass over the finished system, run once after the
+   * signatures (generate.js, the end of generateSystem). A station the
+   * player founds (stations.js) gets its signature and not this pass; it
+   * is one port and the system round it is already priced. */
+  function nearSupply(sys) {
+    if (!(TUNE.nearSupply < 1)) return;
+    var ports = (sys && sys.ports) || [], made = {};
+    for (var i = 0; i < ports.length; i++) {
+      var m = ports[i].market;
+      if (!m || ports[i].dark) continue;
+      for (var cid in m.rows) if (m.rows[cid].exporter) made[cid] = (made[cid] || 0) + 1;
+    }
+    for (var j = 0; j < ports.length; j++) {
+      var mk = ports[j].market;
+      if (!mk) continue;
+      for (var c2 in mk.rows) {
+        var r = mk.rows[c2], com = BY_ID[c2];
+        if (!r.importer || !com || com.waste || com.milfuel || com.contraband) continue;
+        if (!made[c2]) continue;
+        var keep = nearKeep(com);
+        if (!(keep < 1)) continue;
+        r.local = 1 + (r.local - 1) * keep;
+        r.base = 0.5 + (r.base - 0.5) * keep;
+        r.nearSupply = true;
+      }
+    }
   }
   var MAJOR_EX_LOCAL = 0.78, MINOR_EX_LOCAL = 0.88;
   var MAJOR_IM_LOCAL = 1.22, MINOR_IM_LOCAL = 1.12;
@@ -1740,7 +1903,10 @@
     if (com.waste) return wastePrice(port, row, st, fill);
 
     var scarcity = 0.55 + 0.95 * (1 - fill);
-    var mid = com.base * row.local * scarcity;
+    var shape = row.local * scarcity;
+    var kx = structureFor(com);
+    if (kx !== 1) shape = Math.pow(shape, kx);
+    var mid = com.base * shape;
 
     /* ---- the asymmetry ---------------------------------------------------
      * A PORT SELLS ONLY WHAT IT MAKES. It will buy anything.
@@ -1874,10 +2040,21 @@
    * distribution tightened toward 1 as it was meant to — asks start being
    * news at 0.73x (was 0.50x), bids at 1.34x (was 1.62x) — and the
    * extremes, the true bargains and the true hunger, are where they were. */
-  var MARK_BUY_GOOD = 0.73, MARK_BUY_FULL = 0.50;
-  var MARK_BUY_BAD = 1.01, MARK_BUY_WORST = 1.71;
-  var MARK_SELL_GOOD = 1.34, MARK_SELL_FULL = 1.68;
-  var MARK_SELL_BAD = 0.77, MARK_SELL_WORST = 0.51;
+  /* RE-MEASURED 2026-11-04, after the value-density spread and the
+   * near-supply pass narrowed the dear end (see VALUE_REF): sixty home
+   * systems at t = 10 days, every row of every lit port, quartiles and
+   * twentieths of ask/base and bid/base (the sweep is in the CHANGELOG
+   * entry). The same method on the tree before the retune gave 0.75 /
+   * 0.51 / 1.01 / 1.77 and 1.42 / 1.71 / 0.80 / 0.52 — within a few
+   * hundredths of the constants it replaced, so the method is the one they
+   * were taken with. What moved is the bid that is news: the top quarter
+   * of what a port pays now starts at 1.17x list (was 1.34), because the
+   * hungriest importers of dear goods no longer pay 2x for them. The
+   * cheap end of the ask moved up for the same reason (0.61, was 0.50). */
+  var MARK_BUY_GOOD = 0.79, MARK_BUY_FULL = 0.61;
+  var MARK_BUY_BAD = 1.01, MARK_BUY_WORST = 1.77;
+  var MARK_SELL_GOOD = 1.17, MARK_SELL_FULL = 1.57;
+  var MARK_SELL_BAD = 0.81, MARK_SELL_WORST = 0.60;
 
   /* Strength in 0..1 for a value that has passed `from` on its way to
    * `to`, either direction. Zero at the threshold, one at full. */
@@ -1936,6 +2113,64 @@
     }
     var cur = ledgerAt(mkt, cid, t);
     mkt.ledger[cid] = { q: cur - tonnes, t0: t };
+  }
+
+  /* ---- A LOT IS PRICED DOWN THE SHELF (2026-11-04) ----------------------
+   * Until this, the market terminal charged a lot of any size at the quote
+   * on the board: press Home on a 64 t hold and every tonne cost what the
+   * first one did, the dent landing only on the NEXT trade. So a delivery
+   * did move the price — for whoever came after you. Astra asked for
+   * deliveries that move the price harder, and the first, cheapest and
+   * most honest way to do that is to let the delivery move its OWN price:
+   * a hungry importer pays its hungry price for the first tonnes and less
+   * for every tonne after, as its shelf fills under you.
+   *
+   * Measured on the 11-03 sweep's forty home systems, the board price was
+   * worth a third again on the best run (138k against 103k walked, median)
+   * — and splitting the lot into single tonnes already got the walked
+   * price, so the board price was a reward for pressing one key instead
+   * of another. The trading houses always priced this way (tradingfirm.js
+   * lotValue); the desk now agrees with them.
+   *
+   * `side` +1 is a purchase (stock leaves the port), -1 a sale. Priced in
+   * LOT_SLICES equal slices, each at the quote for the shelf as the slices
+   * before it left it, which is the integral of the curve to within a
+   * fraction of a per cent for any hold in the game. `maxCr` cuts a
+   * purchase to what the money covers — priced first, committed after, so
+   * a lot can never cost more than the wallet holds. Returns { qty, cr,
+   * each } (`cr` the whole lot, negative for waste the port pays you to
+   * take), or null when the port will not deal in it at all. */
+  var LOT_SLICES = 16;
+  function lotAt(port, cid, st0, qty, side) {
+    var row = port.market.rows[cid];
+    var n = Math.max(1, Math.min(LOT_SLICES, Math.ceil(qty))), sl = qty / n, st = st0, tot = 0;
+    for (var i = 0; i < n; i++) {
+      var qo = quote(port, cid, clamp(st, 0, row.cap));
+      var each = side > 0 ? qo.buy : qo.sell;
+      if (each === null || each === undefined) return null;
+      tot += each * sl;
+      st += side > 0 ? -sl : sl;
+    }
+    return tot;
+  }
+  function lotPrice(port, cid, qty, side, t, maxCr) {
+    var row = port && port.market && port.market.rows[cid];
+    if (!row || !(qty > 0)) return null;
+    var st = stock(port, cid, t);
+    var cr = lotAt(port, cid, st, qty, side);
+    if (cr === null) return null;
+    if (side > 0 && maxCr !== undefined && cr > maxCr) {
+      /* Whole tonnes, largest that fits: the curve is monotone, so halve
+       * the gap until it closes. */
+      var lo = 0, hi = Math.floor(qty);
+      while (hi - lo > 1) {
+        var mid = (lo + hi) >> 1, c = lotAt(port, cid, st, mid, side);
+        if (c !== null && c <= maxCr) lo = mid; else hi = mid;
+      }
+      qty = lo;
+      cr = qty > 0 ? lotAt(port, cid, st, qty, side) : 0;
+    }
+    return { qty: qty, cr: cr, each: qty > 0 ? cr / qty : 0 };
   }
 
   /* ---- near-field stepped simulation ------------------------------------
@@ -2248,6 +2483,11 @@
      * prices off the closed form plus its own footprint, and has to ask
      * this the same question price() and priceAt() ask, not a copy of it. */
     quoteStock: quote,
+    /* A lot priced down the shelf (the desk, 2026-11-04). */
+    lotPrice: lotPrice, LOT_SLICES: LOT_SLICES,
+    /* The value-density spread and the near-supply pass (2026-11-04). */
+    TUNE: TUNE, structureFor: structureFor, nearSupply: nearSupply,
+    VALUE_REF: VALUE_REF, VALUE_SLOPE: VALUE_SLOPE, VALUE_KMIN: VALUE_KMIN, NEAR_SUPPLY: NEAR_SUPPLY, NEAR_HI: NEAR_HI, nearKeep: nearKeep,
     LEDGER_HALFLIFE: LEDGER_HALFLIFE,
     priceList: priceList,
     priceMark: priceMark,

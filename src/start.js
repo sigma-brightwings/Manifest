@@ -5,7 +5,8 @@
  * chose three difficulties: an EASY start in a working hull built for the
  * job, a NORMAL start in the small hull of each trade, and HARD, which is
  * the career this game has always opened with — a Talon Courier, a pulse
- * laser and 3,200 credits — "the Talon stays as the hard start".
+ * laser and the hard purse (generate.js SHIP_SPEC.credits; 3,200 until the
+ * 2026-11-04 retune, 7,000 since) — "the Talon stays as the hard start".
  *
  * Three rules shape everything below.
  *
@@ -58,7 +59,13 @@
    * mid-price goods, which is what a trade start has to be able to do on
    * day one. Six thousand on normal is about two Talon holds of the cheap
    * end — enough that a Bollard pilot can also buy fuel and a first rock
-   * torpedo, not so much that the start stops being a start. */
+   * torpedo, not so much that the start stops being a start.
+   *
+   * SINCE 2026-11-04 THE HARD PURSE (7,000) IS BIGGER THAN THIS FLOOR. The
+   * Normal Bollard is the dearest Normal kit and so carries the bare floor
+   * in cash, 1,000 less than a Hard Talon; she is still 26k richer in
+   * worth, all of it in a mining hull. Left as it is: the floor is what
+   * the dearest kit is topped up with, and rule 2 is about worth. */
   var PRESETS = {
     easy: {
       floor: 15000,
@@ -228,7 +235,7 @@
    *
    * THE PROFIT is what the career is worth now against what a classic
    * start was handed: credits, plus the cargo aboard at this port's buying
-   * price, less the classic 3,200. Cargo counts because otherwise a pilot
+   * price, less the classic purse (classicCredits). Cargo counts because otherwise a pilot
    * could turn the money into freight the minute before choosing, show a
    * loss, and keep both the freight and a full preset purse.
    *
@@ -255,9 +262,12 @@
    * is shut, and HARD (keep what you fly) is still open. */
   var CLASSIC_HULL = 'talon';
 
+  /* The hard start's purse. generate.js SHIP_SPEC.credits is the only
+   * place it is written; the number here is the no-generator fallback of a
+   * stripped-down test harness and nothing else. */
   function classicCredits() {
     var spec = (global.Gen && global.Gen.SHIP_SPEC) || {};
-    return spec.credits || 3200;
+    return spec.credits || 7000;
   }
 
   /* What this port would give for a tonne of each good: its buying price,
@@ -484,7 +494,7 @@
     var C = Combat(), h = C.HULLS.talon;
     var spec = (global.Gen && global.Gen.SHIP_SPEC) || {};
     return h.name + ' \u00b7 ' + (spec.cargoCap || h.cargoCap) + ' t hold \u00b7 guns: pulse \u00b7 ' +
-           fmt(spec.credits || 3200) + ' cr';
+           fmt(classicCredits()) + ' cr';
   }
 
   /* A difficulty row's second line: the three hulls and what each focus

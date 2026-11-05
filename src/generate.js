@@ -59,7 +59,20 @@
      * forces. */
     fuel: 37, fuelCap: 37,
     cargoCap: 64,
-    credits: 3200
+    /* THE HARD START'S PURSE, and the one place it is written: start.js
+     * (classicCredits, the HARD row, the after-lessons profit), sim.js
+     * (newShip) and the tests all read it from here. 3,200 until
+     * 2026-11-04; the economy retune took Halloway's first run from 3,338
+     * cr median to 1,265, because a first hold is ROI-bound — 3,200 buys a
+     * few tonnes of the best good, so a narrower return lands on it in full.
+     * Astra chose a bigger purse AND a gentler near-supply rule for cheap
+     * goods (economy.js NEAR_HI). Measured on the tutorial's 39 openings
+     * (tools/measure-economy.cjs tutorial, ECO_PURSE), with the ramp in:
+     * 5,000 -> 2,133 median, 6,000 -> 2,675, 7,000 -> 2,940, 8,000 -> 3,350.
+     * 7,000 is back near the old ~3,000, and Hard is still the poorest
+     * start by worth at list: 45k, against Normal's 71k and Easy's 139k
+     * (start.js rule 2, which this does not touch). */
+    credits: 7000
   };
   var LIFT_MARGIN = 1.15;
 

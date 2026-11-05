@@ -190,9 +190,19 @@
      *   real losses on real runs. x3 gave 12% and 6%. x4 it is: a back-
      *   street house is a bad bet, a small one a risky one, and a sound one
      *   steady. YOUR trades at the counter are untouched — this multiplies
-     *   only the house's own view and its own execution. */
+     *   only the house's own view and its own execution.
+     *
+     *   x4 -> x1.7 (2026-11-04), RE-SWEPT after the economy retune
+     *   (economy.js VALUE_REF, NEAR_SUPPLY). The margins the house lives on
+     *   came down by about two thirds, and at x4 the bottom of the ladder
+     *   stopped being a bad bet and became a certain one: rating 1 lost in
+     *   98% of quarters and rating 2 in 86%. Same 20 seeds x 4 quarters,
+     *   rating 1 / rating 2 losing quarters: x1 9% / 0%, x1.4 27% / 8%,
+     *   x1.6 45% / 6%, x1.7 53% / 16%, x1.8 63% / 22%, x2 64% / 38%,
+     *   x3 91% / 72%. x1.7 is the one that puts both back where x4 had
+     *   them (62% and 12%), and ratings 3-5 still never lose. */
     footHalfLife: 16 * DAY,
-    depthMul: 4,
+    depthMul: 1.7,
     insHullDay: 0.0008,       // of the hull's list price, per day out of port
     insCargoRun: 0.02,        // of what the load cost, per run
     berthMinDays: 1

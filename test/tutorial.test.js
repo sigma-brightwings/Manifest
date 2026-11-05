@@ -61,7 +61,7 @@ function career(seed) {
   var o = opening(seed);
   if (!o || !o.port) return null;
   var ship = Sim.circularOrbit(o.host, o.sys, 0, o.host.radius * 2, 0, 0);
-  ship.credits = 3200;
+  ship.credits = Gen.SHIP_SPEC.credits;       // the hard purse, read from its one home
   ship.cargo = {};
   ship.cleared = {}; ship.cleared[o.port.id] = true;
   Sim.dockShip(ship, o.port, o.sys, 0);
@@ -90,7 +90,7 @@ seeds.forEach(function (sd) {
   if (tut.cid) {
     withGood++;
     margins.push(tut.sellAt - tut.buyAt);
-    profits.push((tut.sellAt - tut.buyAt) * Math.min(64, Math.floor(3200 / tut.buyAt)));
+    profits.push((tut.sellAt - tut.buyAt) * Math.min(64, Math.floor(Gen.SHIP_SPEC.credits / tut.buyAt)));
   }
   var dest = c.o.sys.byId[tut.dest];
   if (dest && dest.parentBody === c.o.host) nearHome++;

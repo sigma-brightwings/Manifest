@@ -1314,7 +1314,7 @@
       gear: false,                                // landing gear, Shift+G
       cargo: {},                                  // commodity id -> tonnes
       cargoCap: SPEC.cargoCap || 64,
-      credits: SPEC.credits || 3200,
+      credits: SPEC.credits || 7000,              // generate.js SHIP_SPEC is the source
       fuelOut: false,
 
       landed: false,

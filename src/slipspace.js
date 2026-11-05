@@ -199,7 +199,7 @@
    * most of the ship sticking out of it.
    *
    * Pricing, against a game where a courier contract pays 1,800-4,800 cr and
-   * you start with 3,200. The baffle is a few good runs. The anchor is a
+   * you start with 7,000 (3,200 when this was priced). The baffle is a few good runs. The anchor is a
    * campaign. That gap is deliberate and it is the whole economic shape of
    * the feature: hiding is affordable, and being unpullable is not.
    *

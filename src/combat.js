@@ -1041,6 +1041,41 @@
    * its 1.15 margin, so no purchase strands you on a pad you could land
    * on. That ceiling is itself derived from the Talon's laden mass, so it
    * came down 5.8% with everything else — see generate.js. */
+  /* THE BIG HULLS GOT DEARER (2026-11-04), as the second half of the
+   * economy retune (economy.js, VALUE_REF). Astra: "raise the bigger
+   * ships' prices somewhat." Measured, not felt, with
+   * tools/measure-economy.cjs ships: a "good run" is the best mixed hold a
+   * hull can carry from its home system, in-system or to one of the three
+   * nearest claimed stars, every good walked down its shelf and the jump's
+   * hydrogen paid; a step is the next hull's yard price less 70% of the
+   * one you arrive in, counted in good runs of the one you arrive in.
+   *
+   *                       old economy,     new economy,     new economy,
+   *                       old prices       old prices       these prices
+   *   Talon -> Tallyman      0.5              1.4              2.2
+   *   Tallyman -> Mule       0.2              0.6              1.1
+   *   Mule -> Longhaul       0.5              1.7              2.3
+   *   Longhaul -> Leviathan  1.5              5.9              7.3
+   *
+   * and from the hard start (3,200 cr, the best run the money covers,
+   * twice a day, lanes wearing as they are flown) to a Tallyman: 3 runs
+   * before, 8 after; 6 from the 7,000 cr purse and gentler near-supply
+   * that followed the same day (generate.js SHIP_SPEC.credits). That is the target: a step is a few good runs, a few
+   * more than that once lanes wear, and the top of the ladder is a real
+   * ambition rather than an afternoon.
+   *
+   * WHY NOT DEARER. A bigger hold earns less than its size suggests: the
+   * good run is 45k on a Talon, 64k on a Tallyman, 77k on a Mule, 86k on a
+   * Longhaul and 92k on a Leviathan, because a lane walks its shelf flat
+   * long before 300 t. Price the big hulls by their tonnage and they would
+   * never pay for themselves; priced like this, each is still worth more
+   * than the one under it to somebody who means to use the room.
+   *
+   * The small hulls — Talon, Dart, Bollard, Sump, Lance, Wren — are where
+   * they were: they are what a career starts in (start.js prices its
+   * presets off them) and the economy retune already made their first
+   * steps slower. Combat and specialist hulls (Cutter, the Syndicate's,
+   * the tugs and tenders) are not trade ladders and were not moved. */
   var HULLS = {
     talon: { id: 'talon', size: 'S', name: 'Talon Courier', price: 32000, mesh: 'courier',
              dryMass: 42, thrustKN: 2700, thrusterCap: 16, fuelCap: 37,
@@ -1097,7 +1132,7 @@
                'does not forgive a hard landing. Ideal for people who ' +
                'need to be somewhere before somebody else is: couriers ' +
                'on a deadline, and anybody whose plan depends on leaving.' },
-    kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 120000, mesh: 'merc',
+    kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 150000, /* 120,000 before 2026-11-04 */ mesh: 'merc',
              dryMass: 60, thrustKN: 4050, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 2, internal: 4 },
@@ -1113,7 +1148,7 @@
                'fastest, the roomiest or the cheapest thing on this list ' +
                'and it is the only one that is never badly wrong. Ideal ' +
                'for a pilot who takes whatever is on the board.' },
-    mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 78000, mesh: 'freighter',
+    mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 135000, /* 78,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 80, thrustKN: 5550, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 3, internal: 5 },
@@ -1217,7 +1252,7 @@
                'price reflects how few people want one. Scrub her out and ' +
                'she carries anything. Ideal for bulk trade on a budget, ' +
                'and for the waste contracts nobody else will touch.' },
-    longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 165000, mesh: 'freighter',
+    longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 250000, /* 165,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 140, thrustKN: 6800, thrusterCap: 30, fuelCap: 100,
              cargoCap: 320, hullMax: 260,
              slots: { hardpoint: 2, utility: 4, internal: 6 },
@@ -1231,7 +1266,7 @@
                'see a pad, though she can. Twelve slots and a reactor with ' +
                'room in it make her whatever her owner needs. Ideal for a ' +
                'trader who has outgrown medium hulls and wants a fleet.' },
-    tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 150000, mesh: 'tanker',
+    tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 220000, /* 150,000 before 2026-11-04 */ mesh: 'tanker',
              dryMass: 150, thrustKN: 6800, thrusterCap: 30, fuelCap: 130,
              cargoCap: 280, hullMax: 240,
              slots: { hardpoint: 2, utility: 3, internal: 6 },
@@ -1263,7 +1298,7 @@
                'word to captains it already counts as allies. Ideal for ' +
                'the hunter, the escort, and anyone who wants to be left ' +
                'alone and has earned the means.' },
-    meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 420000, mesh: 'liner',
+    meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 500000, /* 420,000 before 2026-11-04 */ mesh: 'liner',
              dryMass: 260, thrustKN: 4600, thrusterCap: 40, fuelCap: 90,
              cargoCap: 120, hullMax: 300,
              slots: { hardpoint: 2, utility: 4, internal: 8 },
@@ -1278,7 +1313,7 @@
                'size: a shipyard, a highport, a fleet carrier. Built to ' +
                'order and never sold off a floor. Ideal for passenger work ' +
                'on the settled runs, at a scale nothing smaller can touch.' },
-    leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 600000, mesh: 'bulk',
+    leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 780000, /* 600,000 before 2026-11-04 */ mesh: 'bulk',
              dryMass: 420, thrustKN: 9000, thrusterCap: 50, fuelCap: 280,
              cargoCap: 900, hullMax: 420,
              slots: { hardpoint: 2, utility: 4, internal: 8 },
@@ -1320,7 +1355,7 @@
      * cubes as freight, and construction.js shrinks it by the cubes crates
      * take. About 478 m long (Astra's 2026-10-20 re-export) — the biggest hull in the game — so XL and
      * commission-only. Price and stats are Claude's first numbers. */
-    crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 450000, mesh: 'crawler',
+    crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 560000, /* 450,000 before 2026-11-04 */ mesh: 'crawler',
              dryMass: 640, thrustKN: 9500, thrusterCap: 60, fuelCap: 300,
              cargoCap: 600, hullMax: 520,
              slots: { hardpoint: 1, utility: 4, internal: 6 },
@@ -1389,7 +1424,7 @@
                'cheap to run. Builders ferry station crates down to surface ' +
                'sites in her. Ideal for ground work, crew rotations and ' +
                'short heavy hops.' },
-    trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 72000, mesh: 'trade',
+    trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 110000, /* 72,000 before 2026-11-04 */ mesh: 'trade',
              dryMass: 60, thrustKN: 4200, thrusterCap: 18, fuelCap: 40,
              cargoCap: 110, hullMax: 120,
              slots: { hardpoint: 2, utility: 2, internal: 4 },
