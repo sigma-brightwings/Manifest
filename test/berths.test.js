@@ -2225,7 +2225,8 @@ console.log('--- seeing her from outside, at every berth ---');
  * a tilted face (the cylinders' bore bays, the navy and Syndicate yards),
  * where there is no level floor for this rule to find. Those are listed
  * every run and held to that count; none of them is at a spine, a ring, a
- * cradle, a refinery or a skimmer. */
+ * cradle, a refinery or a skimmer. 30 on 2026-11-04 after the fourth pass,
+ * and 0 since each tilted bay got a level pad (Render levelPads). */
 console.log('--- on the bay\'s floor, not its lintel ---');
 (function () {
   var sys = Gen.generateSystem('cut-sweep');
@@ -2334,8 +2335,35 @@ console.log('--- on the bay\'s floor, not its lintel ---');
   check('every navy yard heavy bay stands her on the hall floor inside, and lets her out the way she came',
         inStands === 4 && outBad.length === 0, inStands + ' stands moved in; ' + outBad.join('; '));
   check('every level-framed berth stands on a real floor', levelBad.length === 0, levelBad.join('; '));
-  check('the berths off a level floor are no more than the 30 measured 2026-11-04 (40 the day before), all in tilted bays',
-        bad.length <= 30, bad.length + '');
+  /* 0 since the level pads (2026-11-04, Astra: "for sloped interiors build
+   * a landing pad which extends out from the angle, making it as flat as
+   * any of the other"): every one of the 30 tilted bays above has a level
+   * slab built out from its slope on struts (Render levelPads), and the
+   * hull stands on it. */
+  check('no berth is off a level floor (30 in tilted bays before their pads, 40 before that)',
+        bad.length === 0, bad.length + '');
+  /* THE PADS THEMSELVES. Every model's pads: level by construction, but
+   * where they are is measured, so each is checked against the triangles
+   * the same way as a floor - its top is the first surface under the hull,
+   * the hull's clear height over it is open, and it stands on something
+   * (struts to structure, at least two). */
+  var pads = 0, padBad = [];
+  MODELS.forEach(function (id) {
+    var lb = Render.libPort(id);
+    (lb.pads || []).forEach(function (p) {
+      if (p.none) { padBad.push(id + ' b' + p.berth + ': no pad fits (' + p.why + ')'); return; }
+      pads++;
+      var zs = column(lb, p.cx, p.cy);
+      var top = zs.filter(function (z) { return Math.abs(z - p.top) < 1e-6; }).length;
+      var over = zs.filter(function (z) { return z > p.top + 1e-4 && z < p.top + p.head; });
+      if (!top) padBad.push(id + ' b' + p.berth + ': no surface at its top');
+      if (over.length) padBad.push(id + ' b' + p.berth + ': ' + m((over[0] - p.top) * 2.0) + ' of clear height');
+      if (p.struts < 2) padBad.push(id + ' b' + p.berth + ': ' + p.struts + ' struts');
+    });
+  });
+  console.log('  ' + pads + ' level pads in tilted bays');
+  check('every tilted bay with no floor has a level pad, open over it and standing on struts',
+        pads >= 30 && padBad.length === 0, pads + ' pads; ' + padBad.join('; '));
 })();
 
 /* ---- E: INDOORS AND BACK OUT (2026-11-04) ---------------------------------
@@ -2345,9 +2373,9 @@ console.log('--- on the bay\'s floor, not its lintel ---');
  * routed out through a wall. At the cradles and the Syndicate yards: 24 of
  * their 72 berths on 2026-11-03 (the cradles' outboard pods and the yards'
  * S/M bays bridged "by elevator" through the hull, and the Syndicate S/M
- * stands on their slots' roofs). Now the three tilted garages whose own
- * frame has no level floor (above) - their stands are outdoors - and
- * nothing else. */
+ * stands on their slots' roofs). After the fourth pass, the three tilted
+ * garages whose own frame had no level floor (above), their stands
+ * outdoors; since their level pads, none. */
 console.log('--- indoors and back out ---');
 (function () {
   var sys = Gen.generateSystem('cut-sweep');
@@ -2375,8 +2403,11 @@ console.log('--- indoors and back out ---');
   Render.assignPort(role, null);
   st.radius = R0;
   console.log('  ' + n + ' arrivals, ' + bad.length + ' indoors and back out: ' + bad.join(', '));
-  check('no cradle or Syndicate-yard arrival goes indoors and back out, but the three tilted garages (24 on 2026-11-03)',
-        n >= 60 && bad.length <= 3 && bad.every(function (s) { return /^yard-syn-[ms] /.test(s); }), bad.join('; '));
+  /* 0 since the level pads (2026-11-04): the three tilted garages' stands
+   * were outdoors, in the open hall past their doors' cut; each now stands
+   * on a pad built out from the wall just inside its door. */
+  check('no cradle or Syndicate-yard arrival goes indoors and back out (24 on 2026-11-03, 3 on 2026-11-04)',
+        n >= 60 && bad.length === 0, bad.join('; '));
 })();
 
 /* ---- THE RAIL WAITS OUTSIDE THE DOORS, ON THE LAMPS' LINE (2026-11-03) ----

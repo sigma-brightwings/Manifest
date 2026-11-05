@@ -641,6 +641,57 @@
     };
   }
 
+  /* ONTO A LEVEL PAD FROM ITS SIDE (2026-11-04). A tilted bay's pad
+   * (Render.berthPad) is a slab with open space under it, and a hull carried
+   * up to it from below - the cylinders' arm B and C pods, whose bore car
+   * stops 0.09 radii under the pod - rode up through it to her stand: the
+   * route search found no way round (cylinder-m b1, every corner it tried
+   * was in the slab or the pod's floor). So the last corner before the stand
+   * is put off the pad's edge, at the stand's height, on the side she comes
+   * from: she comes up beside the pad and slides level onto it, the way she
+   * comes in through a wall door. From above or level there is nothing to
+   * go round, and nothing is added. */
+  function padLanding(port, i, through, from, stand) {
+    var R = global.Render;
+    if (!R || !R.berthPad || !R.portModelFor) return;
+    var pd = R.berthPad(R.portModelFor(port), i);
+    if (!pd) return;
+    var prev = through.length ? through[through.length - 1] : from;
+    if (!prev || prev.z >= stand.z - 1e-4) return;
+    var role = R.portModelFor(port);
+    var hx = prev.x - stand.x, hy = prev.y - stand.y, hl = Math.sqrt(hx * hx + hy * hy);
+    var a0 = hl > 1e-6 ? Math.atan2(hy, hx) : Math.atan2(pd.f[1], pd.f[0]);
+    /* Off the pad by half the longest hull and her doorway margin (doorClear),
+     * measured along the way she comes - out past the edge of a square pad
+     * whichever way that is. The side she comes from first; where the climb
+     * to it is through structure (the pod's own walls round its floor
+     * opening, at cylinder-m b1), the other seven points of the compass, in
+     * order of how far round they are. Each one is the corner only if the
+     * climb to it and the slide off it onto the pad are both in the open. */
+    var P = [prev.x, prev.y, prev.z], S = [stand.x, stand.y, stand.z];
+    var doors = { open: 1, inner: 1, innerTo: 1 };
+    /* Where she always came up, when the pad was put beside it (a routed
+     * bay's, levelPads `from`): up there, then across. */
+    if (pd.from) {
+      through.push({ x: pd.from[0], y: pd.from[1], z: stand.z });
+      return;
+    }
+    var first = null;
+    for (var k = 0; k < 8; k++) {
+      var ang = a0 + (k % 2 ? 1 : -1) * Math.ceil(k / 2) * Math.PI / 4;
+      var cx = Math.cos(ang), cy = Math.sin(ang);
+      var d = pd.half * (Math.abs(cx * pd.f[0] + cy * pd.f[1]) + Math.abs(cx * pd.r[0] + cy * pd.r[1])) + doorClear(port);
+      var C = [stand.x + cx * d, stand.y + cy * d, stand.z];
+      if (!first) first = C;
+      if (R.portSegmentHit && (R.portSegmentHit(role, P, C, doors) || R.portSegmentHit(role, C, S, doors))) continue;
+      through.push({ x: C[0], y: C[1], z: C[2] });
+      return;
+    }
+    /* Nowhere clear: the side she comes from, and the route search
+     * (clearTransfer) is left to find its way round. */
+    through.push({ x: first[0], y: first[1], z: first[2] });
+  }
+
   /* The stand of a high wall door, moved in off its box (Render.berthStandIn),
    * or null. */
   function standInOf(port, i) {
@@ -6710,6 +6761,7 @@
           p10.rideAt = p10.through.length;
           p10.carriage = cg.node;
         }
+        if (!cg) padLanding(port, berth || 0, p10.through, Ls, stand);
         clearTransfer(port, berth || 0, p10);
         return p10;
       }
