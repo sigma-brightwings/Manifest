@@ -99,7 +99,12 @@ function key(k) {
  * at list, every fitting at list, every seeker at list, and the cash. */
 function shipValue(s) {
   var v = C.HULLS[s.hullId].price + (s.credits || 0);
-  for (var k in (s.fit || {})) v += C.EQUIPMENT[s.fit[k]].price || 0;
+  for (var k in (s.fit || {})) {
+    /* Her frame's own slipspace drive is in the hull's price (combat.js
+     * THE SLIPSPACE BAY, 2026-11-09), not an item on top of it. */
+    if (k === 'core0' && s.fit[k] === C.stockCore(s.hullId)) continue;
+    v += C.EQUIPMENT[s.fit[k]].price || 0;
+  }
   var racks = s.racks || {};
   for (var r in racks) v += ((C.MISSILES[r] || {}).price || 0) * (racks[r].n || 0);
   return v;
@@ -139,9 +144,9 @@ function careerKey() {
   var old = careerKey(), oldShip = G.ship;
   G.newGame(seed, { difficulty: 'hard', focus: null });
   check(seed + ': HARD is newGame with no choice, field for field', careerKey() === old);
-  check(seed + ': and that is the Talon, the hard purse, a pulse laser, scoop and drive',
+  check(seed + ': and that is the Talon, the hard purse, a pulse laser, scoop and drives',
         G.ship.hullId === 'talon' && G.ship.credits === PURSE &&
-        JSON.stringify(G.ship.fit) === JSON.stringify({ hardpoint0: 'phpulse', utility0: 'cargoscoop', drive0: 'cruise1' }) &&
+        JSON.stringify(G.ship.fit) === JSON.stringify({ hardpoint0: 'phpulse', utility0: 'cargoscoop', drive0: 'cruise1', core0: 'slipdriveI' }) &&
         oldShip.credits === PURSE, JSON.stringify(G.ship.fit));
   check(seed + ': the hard career is saved as hard', G.start && G.start.difficulty === 'hard');
 });

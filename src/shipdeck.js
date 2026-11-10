@@ -1193,6 +1193,50 @@
     m.c.push(col);
   }
   function quad(m, a, b, c, d, col) { tri(m, a, b, c, col); tri(m, a, c, d, col); }
+  /* CEILING LIGHTS AS LAMPS, NOT STRIPS (2026-11-09). Astra, from the
+   * Talon's airlock in 1.2.0 "Brian": a full-bright strip the length of a
+   * room, drawn without shading, reads from one end as a white wedge
+   * converging on the far door - the same glitch the station tubes had
+   * (walk.js tubeLights) - and through a ramp opening it looked like a
+   * slab hanging out of the ceiling. So a long light (over 1.4 m) is laid
+   * as a run of separate fittings along the same line: each a lens with a
+   * dimmer surround that steps down towards the ceiling's colour. Short
+   * lights and anything not lying flat (a bunk's wall lamp) are drawn as
+   * they were. */
+  function hex6(c) { c = String(c).replace('!', ''); return c.length === 4 ? '#' + c[1] + c[1] + c[2] + c[2] + c[3] + c[3] : c; }
+  function mixCol(a, b, t) {
+    var A = hex6(a), B = hex6(b), out = '#';
+    for (var i = 1; i < 7; i += 2) {
+      var v = Math.round(parseInt(A.substr(i, 2), 16) * (1 - t) + parseInt(B.substr(i, 2), 16) * t);
+      out += ('0' + Math.max(0, Math.min(255, v)).toString(16)).slice(-2);
+    }
+    return (String(a).charAt(0) === '!' ? '!' : '') + out;
+  }
+  function lightRun(m, a, b, c, d, col, ceil) {
+    var flat = Math.abs(a[1] - b[1]) < 1e-6 && Math.abs(a[1] - c[1]) < 1e-6 && Math.abs(a[1] - d[1]) < 1e-6;
+    var U = [b[0] - a[0], 0, b[2] - a[2]], V = [d[0] - a[0], 0, d[2] - a[2]];
+    var lu = Math.hypot(U[0], U[2]), lv = Math.hypot(V[0], V[2]);
+    var long = Math.max(lu, lv);
+    if (!flat || long < 1.4 || !ceil) { quad(m, a, b, c, d, col); return; }
+    var alongU = lu >= lv;
+    function P(u, v, dy) { return [a[0] + U[0] * u + V[0] * v, a[1] + dy, a[2] + U[2] * u + V[2] * v]; }
+    function rect(s0, s1, w0, w1, dy, cl) {
+      // s = along the light, w = across it, both 0..1 of the original quad
+      if (alongU) quad(m, P(s0, w0, dy), P(s1, w0, dy), P(s1, w1, dy), P(s0, w1, dy), cl);
+      else quad(m, P(w0, s0, dy), P(w1, s0, dy), P(w1, s1, dy), P(w0, s1, dy), cl);
+    }
+    var n = Math.max(2, Math.round(long / 1.5)), step = 1 / n;
+    var lens = Math.min(0.55, (long / n) * 0.45) / long;      // as a fraction of the run
+    var rim = Math.min(0.1, (long / n) * 0.1) / long;
+    var halo = mixCol(col, ceil, 0.55);
+    for (var i = 0; i < n; i++) {
+      var mid = step * (i + 0.5);
+      rect(mid - lens / 2 - rim, mid + lens / 2 + rim, -0.35, 1.35, 0, halo);
+      /* The lens a few millimetres nearer the room than its surround, so
+       * the two never fight for the same depth. */
+      rect(mid - lens / 2, mid + lens / 2, 0, 1, -0.004, col);
+    }
+  }
   function fan(m, pts, col) { for (var i = 1; i + 1 < pts.length; i++) tri(m, pts[0], pts[i], pts[i + 1], col); }
   /* An axis-aligned box, all six faces. */
   function box(m, x0, y0, z0, x1, y1, z1, col, top) {
@@ -1377,8 +1421,8 @@
     if (stripEnd > g.bulkZ + 0.35) {
       [-1, 1].forEach(function (s) {
         var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
-        quad(room, [x0, y, g.bulkZ + 0.25], [x1, y, g.bulkZ + 0.25], [x1, y, stripEnd],
-             [x0, y, stripEnd], pal.light);
+        lightRun(room, [x0, y, g.bulkZ + 0.25], [x1, y, g.bulkZ + 0.25], [x1, y, stripEnd],
+             [x0, y, stripEnd], pal.light, pal.ceil);
       });
     }
     /* This ship's frame bars across its panes (cockpitGeometry `bars`), in
@@ -1462,7 +1506,7 @@
       boxRoom(room, deck.x0, fy, dzs, deck.x1, cy, deck.z1, pal.wall, pal.floor, pal.ceil, ['z0', 'z1']);
       [-1, 1].forEach(function (s) {
         var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
-        quad(room, [x0, y, dzs + 0.25], [x1, y, dzs + 0.25], [x1, y, deck.z1 - 0.25], [x0, y, deck.z1 - 0.25], pal.light);
+        lightRun(room, [x0, y, dzs + 0.25], [x1, y, dzs + 0.25], [x1, y, deck.z1 - 0.25], [x0, y, deck.z1 - 0.25], pal.light, pal.ceil);
       });
       /* A hazard line down the middle of the deck: the way aft. */
       quad(room, [-0.03, fy + 0.004, dzs], [0.03, fy + 0.004, dzs], [0.03, fy + 0.004, deck.z1], [-0.03, fy + 0.004, deck.z1], pal.hazard);
@@ -1497,8 +1541,8 @@
     if (p.decks) {
       var lob = roomByKind(p, 'lobby'), dLB = doorById(p, 'lift-bridge');
       boxRoom(room, lob.x0, fy, lob.z0, lob.x1, fy + PASSAGE_H, lob.z1, pal.passWall, pal.passFloor, pal.ceil, ['z0', 'z1']);
-      quad(room, [-0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3],
-           [0.06, fy + PASSAGE_H - 0.01, lob.z1 - 0.3], [-0.06, fy + PASSAGE_H - 0.01, lob.z1 - 0.3], pal.light);
+      lightRun(room, [-0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3],
+           [0.06, fy + PASSAGE_H - 0.01, lob.z1 - 0.3], [-0.06, fy + PASSAGE_H - 0.01, lob.z1 - 0.3], pal.light, pal.ceil);
       bulkhead(room, pal, fy, dLB.wall[1], LOBBY_HW, fy + PASSAGE_H, dLB.wall[0], CAR_HW, fy + CAR_H, false, [pal.passWall, pal.lockWall]);
       liftSign(room, pal, fy, dLB.wall[1] + 0.006, 1, 'bridge', p);
       if (p.tower) towerGlass(room, portals, pal, fy, fy + PASSAGE_H, lob, null, false);
@@ -1543,8 +1587,8 @@
       quad(room, [-PASSAGE_HW, fy + PASSAGE_H - 0.005, z - 0.06], [PASSAGE_HW, fy + PASSAGE_H - 0.005, z - 0.06],
            [PASSAGE_HW, fy + PASSAGE_H - 0.005, z + 0.06], [-PASSAGE_HW, fy + PASSAGE_H - 0.005, z + 0.06], pal.rib);
     }
-    quad(room, [-0.06, fy + PASSAGE_H - 0.01, ps.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, ps.z0 + 0.3],
-         [0.06, fy + PASSAGE_H - 0.01, ps.z1 - 0.3], [-0.06, fy + PASSAGE_H - 0.01, ps.z1 - 0.3], pal.light);
+    lightRun(room, [-0.06, fy + PASSAGE_H - 0.01, ps.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, ps.z0 + 0.3],
+         [0.06, fy + PASSAGE_H - 0.01, ps.z1 - 0.3], [-0.06, fy + PASSAGE_H - 0.01, ps.z1 - 0.3], pal.light, pal.ceil);
     for (z = ps.z1 - 0.9; z > ps.z0 + 0.7; z -= 1.25) {
       /* No locker across a doorway. */
       if (nearDoor(stbdZ, z, 0.55)) continue;
@@ -1874,8 +1918,8 @@
     sideDoorWall(m, q.x1, q.z0, q.z1, fy, top, door.zc, pal.passWall);
     /* Two lights down the ceiling over the aisle. */
     var ax = (q.x0 + BUNK_W + q.x1) / 2;
-    quad(m, [ax - 0.05, top - 0.006, q.z0 + 0.4], [ax + 0.05, top - 0.006, q.z0 + 0.4],
-         [ax + 0.05, top - 0.006, q.z1 - 0.4], [ax - 0.05, top - 0.006, q.z1 - 0.4], pal.light);
+    lightRun(m, [ax - 0.05, top - 0.006, q.z0 + 0.4], [ax + 0.05, top - 0.006, q.z0 + 0.4],
+         [ax + 0.05, top - 0.006, q.z1 - 0.4], [ax - 0.05, top - 0.006, q.z1 - 0.4], pal.light, pal.ceil);
     p.bunkAt.forEach(function (b) {
       var levels = b.two ? [0.28, 1.22] : [0.28];
       levels.forEach(function (y) {
@@ -1883,8 +1927,8 @@
         box(m, b.x0 + 0.04, fy + y + 0.12, b.z0 + 0.04, b.x1 - 0.04, fy + y + 0.24, b.z1 - 0.04, pal.blanket || pal.seatPad);
         /* A reading lamp on the wall at the head of each bunk. */
         var xw = b.inboard ? b.x1 - 0.004 : b.x0 + 0.004;
-        quad(m, [xw, fy + y + 0.55, b.z1 - 0.32], [xw, fy + y + 0.55, b.z1 - 0.18],
-             [xw, fy + y + 0.62, b.z1 - 0.18], [xw, fy + y + 0.62, b.z1 - 0.32], pal.light);
+        lightRun(m, [xw, fy + y + 0.55, b.z1 - 0.32], [xw, fy + y + 0.55, b.z1 - 0.18],
+             [xw, fy + y + 0.62, b.z1 - 0.18], [xw, fy + y + 0.62, b.z1 - 0.32], pal.light, pal.ceil);
       });
       /* End boards, floor to the top of the stack, and the rail on the
        * upper bunk. */
@@ -2003,8 +2047,8 @@
     if (r.z1 > at + 1e-6) quad(m, [r.x0, top, at], [r.x1, top, at], [r.x1, top, r.z1], [r.x0, top, r.z1], pal.ceil);
     /* A strip of light along the inboard side, clear of the domes. */
     var lx = r.x1 - 0.35;
-    quad(m, [lx - 0.04, top - 0.006, r.z0 + 0.3], [lx + 0.04, top - 0.006, r.z0 + 0.3],
-         [lx + 0.04, top - 0.006, r.z1 - 0.3], [lx - 0.04, top - 0.006, r.z1 - 0.3], pal.light);
+    lightRun(m, [lx - 0.04, top - 0.006, r.z0 + 0.3], [lx + 0.04, top - 0.006, r.z0 + 0.3],
+         [lx + 0.04, top - 0.006, r.z1 - 0.3], [lx - 0.04, top - 0.006, r.z1 - 0.3], pal.light, pal.ceil);
   }
 
   /* THE MEDBAY: beds down the outboard wall with a screen over each, a
@@ -2040,8 +2084,8 @@
     }
     /* Lights down the ceiling, over the landing and the well. */
     var xc = (r.x0 + r.x1) / 2;
-    quad(m, [xc - 0.08, top - 0.01, r.z0 + 0.3], [xc + 0.08, top - 0.01, r.z0 + 0.3],
-         [xc + 0.08, top - 0.01, r.z1 - 0.3], [xc - 0.08, top - 0.01, r.z1 - 0.3], pal.light);
+    lightRun(m, [xc - 0.08, top - 0.01, r.z0 + 0.3], [xc + 0.08, top - 0.01, r.z0 + 0.3],
+         [xc + 0.08, top - 0.01, r.z1 - 0.3], [xc - 0.08, top - 0.01, r.z1 - 0.3], pal.light, pal.ceil);
     /* The controls: a housing on the outboard wall, its screen, and the
      * lamp over it. */
     var hz = door.zc, hx = r.x0 + 0.005;
@@ -2132,8 +2176,8 @@
     var top = fy + QUARTERS_H;
     sideShell(m, pal, fy, r, door, top, pal.passWall, pal.passFloor);
     var cx = (r.x0 + r.x1) / 2;
-    quad(m, [cx - 0.3, top - 0.006, r.z0 + 0.3], [cx + 0.3, top - 0.006, r.z0 + 0.3],
-         [cx + 0.3, top - 0.006, r.z1 - 0.3], [cx - 0.3, top - 0.006, r.z1 - 0.3], pal.light);
+    lightRun(m, [cx - 0.3, top - 0.006, r.z0 + 0.3], [cx + 0.3, top - 0.006, r.z0 + 0.3],
+         [cx + 0.3, top - 0.006, r.z1 - 0.3], [cx - 0.3, top - 0.006, r.z1 - 0.3], pal.light, pal.ceil);
     p.beds.forEach(function (b) {
       box(m, b.x0, fy, b.z0, b.x1, fy + 0.62, b.z1, MEDCOL.bed);
       box(m, b.x0 + 0.05, fy + 0.62, b.z0 + 0.05, b.x1 - 0.05, fy + 0.72, b.z1 - 0.05, MEDCOL.sheet);
@@ -2144,8 +2188,8 @@
       /* And the lamp over it, hung from the ceiling on its rod. */
       box(m, (b.x0 + b.x1) / 2 - 0.15, top - 0.5, b.z1 - 0.9, (b.x0 + b.x1) / 2 + 0.15, top - 0.42, b.z1 - 0.6, pal.rib);
       box(m, (b.x0 + b.x1) / 2 - 0.02, top - 0.42, b.z1 - 0.77, (b.x0 + b.x1) / 2 + 0.02, top, b.z1 - 0.73, pal.rib);
-      quad(m, [(b.x0 + b.x1) / 2 - 0.12, top - 0.504, b.z1 - 0.87], [(b.x0 + b.x1) / 2 + 0.12, top - 0.504, b.z1 - 0.87],
-           [(b.x0 + b.x1) / 2 + 0.12, top - 0.504, b.z1 - 0.63], [(b.x0 + b.x1) / 2 - 0.12, top - 0.504, b.z1 - 0.63], pal.light);
+      lightRun(m, [(b.x0 + b.x1) / 2 - 0.12, top - 0.504, b.z1 - 0.87], [(b.x0 + b.x1) / 2 + 0.12, top - 0.504, b.z1 - 0.87],
+           [(b.x0 + b.x1) / 2 + 0.12, top - 0.504, b.z1 - 0.63], [(b.x0 + b.x1) / 2 - 0.12, top - 0.504, b.z1 - 0.63], pal.light, pal.ceil);
     });
     var cab = p.items.filter(function (it) { return it.kind === 'medcab'; })[0];
     if (cab) {
@@ -2194,8 +2238,8 @@
       quad(m, [r.x0 + 0.1, fy + 0.003, z], [xg1, fy + 0.003, z], [xg1, fy + 0.003, z + 0.04], [r.x0 + 0.1, fy + 0.003, z + 0.04], pal.rib);
     }
     var lx = (r.x0 + (dr ? dr.x0 : r.x1)) / 2;
-    quad(m, [lx - 0.05, top - 0.006, r.z0 + 0.3], [lx + 0.05, top - 0.006, r.z0 + 0.3],
-         [lx + 0.05, top - 0.006, r.z1 - 0.3], [lx - 0.05, top - 0.006, r.z1 - 0.3], pal.light);
+    lightRun(m, [lx - 0.05, top - 0.006, r.z0 + 0.3], [lx + 0.05, top - 0.006, r.z0 + 0.3],
+         [lx + 0.05, top - 0.006, r.z1 - 0.3], [lx - 0.05, top - 0.006, r.z1 - 0.3], pal.light, pal.ceil);
   }
 
   /* THE PASSAGE, DRESSED (2026-10-30). Astra: "add some more detail to the
@@ -2470,8 +2514,8 @@
     [-1, 1].forEach(function (s) {
       var x0 = s * 0.8, x1 = s * 0.86;
       quad(m, [x0, fy + 0.004, r.z0 + 0.2], [x1, fy + 0.004, r.z0 + 0.2], [x1, fy + 0.004, r.z1 - 0.2], [x0, fy + 0.004, r.z1 - 0.2], pal.hazard);
-      quad(m, [s * 0.6 - 0.05, top - 0.006, r.z0 + 0.4], [s * 0.6 + 0.05, top - 0.006, r.z0 + 0.4],
-           [s * 0.6 + 0.05, top - 0.006, r.z1 - 0.4], [s * 0.6 - 0.05, top - 0.006, r.z1 - 0.4], pal.light);
+      lightRun(m, [s * 0.6 - 0.05, top - 0.006, r.z0 + 0.4], [s * 0.6 + 0.05, top - 0.006, r.z0 + 0.4],
+           [s * 0.6 + 0.05, top - 0.006, r.z1 - 0.4], [s * 0.6 - 0.05, top - 0.006, r.z1 - 0.4], pal.light, pal.ceil);
     });
     var man = p.items.filter(function (it) { return it.kind === 'cargo'; })[0];
     if (man) {
@@ -2527,7 +2571,7 @@
       /* The edge: a hazard strip where the platform stops. */
       var ze = pl === pa ? pl.z0 + 0.12 : pl.z1 - 0.12;
       quad(m, [-TRAM_HW, fy + 0.004, ze - 0.1], [TRAM_HW, fy + 0.004, ze - 0.1], [TRAM_HW, fy + 0.004, ze + 0.1], [-TRAM_HW, fy + 0.004, ze + 0.1], pal.hazard);
-      quad(m, [-0.06, top - 0.01, pl.z0 + 0.3], [0.06, top - 0.01, pl.z0 + 0.3], [0.06, top - 0.01, pl.z1 - 0.3], [-0.06, top - 0.01, pl.z1 - 0.3], pal.light);
+      lightRun(m, [-0.06, top - 0.01, pl.z0 + 0.3], [0.06, top - 0.01, pl.z0 + 0.3], [0.06, top - 0.01, pl.z1 - 0.3], [-0.06, top - 0.01, pl.z1 - 0.3], pal.light, pal.ceil);
     });
     /* The tramway: a tube a little below the platforms, two rails, lights
      * every four metres down both walls. */
@@ -2537,7 +2581,7 @@
     for (var z = way.z1 - 2; z > way.z0 + 1; z -= 4) {
       [-1, 1].forEach(function (s) {
         var x = s * (TRAM_HW - 0.004);
-        quad(m, [x, top - 0.5, z - 0.4], [x, top - 0.5, z + 0.4], [x, top - 0.35, z + 0.4], [x, top - 0.35, z - 0.4], pal.light);
+        lightRun(m, [x, top - 0.5, z - 0.4], [x, top - 0.5, z + 0.4], [x, top - 0.35, z + 0.4], [x, top - 0.35, z - 0.4], pal.light, pal.ceil);
       });
       quad(m, [-TRAM_HW, wy + 0.004, z - 0.05], [TRAM_HW, wy + 0.004, z - 0.05], [TRAM_HW, wy + 0.004, z + 0.05], [-TRAM_HW, wy + 0.004, z + 0.05], pal.rib);
     }
@@ -2561,7 +2605,7 @@
       quad(m, [c[0], dy, c[3]], [c[2], dy, c[3]], [c[2], fy + 1.6, c[1] + 0.06], [c[0], fy + 1.6, c[1] + 0.06], pal.console);
       quad(m, [c[0] + 0.1, dy + 0.2, c[3] - 0.1], [c[2] - 0.1, dy + 0.2, c[3] - 0.1], [c[2] - 0.1, fy + 1.45, c[1] + 0.2], [c[0] + 0.1, fy + 1.45, c[1] + 0.2], glow);
     }
-    quad(m, [-0.05, etop - 0.006, er.z0 + 0.4], [0.05, etop - 0.006, er.z0 + 0.4], [0.05, etop - 0.006, er.z1 - 0.4], [-0.05, etop - 0.006, er.z1 - 0.4], pal.light);
+    lightRun(m, [-0.05, etop - 0.006, er.z0 + 0.4], [0.05, etop - 0.006, er.z0 + 0.4], [0.05, etop - 0.006, er.z1 - 0.4], [-0.05, etop - 0.006, er.z1 - 0.4], pal.light, pal.ceil);
   }
 
   /* THE HANGAR (Carrier): the landing, one tall bay, the pads marked out,
@@ -2594,7 +2638,7 @@
     quad(m, [-0.06, fy + 0.004, bay.z0 + 1], [0.06, fy + 0.004, bay.z0 + 1], [0.06, fy + 0.004, bay.z1 - 0.5], [-0.06, fy + 0.004, bay.z1 - 0.5], pal.hazard);
     for (var z = bay.z1 - 3; z > bay.z0 + 2; z -= 6) {
       [-6, 0, 6].forEach(function (x) {
-        quad(m, [x - 0.6, top - 0.01, z - 0.15], [x + 0.6, top - 0.01, z - 0.15], [x + 0.6, top - 0.01, z + 0.15], [x - 0.6, top - 0.01, z + 0.15], pal.light);
+        lightRun(m, [x - 0.6, top - 0.01, z - 0.15], [x + 0.6, top - 0.01, z - 0.15], [x + 0.6, top - 0.01, z + 0.15], [x - 0.6, top - 0.01, z + 0.15], pal.light, pal.ceil);
       });
     }
   }
@@ -2616,7 +2660,7 @@
       quad(m, [-0.15, dh + 0.08, z + (z === z0 ? 0.004 : -0.004)], [0.15, dh + 0.08, z + (z === z0 ? 0.004 : -0.004)],
            [0.15, dh + 0.22, z + (z === z0 ? 0.004 : -0.004)], [-0.15, dh + 0.22, z + (z === z0 ? 0.004 : -0.004)], pal.trim);
     });
-    quad(m, [-0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z1 - 0.4], [-0.4, h - 0.01, z1 - 0.4], pal.light);
+    lightRun(m, [-0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z1 - 0.4], [-0.4, h - 0.01, z1 - 0.4], pal.light, pal.ceil);
     /* The button panel, and a lit square per button (the buttons are the
      * `liftbtn` items; this is where they are). */
     var xp = CAR_HW - 0.004, n = (p.deckOrder || []).length - 1;
@@ -2645,7 +2689,7 @@
       [-hw + 0.05, hw - 0.05].forEach(function (x) { box(m, x - 0.025, 0, s * 0.6 - 0.025, x + 0.025, 2.1, s * 0.6 + 0.025, pal.rib); });
     });
     box(m, -hw, 2.1, -hl, hw, 2.18, hl, pal.console);
-    quad(m, [-0.3, 2.095, -hl + 0.3], [0.3, 2.095, -hl + 0.3], [0.3, 2.095, hl - 0.3], [-0.3, 2.095, hl - 0.3], pal.light);
+    lightRun(m, [-0.3, 2.095, -hl + 0.3], [0.3, 2.095, -hl + 0.3], [0.3, 2.095, hl - 0.3], [-0.3, 2.095, hl - 0.3], pal.light, pal.ceil);
     [-hl, hl].forEach(function (z) {
       quad(m, [-hw, -0.3, z], [hw, -0.3, z], [hw, -0.05, z], [-hw, -0.05, z], pal.hazard);
     });

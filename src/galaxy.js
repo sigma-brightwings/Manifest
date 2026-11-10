@@ -894,11 +894,14 @@
   function shipAllUpMass(ship) {
     var cargo = 0;
     for (var k in ship.cargo) cargo += ship.cargo[k];
-    return ship.dryMass + ship.fuel + (ship.thrusterFuel || 0) + cargo;
+    return ship.dryMass + ship.fuel + (ship.milFuel || 0) + (ship.thrusterFuel || 0) + cargo;
   }
 
+  /* A civil slipspace drive's class carries a tonne of hydrogen further
+   * (Slip.rangeFactor, 2026-11-09); a bare hull's factor is 1. */
   function jumpFuel(ship, lightYears) {
-    return lightYears * FUEL_PER_LY_PER_TONNE * shipAllUpMass(ship);
+    var k = (Slip && Slip.rangeFactor && !Slip.milRunning(ship)) ? Slip.rangeFactor(ship) : 1;
+    return lightYears * FUEL_PER_LY_PER_TONNE * shipAllUpMass(ship) / k;
   }
 
   /* Transit time used to be flat: seven hours per light year, whoever you
@@ -931,11 +934,14 @@
     /* A ship running hot is limited by the slugs in its hold, not by the
      * hydrogen it is no longer burning. Quoting the tank here would draw a
      * jump circle the drive cannot actually reach. */
+    /* Out of the milfuel TANK (2026-11-09), not the hold: what is in the
+     * hold is cargo until it is put in the tank. */
+    var k = Slip.rangeFactor ? Slip.rangeFactor(ship) : 1;
     if (Slip.milRunning(ship)) {
-      var slugs = (ship.cargo && ship.cargo.milfuel) || 0;
-      return slugs / (Slip.MIL_FUEL_PER_LY_PER_TONNE * m);
+      var slugs = Slip.milFuelOf ? Slip.milFuelOf(ship) : 0;
+      return slugs * k / (Slip.MIL_FUEL_PER_LY_PER_TONNE * m);
     }
-    return ship.fuel / (FUEL_PER_LY_PER_TONNE * m);
+    return ship.fuel * k / (FUEL_PER_LY_PER_TONNE * m);
   }
 
   function reachable(galaxy, fromStar, ship) {
@@ -964,7 +970,7 @@
      * the plan, not a surprise at the other end. */
     var hot = Slip.milRunning(ship);
     var burn = Slip.militaryBurn(ship, d);
-    var slugs = (ship.cargo && ship.cargo.milfuel) || 0;
+    var slugs = Slip.milFuelOf ? Slip.milFuelOf(ship) : 0;
     var enoughFuel = hot ? burn.fuel <= slugs : fuel <= ship.fuel;
     var banned = wasteBanned(galaxy, toStar);
     /* A CHECKPOINT IS NOT A SHORTFALL, and it is quoted separately for that
@@ -998,7 +1004,11 @@
        * not lay in. */
       restricted: bar,
       barred: !!barred,
-      possible: enoughFuel && !barred && toStar !== fromStar,
+      /* No slipspace drive, no corridor (2026-11-09, Slipspace.hasDriveCore).
+       * Every ship is given one, so this is a guard, said in words. */
+      noDrive: !(Slip.hasDriveCore ? Slip.hasDriveCore(ship) : true),
+      possible: enoughFuel && !barred && toStar !== fromStar &&
+                (Slip.hasDriveCore ? Slip.hasDriveCore(ship) : true),
       shortfall: hot ? Math.max(0, burn.fuel - slugs)
                      : Math.max(0, fuel - ship.fuel)
     };

@@ -94,7 +94,7 @@
     if (!ship) return 0;
     var cargo = 0;
     if (ship.cargo) for (var k in ship.cargo) cargo += ship.cargo[k];
-    return (ship.dryMass || 0) + (ship.fuel || 0) + (ship.thrusterFuel || 0) + cargo;
+    return (ship.dryMass || 0) + (ship.fuel || 0) + (ship.milFuel || 0) + (ship.thrusterFuel || 0) + cargo;
   }
 
   /* ---- transit time ------------------------------------------------------
@@ -181,15 +181,125 @@
    * it — because that is what the traffic model and the tests quote. */
   function hoursPerLyFor(tonnes, ship) {
     var h = hoursPerLy(tonnes);
-    return milRunning(ship) ? h * MIL_FACTOR : h;
+    if (milRunning(ship)) return h * MIL_FACTOR;
+    return civilRunning(ship) ? h * CIVIL_FACTOR : h;
+  }
+
+  /* ---- the civil slipspace drive (2026-11-09) ---------------------------
+   * Astra modelled a civilian slipspace drive in four classes beside the
+   * military one: "the increased drive class should actually increase the
+   * possible range jumped". Then, the same day: "you need a slipspace
+   * drive or milfuel drive to travel from one star system to another; a
+   * class I drive is standard with the spaceframe of the S size ships, and
+   * class II comes with M size ships" (combat.js THE SLIPSPACE BAY: III
+   * for L and IV for XL, by the same step).
+   *
+   * So the civil drive is THE drive - what every ship in this game has
+   * always been jumping on, now with a name and a class - and the
+   * calibration is pinned to it:
+   *   - the corridor's hours a light year (hoursPerLy) ARE a civil
+   *     drive's, so CIVIL_FACTOR is 1 and the military drive's half is
+   *     still what makes the Chernobyl the fast one;
+   *   - a Class I's REACH is the reach every jump in the game was tuned
+   *     on (factor 1), so an S hull jumps exactly as far as it always did.
+   *     Each class up takes a tonne of hydrogen 15% further. An M hull's
+   *     standard Class II therefore reaches 15% further than it used to,
+   *     an L's III 30% and an XL's IV 45%: the bigger frame carries the
+   *     bigger drive, and burns more a light year to need it.
+   * The class still has to cover the hull, as every slipspace module's
+   * does (moduleEffective): a drive too small for her all-up mass still
+   * opens the corridor, but at Class I's reach and no better, so nobody
+   * is stranded by loading the hold. Every hull's standard drive covers
+   * her fully laden.
+   *
+   * The military drive's class buys reach the same way, out of its own
+   * tank of slugs: one rule for what a drive class means, whichever drive
+   * it is. One drive core at a time (combat.js SLIP_FIT `group`). */
+  var CIVIL_FACTOR = 1;
+  var RANGE_BY_CLASS = { I: 1.00, II: 1.15, III: 1.30, IV: 1.45 };
+
+  /* No drive, no jump. Every ship has one in her slipspace bay (combat.js
+   * ensureSlipCore), so this is the guard for a ship built some other
+   * way. A ship with no fit map at all - the corridor's own reference
+   * hulls in the tests, NPC traffic on the timetable - is not asked. */
+  function hasDriveCore(ship) {
+    if (!ship) return false;
+    if (!global.Combat || !global.Combat.fittedList || !ship.fit) return true;
+    return !!(fittedClass(ship, 'slipdrive') || fittedClass(ship, 'mildrive'));
+  }
+
+  function civilClass(ship) { return fittedClass(ship, 'slipdrive'); }
+  function civilRunning(ship) {
+    return !!(ship && civilClass(ship) && moduleEffective(ship, 'slipdrive'));
+  }
+
+  /* How much further a tonne of propellant carries this ship than a Class
+   * I's, for the drive doing the work: the military drive while it is
+   * armed, the civil drive otherwise. 1 when neither is fitted, or the one
+   * fitted is too small a class for the hull. */
+  function rangeFactor(ship) {
+    if (!ship) return 1;
+    var kind = milRunning(ship) ? 'mildrive' : 'slipdrive';
+    var cls = fittedClass(ship, kind);
+    if (!cls || !moduleEffective(ship, kind)) return 1;
+    return RANGE_BY_CLASS[cls] || 1;
   }
 
   /* Slugs burned and waste bred by one jump. Returns zeroes for a ship that
    * is not running hot, so callers need no branch of their own. */
   function militaryBurn(ship, lightYears) {
     if (!milRunning(ship)) return { fuel: 0, waste: 0 };
-    var slugs = Math.max(0, lightYears) * MIL_FUEL_PER_LY_PER_TONNE * allUpMass(ship);
+    var slugs = Math.max(0, lightYears) * MIL_FUEL_PER_LY_PER_TONNE * allUpMass(ship) / rangeFactor(ship);
     return { fuel: slugs, waste: slugs * MIL_WASTE_PER_SLUG };
+  }
+
+  /* ---- THE MILFUEL TANK (2026-11-09) ------------------------------------
+   * Astra: "Drive fuel can be refilled from the cargo hold and the ship
+   * status screen, and maximums that fill up a slipspace drive/milfuel drive
+   * are dependent on the size of the ship."
+   *
+   * Hydrogen always had its tank (`fuelCap`, a hull figure). Milfuel was
+   * burned straight out of the hold, a slug at a time, by the military
+   * slipspace drive and the military cruise drives alike. It now has a tank
+   * of its own, fitted with the first drive that burns it: `ship.milFuel`,
+   * filled from milfuel in the hold on the SHIP screen (TO DRIVE, or Enter
+   * on the row), the way hydrogen goes TO TANKS.
+   *
+   * SIZED TO THE SHIP: an eighth of her hydrogen tank, which is the ratio
+   * of what the two drives burn a light year (MIL_FUEL_PER_LY_PER_TONNE
+   * against Galaxy's 0.016). A full milfuel tank therefore reaches as far
+   * as a full hydrogen one, on any hull: a Talon's holds 4.6 t, a Leviathan's
+   * 35. What is in the hold is cargo until you put it in the tank. */
+  var MILFUEL_TANK_SHARE = MIL_FUEL_PER_LY_PER_TONNE / 0.016;
+
+  function burnsMilfuel(ship) {
+    if (militaryClass(ship)) return true;
+    var by = slipFits(ship);
+    return !!(by && by._mil);
+  }
+  function milFuelCap(ship) {
+    if (!ship || !burnsMilfuel(ship)) return 0;
+    /* The hull's figure when the record has none yet (a ship mid-build). */
+    var cap = ship.fuelCap;
+    if (!cap && global.Combat && global.Combat.HULLS && global.Combat.HULLS[ship.hullId]) cap = global.Combat.HULLS[ship.hullId].fuelCap;
+    return Math.round((cap || 0) * MILFUEL_TANK_SHARE * 10) / 10;
+  }
+  function milFuelOf(ship) { return (ship && ship.milFuel) || 0; }
+
+  /* Milfuel from the hold into the tank, up to the tank's room, keeping
+   * back `keep` tonnes (cargo under contract is not yours to burn).
+   * Returns the tonnes moved. */
+  function milFuelFromHold(ship, keep) {
+    if (!ship || !ship.cargo) return 0;
+    var have = ship.cargo.milfuel || 0;
+    var free = Math.max(0, have - (keep || 0));
+    var room = Math.max(0, milFuelCap(ship) - milFuelOf(ship));
+    var t = Math.floor(Math.min(free, room) * 100 + 1e-6) / 100;   // 4.6*100 is 459.999...
+    if (t <= 0) return 0;
+    ship.cargo.milfuel = have - t;
+    if (ship.cargo.milfuel <= 1e-9) delete ship.cargo.milfuel;
+    ship.milFuel = milFuelOf(ship) + t;
+    return t;
   }
 
 
@@ -228,11 +338,25 @@
       id: 'mildrive',
       name: 'Military Slipspace Drive',
       blurb: 'Halves your transit. Will not take hydrogen — it burns ' +
-             'reprocessed fissile slugs and breeds waste into your hold. ' +
+             'reprocessed fissile slugs out of a tank of its own, filled ' +
+             'from your hold, and breeds waste into the hold as it goes. ' +
              'Arriving hot where the Syndicate holds ground is a 10,000 cr ' +
              'fine and an escort to the edge of the system.',
       price: { I: 44000, II: 78000, III: 130000, IV: 195000 },
       factor: MIL_FACTOR
+    },
+    /* The civil drive (see CIVIL_FACTOR). About two-fifths the price of
+     * the military drive of the same class: a long saving for a trader,
+     * never a campaign. */
+    slipdrive: {
+      id: 'slipdrive',
+      name: 'Slipspace Drive',
+      blurb: 'What gets you out of the system. Every hull leaves the yard ' +
+             'with one sized to her frame; each class up takes a tonne of ' +
+             'hydrogen fifteen percent further. Legal everywhere; nothing ' +
+             'in your hold to explain.',
+      price: { I: 18000, II: 32000, III: 52000, IV: 78000 },
+      factor: CIVIL_FACTOR
     },
     anchor: {
       id: 'anchor',
@@ -276,15 +400,34 @@
    * ninety-five-thousand-credit anchor is not a migration. */
   function fittedClass(ship, kind) {
     if (!ship) return null;
-    var Combat = global.Combat;
-    if (Combat && Combat.fittedList) {
-      var list = Combat.fittedList(ship);
-      for (var i = 0; i < list.length; i++) {
-        var it = list[i].item;
-        if (it && it.slipKind === kind) return it.slipClass;
-      }
-    }
+    var by = slipFits(ship);
+    if (by && by[kind]) return by[kind];
     return (ship.modules && ship.modules[kind]) || null;
+  }
+
+  /* One pass over the fitted list, kept until the fit changes (2026-11-09).
+   * The HUD asks for the jump range every frame, and the range now asks
+   * which drive is running, what class it is and whether it covers the
+   * hull - four walks of the fitted list a call, which cost the intercept
+   * pip its frame budget. Keyed on the hull and every slot's contents, so
+   * a refit, a trade-in or a new hull is seen at once. Not enumerable: it
+   * never reaches a save or a fleet record. */
+  function slipFits(ship) {
+    var Combat = global.Combat;
+    if (!Combat || !Combat.fittedList) return null;
+    var sig = ship.hullId + '|', fit = ship.fit;
+    if (fit) for (var k in fit) sig += k + '=' + fit[k] + ';';
+    var c = ship._slipFits;
+    if (c && c.sig === sig) return c.by;
+    var by = {}, list = Combat.fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i].item;
+      if (!it) continue;
+      if (it.slipKind && !by[it.slipKind]) by[it.slipKind] = it.slipClass;
+      if (it.mil) by._mil = true;
+    }
+    Object.defineProperty(ship, '_slipFits', { value: { sig: sig, by: by }, writable: true, configurable: true, enumerable: false });
+    return by;
   }
 
   /* A module only works if it is rated for the hull it is bolted to. Fitting
@@ -1387,6 +1530,10 @@
     hoursPerLy: hoursPerLy,
     hoursPerLyFor: hoursPerLyFor,
     militaryClass: militaryClass,
+    civilClass: civilClass, civilRunning: civilRunning, rangeFactor: rangeFactor, hasDriveCore: hasDriveCore,
+    CIVIL_FACTOR: CIVIL_FACTOR, RANGE_BY_CLASS: RANGE_BY_CLASS,
+    burnsMilfuel: burnsMilfuel, milFuelCap: milFuelCap, milFuelOf: milFuelOf, milFuelFromHold: milFuelFromHold,
+    MILFUEL_TANK_SHARE: MILFUEL_TANK_SHARE,
     milRunning: milRunning,
     militaryBurn: militaryBurn,
     MIL_FACTOR: MIL_FACTOR,

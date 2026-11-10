@@ -192,6 +192,9 @@
     ship.hullHp = h.hullMax;
     ship.fit = {};
     ship.groups = {};
+    /* Her frame's slipspace drive first (combat.js THE SLIPSPACE BAY), so
+     * a preset that names a better one replaces it rather than doubling it. */
+    if (C.ensureSlipCore) C.ensureSlipCore(ship);
     var refused = [];
     var list = (C.HULL_STANDARD || ['cargoscoop', 'cruise1']).concat(p.fit);
     for (var i = 0; i < list.length; i++) {

@@ -1270,7 +1270,7 @@
   function shipMass(ship) {
     /* + whatever a tug has on her arms (arms.js): a freighter on the end of
      * them is mass you push. */
-    return ship.dryMass + ship.fuel + (ship.thrusterFuel || 0) + cargoMass(ship) + (ship.armLoad || 0);
+    return ship.dryMass + ship.fuel + (ship.milFuel || 0) + (ship.thrusterFuel || 0) + cargoMass(ship) + (ship.armLoad || 0);
   }
 
   /* Exhaust velocity, km/s. Isp is quoted in seconds as everyone quotes it. */
@@ -6139,11 +6139,60 @@
       return s * r;
     }
     function clamp(x, lim) { return Math.max(lim[0], Math.min(lim[1], x)); }
-    var d1 = clamp(len(0, k) / THREAD_SPEED, DRIVE_DUR);
     var run = clamp(len(k, k + 1) / RIDE_SPEED, RIDE_DUR);
-    var d2 = clamp(len(k + 1, pl.length - 1) / THREAD_SPEED, DRIVE_DUR);
-    return { pl: pl, k: k, d1: d1, run: run, d2: d2,
+    /* THE CAR IS SENT FOR HER (2026-11-09). Astra: "The elevator pad on
+     * the cargo lifts must be waiting for the ship by the time it gets
+     * there." Each drive is split at the lift's door - the last corner
+     * before the car, and the first after it - and the car is timed
+     * against those: it leaves home so as to be at her end CAR_EARLY
+     * seconds before she reaches the door, and if it cannot be (a long
+     * shaft, a short drive) she HOLDS at the door until it is. After the
+     * ride the car stays at the far end until she is through the door
+     * there, then goes home; if it has not got home by the time she is on
+     * her stand, the leg holds her on the stand until it has (`tail`),
+     * so the leg never ends with the car snapping home. A departure is
+     * this run backwards, which is exactly the same promise the other way
+     * round: the car comes from home to her end while she waits on the
+     * stand or drives up, and is there before she reaches the door. */
+    var dA = k >= 1 ? k - 1 : 0, dB = Math.min(pl.length - 1, k + 2);
+    var d1a = k >= 1 ? clamp(len(0, dA) / THREAD_SPEED, DRIVE_DUR) : 0;
+    var d1b = clamp(len(dA, k) / THREAD_SPEED, [1.0, DRIVE_DUR[1]]);
+    var d2a = dB > k + 1 ? clamp(len(k + 1, dB) / THREAD_SPEED, [1.0, DRIVE_DUR[1]]) : 0;
+    var d2b = dB < pl.length - 1 ? clamp(len(dB, pl.length - 1) / THREAD_SPEED, DRIVE_DUR) : 0;
+    if (dA === 0) d1a = 0;
+    var S = path.rideS, home = path.rideHome || 0, carGo = 0, carBack = 0;
+    if (S) {
+      carGo = Math.abs(S[0] - home) > 1e-9 ? clamp(Math.abs(S[0] - home) * r / RIDE_SPEED, RIDE_DUR) : 0;
+      carBack = Math.abs(S[1] - home) > 1e-9 ? clamp(Math.abs(S[1] - home) * r / RIDE_SPEED, RIDE_DUR) : 0;
+    }
+    var wait = Math.max(0, carGo + CAR_EARLY - d1a);
+    var tail = Math.max(0, carBack + CAR_EARLY - d2b);
+    var d1 = d1a + wait + d1b, d2 = d2a + d2b + tail;
+    return { pl: pl, k: k, dA: dA, dB: dB, d1a: d1a, wait: wait, d1b: d1b, d1: d1,
+             run: run, d2a: d2a, d2b: d2b, tail: tail, d2: d2,
+             carGo: carGo, carBack: carBack, S: S, home: home,
              total: d1 + RIDE_SETTLE + run + RIDE_SETTLE + d2 };
+  }
+  var CAR_EARLY = 1.5;             // s the car is at her end before she reaches its door
+
+  /* Where the ridden car is along its axis, `t` seconds into the transfer
+   * leg of a riding route, or null when the route says nothing about it.
+   * Pure, like ridePoint, so it runs backwards for a departure. */
+  function moverAt(ph, t) {
+    if (!ph || !ph.S) return null;
+    var S = ph.S, home = ph.home;
+    var tDoor = ph.d1a + ph.wait;                       // she leaves the door for the car
+    var t0 = tDoor - CAR_EARLY - ph.carGo;              // the car leaves home
+    if (t < tDoor - CAR_EARLY) {
+      if (t <= t0 || !(ph.carGo > 0)) return t <= t0 ? home : S[0];
+      return home + (S[0] - home) * ease((t - t0) / ph.carGo);
+    }
+    var tRide = ph.d1 + RIDE_SETTLE;
+    if (t < tRide) return S[0];
+    if (t < tRide + ph.run) return S[0] + (S[1] - S[0]) * ease((t - tRide) / ph.run);
+    var tOut = tRide + ph.run + RIDE_SETTLE + ph.d2a + CAR_EARLY;   // she is through the far door
+    if (t < tOut || !(ph.carBack > 0)) return S[1];
+    return S[1] + (home - S[1]) * ease(Math.min(1, (t - tOut) / ph.carBack));
   }
 
   /* Where along the walked polyline the hull is, `t` seconds into the
@@ -6155,15 +6204,26 @@
       var g = alongRoute(sub, u);
       return { x: g.e, y: g.n, z: g.u };
     }
-    if (t < ph.d1) return { loc: walk(0, k, ease(t / ph.d1)), phase: 'drive' };
-    t -= ph.d1;
+    /* Up to the lift's door, a hold there while the car comes (if it has
+     * to), onto the car; the ride; off it and through the far door, on to
+     * the stand, and a hold on the stand while the car goes home (if it
+     * has to). Each drive starts and ends at rest. */
+    if (t < ph.d1a) return { loc: walk(0, ph.dA, ease(t / ph.d1a)), phase: 'drive' };
+    t -= ph.d1a;
+    if (t < ph.wait) return { loc: pl[ph.dA], phase: 'wait' };
+    t -= ph.wait;
+    if (t < ph.d1b) return { loc: walk(ph.dA, k, ease(t / ph.d1b)), phase: 'drive' };
+    t -= ph.d1b;
     if (t < RIDE_SETTLE) return { loc: pl[k], phase: 'board' };
     t -= RIDE_SETTLE;
     if (t < ph.run) return { loc: walk(k, k + 1, ease(t / ph.run)), phase: 'ride' };
     t -= ph.run;
     if (t < RIDE_SETTLE) return { loc: pl[k + 1], phase: 'alight' };
     t -= RIDE_SETTLE;
-    return { loc: walk(k + 1, pl.length - 1, ease(Math.min(1, t / ph.d2))), phase: 'drive' };
+    if (t < ph.d2a) return { loc: walk(k + 1, ph.dB, ease(t / ph.d2a)), phase: 'drive' };
+    t -= ph.d2a;
+    if (ph.d2b > 0 && t < ph.d2b) return { loc: walk(ph.dB, pl.length - 1, ease(t / ph.d2b)), phase: 'drive' };
+    return { loc: pl[pl.length - 1], phase: ph.tail > 0 ? 'wait' : 'drive' };
   }
 
   /* The leg table for this berth, with its timings fitted to the berth's
@@ -6433,6 +6493,17 @@
     if (k >= 1 && k - 1 < p10.through.length) p10.through[k - 1] = seat(A);
     if (k < p10.through.length) p10.through[k] = seat(B);
     p10.rideMover = best.node;
+    /* WHERE THE CAR STOPS AT EACH END, along its own axis (2026-11-09), so
+     * the car can be SENT there ahead of the hull rather than following
+     * her (Render.moverPose used to snap the car under whoever was nearest
+     * and otherwise leave it where the art put it — the pad at the top of
+     * the shaft while she drove up to its foot). See moverAt. */
+    var sOf = function (P) {
+      var s0 = (P.x - best.mid[0]) * ax2[0] + (P.y - best.mid[1]) * ax2[1] + (P.z - best.mid[2]) * ax2[2];
+      return Math.max(best.range[0], Math.min(best.range[1], s0));
+    };
+    p10.rideS = [sOf(A), sOf(B)];
+    p10.rideHome = Math.max(best.range[0], Math.min(best.range[1], 0));
 
     /* ON AND OFF AN INCLINED CAR ALONG ITS RAILS (2026-11-04). A car in a
      * 45-degree bore (the cylinders' arms) stops at the bore's mouth, inside
@@ -6459,8 +6530,58 @@
     var sa = (sOn.x - best.mid[0]) * ax2[0] + (sOn.y - best.mid[1]) * ax2[1] + (sOn.z - best.mid[2]) * ax2[2];
     var sb = (sOff.x - best.mid[0]) * ax2[0] + (sOff.y - best.mid[1]) * ax2[1] + (sOff.z - best.mid[2]) * ax2[2];
     var sg = sa < sb ? -1 : 1;
-    function beyond(P, s) { return { x: P.x + ax2[0] * s, y: P.y + ax2[1] * s, z: P.z + ax2[2] * s }; }
-    var onC = beyond(sOn, sg * out), offC = beyond(sOff, -sg * out);
+    /* LEVEL ON AND LEVEL OFF (2026-11-09). Astra's drawing of the inclined
+     * cargo elevator: the pad sits flush in a recess at the foot and stops
+     * flush with the floor at the head, level the whole way, and the ship
+     * drives straight on at the bottom and straight off at the top. So the
+     * corners either side of the ride are out along the incline's HEADING
+     * (its level part), at the pad's own height at that end — not out along
+     * the 45-degree rails, which had her climbing onto the pad from below
+     * and off it into the air. */
+    var hx2 = ax2[0], hy2 = ax2[1], hl2 = Math.sqrt(hx2 * hx2 + hy2 * hy2) || 1;
+    hx2 /= hl2; hy2 /= hl2;
+    function rails(P, s) { return { x: P.x + ax2[0] * s, y: P.y + ax2[1] * s, z: P.z + ax2[2] * s }; }
+    function level(P, s) { return { x: P.x + hx2 * s, y: P.y + hy2 * s, z: P.z }; }
+    /* ONLY WHERE THE ART HAS ROOM FOR IT (2026-11-10). Level off the head
+     * of a cradle's incline runs out of the station (no upper floor at the
+     * pad's height there), and level onto the foot of a cylinder's arm runs
+     * into the shaft's own floor (no recess yet), which the router then
+     * went round from above and dropped her onto the pad. So each end's
+     * level corner has to be inside the station, and the leg to it clear
+     * for the widest hull in the fleet; a shorter one is tried, and failing
+     * those the end is boarded along the rails as before. `rideLevel`
+     * records which ends are level, so the tests can say which still want
+     * the recess or the landing. */
+    var solid = stationSolidity(port), halfM = { w: fh.w / r, h: fh.h / r };
+    function inside(P) {
+      return !solid || !R.solidityAt || R.solidityAt(solid, P.x, P.y, P.z) !== R.SOLID_OUT;
+    }
+    function legOK(A, C) {
+      for (var f = 1; f <= 8; f++) {
+        var u = f / 8;
+        if (!inside({ x: A.x + (C.x - A.x) * u, y: A.y + (C.y - A.y) * u, z: A.z + (C.z - A.z) * u })) return false;
+      }
+      return !R.routeLegClear || R.routeLegClear(id, [A.x, A.y, A.z], [C.x, C.y, C.z], halfM);
+    }
+    /* The longest clear level stub, from the full run-out down to just
+     * over a hull's half-width: at the head of the cylinders' and cradles'
+     * inclines the upper floor stands a step above the pad 30-40 m out
+     * (the flush landing is still to be modelled), and a 20 m stub is
+     * clear there where the full run-out is not. */
+    var minOut = (fh.w * 1.2) / r;
+    function corner(P, s) {
+      var full = Math.abs(s), sgn = s < 0 ? -1 : 1;
+      for (var ti = 0; ti <= 12; ti++) {
+        var len = full - (full - minOut) * ti / 12;
+        if (!(len >= minOut - 1e-12)) break;
+        var C = level(P, sgn * len);
+        if (legOK(P, C)) return { c: C, level: true };
+      }
+      return { c: rails(P, s), level: false };
+    }
+    var cOn = corner(sOn, sg * out), cOff = corner(sOff, -sg * out);
+    var onC = cOn.c, offC = cOff.c;
+    p10.rideLevel = [cOn.level, cOff.level];
     var t = p10.through;
     p10.through = t.slice(0, k - 1).concat([onC, t[k - 1], t[k], offC], t.slice(k + 1));
     /* The boarding stop moved one along: polyline index k + 1. */
@@ -6511,8 +6632,24 @@
     var arr = pl.map(function (p) { return [p.x, p.y, p.z]; });
     var fh = fleetHalf(), half = { w: fh.w / r, h: fh.h / r };
     var k = p10.rideAt;
-    var pieces = (k >= 1 && k + 1 < arr.length)
-      ? [arr.slice(0, k + 1), arr.slice(k + 1)] : [arr];
+    /* The pieces routed, either side of the ride. A LEVEL APPROACH (seatRide,
+     * `rideLevel`) is kept exactly as built and not handed to the router:
+     * it was proved clear and inside when it was made, and routing it again
+     * found its way round the recess-less foot from above and dropped her
+     * onto the pad (lanes.test, 2026-11-10). */
+    var segs = [];
+    if (k >= 1 && k + 1 < arr.length) {
+      var lv = p10.rideLevel || [false, false];
+      var a0 = (lv[0] && k >= 2) ? k - 1 : k;
+      var b0 = (lv[1] && k + 2 < arr.length - 1) ? k + 2 : k + 1;
+      segs.push({ pts: arr.slice(0, a0 + 1), route: true });
+      if (a0 < k) segs.push({ pts: arr.slice(a0, k + 1), route: false, join: true });
+      segs.push({ board: true });
+      if (b0 > k + 1) {
+        segs.push({ pts: arr.slice(k + 1, b0 + 1), route: false });
+        segs.push({ pts: arr.slice(b0), route: true, join: true });
+      } else segs.push({ pts: arr.slice(k + 1), route: true });
+    } else segs.push({ pts: arr, route: true });
     var outA = [], rideAt = -1, blocked = 0;
     /* The two bays' blast doors open, every other bay's shut (routeDoors). */
     var Gn = global.Gen;
@@ -6521,14 +6658,44 @@
     var rdoors = R.routeDoors ? R.routeDoors(apE && apE.mid, apD && apD.mid) : null;
     var tj = R.trianglesJob ? R.trianglesJob(role) : null;
     if (tj) yield* tj;
-    for (var pi = 0; pi < pieces.length; pi++) {
-      var got = (R.clearRouteJob ? (yield* R.clearRouteJob(role, pieces[pi], half, rdoors))
-                                 : R.clearRoute(role, pieces[pi], half, rdoors)) || pieces[pi];
-      blocked += got.blocked || 0;
-      if (pi === 1) rideAt = outA.length - 1;     // the boarding stop
-      for (var q = 0; q < got.length; q++) outA.push(got[q]);
+    /* THE PAPER (2026-11-09, Render.axialRouteJob): the model's own axes,
+     * each bay's frame, and a ridden lift's level heading. */
+    var frames = [];
+    function bayFrame(ap) {
+      if (!ap || !ap.normal) return;
+      var n = ap.normal, up = ap.up || [0, 0, 1];
+      var dn = n[0] * up[0] + n[1] * up[1] + n[2] * up[2];
+      var w = [up[0] - n[0] * dn, up[1] - n[1] * dn, up[2] - n[2] * dn], wl = Math.sqrt(w[0] * w[0] + w[1] * w[1] + w[2] * w[2]);
+      if (!(wl > 1e-6)) return;
+      w = [w[0] / wl, w[1] / wl, w[2] / wl];
+      frames.push({ u: n.slice(), w: w, v: [w[1] * n[2] - w[2] * n[1], w[2] * n[0] - w[0] * n[2], w[0] * n[1] - w[1] * n[0]] });
     }
-    return { pts: outA, rideAt: rideAt, blocked: blocked };
+    bayFrame(apE); bayFrame(apD);
+    var lib0 = global.PortLib && global.PortLib[role];
+    (lib0 && lib0.movers || []).forEach(function (mv) {
+      if (mv.node !== p10.rideMover || !mv.axis) return;
+      var hl = Math.sqrt(mv.axis[0] * mv.axis[0] + mv.axis[1] * mv.axis[1]);
+      if (hl < 1e-6) return;
+      var h = [mv.axis[0] / hl, mv.axis[1] / hl, 0];
+      frames.push({ u: h, v: [-h[1], h[0], 0], w: [0, 0, 1] });
+    });
+    var offAxis = 0;
+    for (var pi = 0; pi < segs.length; pi++) {
+      var sg0 = segs[pi];
+      if (sg0.board) { rideAt = outA.length - 1; continue; }   // the boarding stop
+      var got = sg0.pts;
+      if (sg0.route && got.length >= 2) {
+        got = (R.clearRouteJob ? (yield* R.clearRouteJob(role, sg0.pts, half, rdoors))
+                               : R.clearRoute(role, sg0.pts, half, rdoors)) || sg0.pts;
+        blocked += got.blocked || 0;
+        if (R.axialRouteJob && got.length >= 2) {
+          var ax2 = yield* R.axialRouteJob(role, got, half, rdoors, frames);
+          if (ax2) { offAxis += ax2.offAxis || 0; got = ax2; }
+        }
+      }
+      for (var q = sg0.join ? 1 : 0; q < got.length; q++) outA.push(got[q]);
+    }
+    return { pts: outA, rideAt: rideAt, blocked: blocked, offAxis: offAxis };
   }
   /* While warmTransfers is building a job it wants orbitalPath's polyline
    * and not the routing: set, clearTransfer hands p10 back here instead. */
@@ -6552,6 +6719,7 @@
     p10.through = pts.slice(1, -1).map(function (p) { return { x: p[0], y: p[1], z: p[2] }; });
     if (p10.rideAt >= 1) p10.rideAt = hit.rideAt;
     p10.blocked = hit.blocked;
+    p10.offAxis = hit.offAxis || 0;
   }
   function nowMs() {
     return (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -6969,6 +7137,13 @@
        * same eased u as the hull, so the two cannot part company. */
       car: path.car ? { node: path.car, f: carAt(leg, u) }
          : (path.carriage ? { node: path.carriage, f: carriageAt(phs, leg, u, el - acc) } : null),
+      /* The lift ridden on the way across, and where along its own axis
+       * (model units) it is: sent ahead to meet her, never following her
+       * (moverAt). Render.setMoverStates draws it there. */
+      mover: (path.rideMover && path.rideS)
+        ? { node: path.rideMover,
+            s: (phs && leg === ROUTED_TRANSFER_LEG) ? moverAt(phs, Math.max(0, el - acc)) : (path.rideHome || 0) }
+        : null,
       enclosed: leg >= enclosedFrom(port),
       /* The mechanism poses, 0 open and 1 sealed, matching the model's own
        * setApronDoors/setInnerGate/setLift/setBayGates. Interpolated within
@@ -8693,6 +8868,10 @@
     beginTow: beginTow, stepTow: stepTow, towActive: towActive,
     cancelTow: cancelTow, TOW_EASE: TOW_EASE,
     arrivalPath: arrivalPath, arrivalTotal: arrivalTotal,
+    /* The transfer leg's phases, the hull along them and the car they send
+     * for (2026-11-09) — for the tests that hold the car to its promise. */
+    routePhases: routePhases, ridePoint: ridePoint, moverAt: moverAt, CAR_EARLY: CAR_EARLY,
+    RIDE_SETTLE: RIDE_SETTLE,
     ARRIVAL_LEGS: ARRIVAL_LEGS,
     ARRIVAL_ENCLOSED_FROM: ARRIVAL_ENCLOSED_FROM,
     ORBITAL_LEGS: ORBITAL_LEGS,

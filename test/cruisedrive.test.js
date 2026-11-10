@@ -1,4 +1,4 @@
-/* cruisedrive.test.js — cruise drive classes, milfuel, second drives, mass.
+﻿/* cruisedrive.test.js â€” cruise drive classes, milfuel, second drives, mass.
  *
  *     node test/cruisedrive.test.js
  *
@@ -13,6 +13,7 @@ require('../src/vec3.js'); require('../src/rng.js');
 require('../src/economy.js');
 var Sim = require('../src/sim.js');
 var Combat = require('../src/combat.js');
+var Slip = global.Slipspace || require('../src/slipspace.js');
 
 var pass = 0, fail = 0;
 function check(n, c, d) {
@@ -63,6 +64,13 @@ check('buying into a full bay trades the old one in at 45%',
       c2.r.ok && c2.r.tradeIn === Math.round(D.cruise1.price * 0.45) && c2.r.cost === D.cruise2.price - c2.r.tradeIn,
       c2.r.ok ? c2.r.cost + ' cr net' : c2.r.why);
 var m2 = withDrive('milcruise2', { milfuel: 5 }), m2dry = withDrive('milcruise2', {});
+/* Milfuel burns from its own tank now (2026-11-09), filled from the hold. */
+check('a milfuel drive brings a tank sized to the ship', Slip.milFuelCap(m2.s) > 0 &&
+      Math.abs(Slip.milFuelCap(m2.s) - H[m2.s.hullId].fuelCap / 8) < 0.06, Slip.milFuelCap(m2.s) + ' t');
+check('milfuel in the hold is not in the tank', !(m2.s.milFuel > 0) && !Combat.cruiseOnMilfuel(m2.s));
+var moved = Slip.milFuelFromHold(m2.s, 0);
+check('the hold fills the tank, up to its size', moved > 0 && m2.s.milFuel === moved &&
+      Math.abs(m2.s.cargo.milfuel - (5 - moved)) < 1e-6, moved + ' t moved');
 check('milfuel runs at five times its class', near(Combat.cruiseTopC(m2.s), base * 2 * 5));
 check('with no slugs it is an ordinary drive of its class', near(Combat.cruiseTopC(m2dry.s), base * 2));
 check('and only then does it burn milfuel', Combat.cruiseOnMilfuel(m2.s) && !Combat.cruiseOnMilfuel(m2dry.s));

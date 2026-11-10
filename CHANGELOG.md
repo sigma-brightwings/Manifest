@@ -38,7 +38,370 @@ before they update.
 
 ---
 
-## Unreleased
+## 1.3.0-beta "Cricket" (2026-11-10)
+
+Named for Cricket, a pigeon from the rescue. Everything below, down to
+Brian, is in this release: the nine days since Brian was tagged.
+
+**The ground and the sea.** Worlds have biomes, ground ports sit on real
+ground with towns around them, and sea platforms stand on open water. The
+drive works in an atmosphere. Systems can have more than one star, and
+habitable zones are warmer and fuller.
+
+**Getting where you are going.** A lead pip shows where to meet a moving
+target, and an intercept assist flies you there. The galaxy chart zooms.
+Every hull now carries a slipspace drive sized to her frame (Class I on S
+hulls, II on M, III on L, IV on XL), and a better one reaches further on a
+tank. The military drive has a milfuel tank sized to the ship, filled from
+the hold on the SHIP screen.
+
+**Trade and the yard.** Captain Halloway teaches the first run. The
+economy is retuned, and there is a trade analyser and trading houses that
+run an account for your ships. Every item on sale has its own model: the
+yard opens a card with it turning and a BUY button. Fitted guns show on
+the hull, and the proton linacs and civil slipspace drives are new.
+
+**Stations.** Stations got four passes on their geometry: lifts that come
+for you and carry you, routes that miss the walls, and level pads in the
+tilted bays.
+
+**Saves:** a Brian career loads. On load, every ship (yours and the
+fleet's) is given her frame's slipspace drive, which jumps exactly as far
+as she always did on an S hull. Milfuel in the hold moves into a military
+drive's tank once, as far as it fits. Each entry below has its own Saves
+note where one was needed.
+
+Everything that changed is listed below, newest first.
+
+### Fixed (2026-11-10, station routes: level onto the lifts where the art has room, and nothing through the walls)
+
+The full suite before tagging found the station-grid routing from
+2026-11-09 broken at every cradle and Syndicate yard: 27 arrivals went
+inside the station and back out (berths.test, clean since 2026-11-04),
+19 berths had a leg through structure and 17 found no open route
+(interiors.test), and nobody drove level onto an inclined lift
+(lanes.test). Astra chose to fix it before releasing.
+
+- **Level on and off only where it fits** (`Sim seatRide`). The level
+  corner either side of an inclined lift (her drawing) has to be inside the
+  station and clear for the fleet's widest hull. It takes the longest such
+  stub, from the full run-out down to just over a hull's half-width, and
+  falls back to boarding along the rails if none fits. At the cradles the
+  full level run-out off the head of the hoist went out of the station; at
+  the head of the cylinders' and cradles' inclines the upper floor stands a
+  step above the pad 30–40 m out, and a 20 m stub is clear. Every inclined
+  lift is now boarded and left level. `rideLevel` records which ends are.
+- **A level approach is not routed again** (`Sim transferJob`). It was
+  proved clear when it was built; handing it to the router had it found
+  "round" the step from above, which dropped her vertically onto the pad
+  from 50–120 m.
+- **The graph paper is judged harder** (`Render.axialRouteJob`). Its
+  dog-legs run along the halls' walls, past every rib and conduit, so:
+  - each leg is judged on a grid of rays across the whole hull, five
+    across by four up (`routeLegClearDense`), not the centre and four edge
+    lines a taut leg through open hall gets. spine-m b0 and b4 met a beam
+    halfway out from the centre line;
+  - each leg is judged for a hull 30% wider than she is (`AXIAL_ROOM`),
+    since she turns on every corner. spine-l b0 and b2 had corners hard
+    against the hall wall;
+  - a chord is cut across every corner and judged the same way. A piece
+    whose corners do not all pass keeps the clear route it came in with.
+- **Still to model:** the flush top landing and the foot recess from her
+  drawing. Today she drives level onto the pad from a short stub; with the
+  landing she would drive straight on from the upper floor.
+- **Tests:** berths, interiors and lanes green again.
+
+### Fixed (2026-11-09, the intercept pip back under its millisecond)
+
+- **A lock cost 1.2 ms a frame, and now costs about 0.15 ms.** The
+  intercept test's budget for the pip is under 1 ms a frame, and it had
+  been failing on the last release too. The pip's own solve was only
+  0.03 ms. The cost was finding the locked target: `navTargetState` built
+  the whole nav list (every body's state, every ship, every range, sorted)
+  to pick out one entry, and half a dozen HUD parts ask for the lock every
+  frame. It now builds the entry for the locked thing alone (`navEntry`,
+  main.js), field for field what the list would have made, and still drops
+  a ship lock while traffic is hidden, as the list did.
+- Measured headless, best of runs: 3.2 ms a frame with no lock, 4.5–4.7 ms
+  with one before, 3.4 ms after.
+
+### Changed (2026-11-09, the slipspace bay: every hull carries her drive, sized to her frame)
+
+Astra: "you need a slipspace drive or milfuel drive to travel from one
+star system to another; a class I drive is standard with the spaceframe
+of the S size ships, and class II comes with M size ships." This replaces
+the reach and transit numbers in the entry below.
+
+- **A slipspace bay on every hull** (`combat.js` THE SLIPSPACE BAY, slot
+  `core0`, "Slipspace bay" in the yard). It holds the civil Slipspace
+  Drive or the military drive, one or the other, and it is never empty.
+- **Her size's drive comes with the frame:** Class I on S hulls, II on M,
+  and, by the same step, III on L and IV on XL (Astra named S and M only;
+  III and IV are the guess). Each covers her hull fully laden.
+- **It costs no slot and no budget.** The bay is its own slot, so no
+  internal slot is taken; a fighter keeps her only one. The standard drive
+  costs nothing against fit mass or power, since every ship has always
+  jumped on it. A bigger drive costs only its mass and power above the
+  standard one: a Class II on a Talon asks 2 t and 0.9 MW.
+- **No drive, no jump.** The jump planner refuses with "NO SLIPSPACE DRIVE"
+  (`Slipspace.hasDriveCore`). In practice it never fires, because nothing
+  can empty the bay.
+- **Replaced, never sold off.** Buying a drive trades in the one in the
+  bay at the usual 45%, the standard one included; the yard row quotes
+  reach before and after, the trade-in and the net price. The fitting row
+  says "standard with her frame · replace it from BUY". Trading the
+  military drive for a civil one empties its milfuel tank into the hold.
+- **Reach rebased so the game's calibration holds.** Class I is now the
+  reach every jump was tuned on (×1.00), and each class up adds 15%
+  (II ×1.15, III ×1.30, IV ×1.45). An S hull jumps exactly as far as
+  before. An M hull's standard drive reaches 15% further than she used to,
+  an L's 30% and an XL's 45%. A Talon reaches 24.3 / 28.0 / 31.6 /
+  35.3 ly on Class I to IV.
+- **Transit:** the corridor's timetable is now a civil drive's (no quarter
+  off); the military drive still halves it.
+- **Changing hulls:** the standard drive stays with the old hull and the
+  new one arrives with her own. A drive better than the new hull's
+  standard (military, or a higher civil class) comes across instead.
+- **Saves and fleet ships** without a bay are given their size's drive on
+  load, on taking command, and on respawn. A drive fitted in an internal
+  slot during today's earlier build moves into the bay.
+- **Tests:** drives.test.js rewritten (38 checks). combat.test and
+  start.test updated for the ninth slot, and the starting kit's value
+  leaves out the frame's own drive, which is in the hull's price.
+
+### Added (2026-11-09, proton linacs, the civil Slipspace Drive, and a milfuel tank sized to the ship)
+
+Astra: "The increased drive class should actually increase the possible
+range jumped. Drive fuel can be refilled from the cargo hold and the ship
+status screen, and maximums that fill up a slipspace drive/milfuel drive
+are dependent on the size of the ship." The stats and the yard's words
+for the three linacs and the civil drive were written to go with her
+models.
+
+- **Proton linacs** (`combat.js`, new `proton` particle, falloff 0.50):
+  the Proton pulse linac (2,600 cr), Proton intermittent linac (4,600 cr)
+  and Proton beam linac (7,200 cr), the pulse / intermittent / beam
+  pattern of the other gun families, each with its own line on the card.
+- **Slipspace Drive I to IV** (`slipspace.js MODULES.slipdrive`, 18,000 /
+  32,000 / 52,000 / 78,000 cr; 5 / 7 / 10 / 13 t; 2.4 / 3.3 / 4.4 / 5.8 MW).
+  It is the civilian core: the corridor at three quarters of the hours a
+  light year (`CIVIL_FACTOR`), and the propellant goes further. The civil
+  drive and the military drive are one core between them (`group:
+  'slipcore'`), so a ship carries one or the other.
+- **A bigger class jumps further.** Each class stretches a tonne of
+  propellant (`RANGE_BY_CLASS`: I 1.15, II 1.30, III 1.45, IV 1.60), for
+  whichever drive is doing the work: the military drive while it is armed,
+  the civil one otherwise. An empty Talon on a full hydrogen tank reaches
+  24.3 ly bare, then 28.0 / 31.6 / 35.3 / 38.9 ly on a Class I to IV civil
+  drive, the drive's own mass included. A drive smaller than the hull's
+  class still does nothing; the yard already says so.
+- **The milfuel tank.** Milfuel used to burn straight out of the hold. A
+  drive that burns it (the military slipspace drive, or a milfuel cruise
+  drive) now brings a tank (`ship.milFuel`). It holds an eighth of her
+  hydrogen tank, which is the ratio of what the two burn per light year,
+  so a full one reaches as far as a full hydrogen tank on any hull:
+  4.6 t on a Talon, 137.5 t on a Fleet Carrier.
+- **Filled from the hold, on the SHIP screen.** The milfuel row in the
+  hold has TO DRIVE (Enter does the same), the way hydrogen goes TO TANKS.
+  Milfuel under contract is held back. What sits in the hold is cargo, and
+  it no longer powers a jump or a cruise. The ship-status panel's jump-fuel
+  line reads `mil x / cap` beside the hydrogen.
+- **The tank goes with the drive.** When the last drive that burns milfuel
+  comes off, by selling it or by trading it in for a plain cruise drive,
+  what was in the tank goes back into the hold.
+- **The range is cheap to ask.** The HUD reads the jump range every frame,
+  and the range now asks which drive is running, its class and whether it
+  covers the hull. Slipspace reads the fitted list once and keeps the
+  answer until the hull or a slot changes (`slipFits`), so a plain frame
+  costs a little less than before rather than more.
+- **Saves:** `milFuel` is saved and carried in fleet records. A save from
+  before the tank moves milfuel from the hold into the tank once, as far
+  as it fits, so nobody loads up with a dry drive.
+- **Tests:** drives.test.js (new, combat group, 22 checks). It covers range
+  by class, hydrogen saved, transit, an undersized drive, one core, the
+  tank on every hull, filling from the hold, a hot tank against a cold one,
+  contract cargo, and unfit and trade-in returns. cruisedrive.test.js now
+  fills the tank before it runs hot.
+
+### Changed (2026-11-09, guns stay inside the hull's box; goods and crates shown)
+
+Astra: "Rescale weapons so that existing collision boxes still work, and
+then put the modules and trade goods in their respective places on
+stations."
+
+- **Every gun fits inside her box.** A hull's size for berths, the bay's
+  clearance, docking and collisions is the box her art was normalised to
+  (`hullSpan`, the guns the art had included). A fitted weapon is still
+  sized against the gun it replaces, and is then shrunk until no part of
+  it leaves that box (`render.js gunScale`), so nothing that sizes a ship
+  changes with what she carries. A mass driver under a courier's chin now
+  comes out about half the length it did; on a freighter it fits whole.
+  Wrapped hardpoints stepped outboard are held inside her beam too.
+- **The market shows the goods.** Each commodity's row starts with a still
+  of its model (drawn once and kept, `Render.drawItemIcon`), and the
+  selected one turns in a frame beside the market panel, with its name and
+  price a tonne, wherever the window has room for it.
+- **The MODULES tab shows the crates.** Every crate row carries its model's
+  still; a crate in the catalogue now opens a card, as equipment does on
+  BUY: the module turning, its size and how many go to a Crawler cube, its
+  days on the slip, what it is for, and ORDER with the reason beside it
+  when the yard will not take the order. Esc or a click outside closes it.
+- **Racks:** missile, decoy, slug and heat-sink rows carry their models'
+  stills too; they still buy on one click.
+- **Tests:** guns.test.js, "and inside her box": every gun on every mount
+  of every hull model, with three wrapped hardpoints, stays inside the box,
+  muzzles included.
+- **Saves:** unaffected.
+
+### Added (2026-11-09, Astra's item models: on the yard card, and the guns on every hull)
+
+Astra sent a 3D model for every item on sale (108 of them, `ref/icons/`):
+"should be displayed as they are in the description when selecting them in
+the outfitters, as well as replacing the current hardpoint placeholders
+with these new models."
+
+- **The yard card turns the real model.** `tools/item-models.cjs` turns the
+  GLBs into `src/itemmodels.js`: flat-coloured triangles like every other
+  mesh in the game. Painted and metal parts take the colour named in their
+  material; decals, placards and readouts are cut into small cells coloured
+  from their textures, so a hazard stripe or a gauge survives; glows stay
+  self-lit. Her models face -Z; the game faces +Z, so they are turned half
+  a turn. `Render.drawItemPortrait` draws one turning in the card's square;
+  the wireframe stand-in only shows for an item with no model.
+- **Guns on the hull are the guns you fitted.** `tools/glb2hulls.js` now
+  leaves every modelled gun (`laserPylon`, `laserBarrel`, `laserEmitter`)
+  out of the hull and records a mount where it was: where the pylon met
+  the hull, which way the hull is, how long the gun was, where its muzzle
+  was. 37 of the 57 hull models had guns; their bounds, muzzles, canopy and
+  engines come out exactly as before. `render.js armedMesh` hangs the
+  fitted weapon's own model on each mount by its base plate, nose forward,
+  sized against the gun it replaces, so a pulse laser is shorter than a
+  beam and a mass driver longer than both. An empty hardpoint shows an
+  acceptor plate with a lit socket.
+- **Shots leave that gun's barrel** (`Combat.muzzleOf` via
+  `Render.shipMuzzlesFor`): this ship's own mount and the fitted model's
+  barrel tip, instead of the courier's two chin guns, which every ship had
+  been firing from whatever hull she was.
+- **NPCs** fly each hull with a stock gun on every mount its art had, one
+  look per family (navy muon pulse, police photon beam, Syndicate beam,
+  fighters pion pulse, couriers photon intermittent, the rest photon pulse).
+  Hulls whose art had no guns (capitals, carriers, the bulk hauler, the
+  runner, the navy's medium and small) get mounts placed along the belly
+  when a ship of that hull has guns fitted.
+- **Not yet used:** the models for `linpulse`, `linint`, `linbeam` and
+  `slipdriveI`-`IV`, which have no item in the game yet; the trade goods'
+  and station modules' models (loaded, not shown anywhere yet).
+- **Tests:** `test/guns.test.js` (combat group): every item has a model,
+  every gun a foot and a muzzle ahead of it, every armed hull a mount per
+  muzzle, a ship's mesh is her hull plus exactly what she has fitted, and
+  her shots leave the gun on that hardpoint.
+- **Saves:** unaffected.
+
+### Fixed (2026-11-09, ship interiors: ceiling lights are lamps, not white wedges)
+
+Astra, screenshots from the Talon's airlock in 1.2.0 "Brian": a white slab
+hanging from the ceiling over the ramp.
+
+- **What it was.** Every ship interior lit its rooms with one full-bright
+  strip down the ceiling, as long as the room. Drawn without shading, from
+  one end it reads as a solid white wedge converging on the far door, the
+  same thing the station tubes did before they got separate fittings.
+- **Now** a light longer than 1.4 m is laid as a row of fittings along the
+  same line, about one every 1.5 m: a bright lens with a dimmer surround
+  stepping down towards the ceiling's colour (shipdeck.js `lightRun`).
+  Cockpits, passages, lobbies, every room type, the tram platforms, the
+  engine room and the lift car all use it. Short lamps and wall lamps are
+  unchanged.
+- **Saves:** unaffected.
+
+### Changed (2026-11-09, the yard's BUY tab: click to look, buy from the item's card)
+
+Astra: "descriptions are abridged. Change this so that we click on it to
+select and view properties, and then a separate 'buy' icon in the
+description; this will open a sub-window that describes the item."
+
+- **A row no longer spends money.** Clicking an equipment row on the BUY tab
+  opens that item's card instead of fitting it. Rows you cannot buy from
+  open too, so you can read about something before you can afford it.
+- **The item card** sits over the yard panel: a square portrait of the item,
+  turning once every 9 s; its name, price and whether it is grey-market;
+  power draw (or power generated, for reactors), mass, slot and every number
+  its kind has (damage, range, cycle and damage per second, heat, shield
+  capacity and regeneration, misfire rate, a cruise drive's top speed and
+  trade-in); the yard's whole copy rather than the clipped pitch; and
+  **BUY — <price>**, with the reason beside it when it is greyed (lien,
+  shipyard only, no slot, short so many credits). Esc, CLOSE, or a click
+  outside the card puts it away; leaving the BUY tab does too.
+- **Portraits.** `Render.drawItemPortrait(ctx, x, y, size, id, spin)` is the
+  hook for the 3D icons now being made. Until an item has one it answers
+  false and a turning wireframe stands in (a barrel for guns, a dome for
+  shields and ECM, a coil for drives, a box for the rest), labelled
+  "ICON TO COME".
+- **Missile racks stay one click.** Restocking Hawks and decoys is a quick
+  top-up, and those rows still buy straight away.
+- **The icon list.** `tools/catalogue.cjs` writes every purchasable thing (128
+  rows: equipment, consumables, hulls, trade goods, station modules, bay
+  craft) to JSON or CSV, read from the live tables; `ref/icon-list.csv` is
+  today's copy.
+- **Saves:** unaffected (`G.yardItem` is screen state, not saved).
+- **Tests:** render.test, "the item card": a row click opens the card and
+  spends nothing, the card draws with its power line and a close control,
+  and CLOSE puts it away.
+
+### Fixed (2026-11-09, station lifts, first pass: the car is sent for her, and she rides on it)
+
+Astra, with a screenshot from inside Meridian Depot: "ship is still not
+sitting on the elevator pad, and elevator pad is at the top of the shaft
+when ship is being moved from inside the station to the launch pad. The
+elevator pad on the cargo lifts must be waiting for the ship by the time
+it gets there. The ship must follow a linear path." With it came the larger
+request this is the first piece of: station pathing on stacked "graph
+paper" (stop, turn, go at corners; diagonals only on a cargo elevator),
+shared by NPC traffic. The plan is in the project doc
+`claude/station-grid.md`.
+
+- **The car is sent for her, not dragged after her.**
+  - **The cause:** the lift you ride on the way across a station (a hoist
+    in a cradle, a bore car in a cylinder's arm, a spine's hoists) was drawn
+    by `Render.moverPose`. That snapped the car under whichever hull was
+    nearest, and otherwise left it where the art put it. So the pad sat at
+    the top of its shaft while you drove up to the foot, and then jumped to
+    meet you.
+  - **The schedule:** the transit now owns the car's schedule (`Sim.moverAt`).
+    - The car leaves home so as to be still at your end of the shaft 1.5 s
+      before you reach its door.
+    - It carries you with the same eased fraction you move by.
+    - It stays at the far end until you are through the door there, then
+      goes home.
+  - **When the car can't make it in time:** if the car cannot get there in
+    time (a long shaft, a short drive), you hold at the lift door until it
+    does. If it cannot get home before you are on your stand, you hold on
+    the stand. So the car never snaps to a position when the transit ends.
+  - **Departure:** a departure runs the same pure timeline backwards, which
+    is the same promise the other way round. The car comes down and waits
+    for you.
+- **Onto an inclined car level, and off it level** (her drawing):
+  - The corners either side of a 45-degree ride are now out along the
+    incline's level heading, at the pad's own height.
+  - They used to be out along the rails, so you climbed onto the pad from
+    below and drove off it into the air.
+  - **Not yet true at the cylinders' arm bores.** Their tubes are closed at
+    the ends, so a level approach is re-routed round the tube and still
+    arrives at an angle (about 50 m of drop on the last leg). The bore ends
+    need opening level, with the recess at the foot and the flush landing at
+    the head that her drawing shows. That is the next pass, along with the
+    pad being drawn level.
+- Tests: `test/lanes.test.js` (new, in the `transfer` group). It runs over
+  every orbital model whose routed berths ride a lift, and checks that:
+  - every car is at your end, still, before you drive onto it;
+  - no car jumps;
+  - no car moves while you board or alight;
+  - your height over the car's deck never changes on the ride, and you are
+    over the car, not beside it;
+  - inclined cars are driven onto and off level. This check fails, on
+    purpose, at the cylinder bores above until their geometry is fixed.
+- **Saves:** unaffected. Nothing new is stored, and the transit is still a
+  pure function of the time since it began.
 
 ### Fixed (2026-11-04, level pads in the tilted bays: a deck as flat as any other, built out from the slope)
 

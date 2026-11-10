@@ -1002,10 +1002,12 @@
     }
     G.ship.milArmed = !Slip.milRunning(G.ship);
     if (G.ship.milArmed) {
-      var slugs = (G.ship.cargo && G.ship.cargo.milfuel) || 0;
+      var slugs = Slip.milFuelOf(G.ship);
+      var held = (G.ship.cargo && G.ship.cargo.milfuel) || 0;
       say('Military drive ARMED — half transit, burns slugs, breeds waste.' +
-          (slugs > 0 ? '  ' + slugs.toFixed(1) + ' t of fuel aboard.'
-                     : '  NO FUEL ABOARD — it will not take hydrogen.'), 6);
+          (slugs > 0 ? '  ' + slugs.toFixed(1) + ' / ' + Slip.milFuelCap(G.ship) + ' t in its tank.'
+                     : held > 0 ? '  TANK EMPTY — ' + held.toFixed(1) + ' t in the hold: F5, TO DRIVE.'
+                     : '  TANK EMPTY — it will not take hydrogen.'), 6);
     } else {
       say('Military drive shut down — running clean on hydrogen.', 4);
     }
@@ -1021,6 +1023,10 @@
     if (plan && plan.barred) {
       say(plan.to.name + ' is restricted space — ' + plan.restricted.label.toLowerCase() +
           '. The checkpoint wants a transponder you are not carrying.', 7);
+      return;
+    }
+    if (plan && plan.noDrive) {
+      say('No slipspace drive aboard — a yard will fit one in her slipspace bay', 5);
       return;
     }
     if (!plan || !plan.possible) {
@@ -1072,13 +1078,14 @@
     HOOKS.sound('jump');
 
     /* Pay for the corridor. A Chernobyl takes nothing out of the hydrogen
-     * tank at all — it burns slugs out of the HOLD and puts waste back in
-     * the same place, which is why running hot costs cargo capacity twice
-     * over and why what you arrive carrying is evidence. */
+     * tank at all — it burns slugs out of its own tank (filled from the
+     * hold, 2026-11-09) and puts waste into the HOLD, which is why running
+     * hot costs cargo capacity and why what you arrive carrying is
+     * evidence. */
     if (plan.military) {
       G.ship.cargo = G.ship.cargo || {};
-      G.ship.cargo.milfuel = Math.max(0, (G.ship.cargo.milfuel || 0) - plan.slugs);
-      if (G.ship.cargo.milfuel < 0.001) delete G.ship.cargo.milfuel;
+      G.ship.milFuel = Math.max(0, Slip.milFuelOf(G.ship) - plan.slugs);
+      if (G.ship.milFuel < 0.001) G.ship.milFuel = 0;
       G.ship.cargo.waste = (G.ship.cargo.waste || 0) + plan.waste;
     } else {
       G.ship.fuel = Math.max(0, G.ship.fuel - plan.fuel);
@@ -2794,6 +2801,11 @@
      * all the way to the cockpit. Two presses to leave is right here: the
      * first one is "I'm done with this ship", not "I'm done with comms". */
     if (G.shipDeal && modeId() === 'comms' && handleShipDealKey(e)) return true;
+    /* The yard's item card (2026-11-09) is a window inside a screen, like
+     * the trade board: Escape closes the card first and leaves you on the
+     * shelf you were reading. */
+    if (key === 'escape' && G.yardItem) { G.yardItem = null; return true; }
+    if (key === 'escape' && G.yardModule) { G.yardModule = null; return true; }
     if (key === 'escape') { selectPanel(0); return true; }
 
     switch (modeId()) {
@@ -2831,6 +2843,9 @@
          * yes - nothing is thrown away. */
         if (key === 'enter' && (G.shipTab || 'status') === 'status' &&
             held[G.invSel] && held[G.invSel].cid === 'hydrogen') { refuelFromHold(); return true; }
+        /* And milfuel into the milfuel drive's tank, the same way. */
+        if (key === 'enter' && (G.shipTab || 'status') === 'status' &&
+            held[G.invSel] && held[G.invSel].cid === 'milfuel' && Slip.milFuelCap(G.ship)) { milFuelFromHold(); return true; }
         return false;
       }
 
@@ -3157,13 +3172,14 @@
      * drops by five on the next frame (Combat.cruiseTopC) — and says so. */
     if (global.Combat && Combat.cruiseOnMilfuel && Combat.cruiseOnMilfuel(G.ship)) {
       var slugBurn = step * CRUISE_MIL_BURN;
-      var cg = G.ship.cargo;
-      var used = Math.min(cg.milfuel, slugBurn);
-      cg.milfuel -= used;
+      var cg = G.ship.cargo = G.ship.cargo || {};
+      var used = Math.min(G.ship.milFuel || 0, slugBurn);
+      G.ship.milFuel = (G.ship.milFuel || 0) - used;
       cg.waste = (cg.waste || 0) + used * CRUISE_MIL_WASTE;
-      if (cg.milfuel < 1e-6) {
-        delete cg.milfuel;
-        say('Milfuel spent — the drive is back on reaction mass at its own class', 5);
+      if (G.ship.milFuel < 1e-6) {
+        G.ship.milFuel = 0;
+        say('Milfuel tank dry — the drive is back on reaction mass at its own class' +
+            ((cg.milfuel || 0) > 0 ? '; F5, TO DRIVE tops it up from the hold' : ''), 5);
       }
       c.travelled += step;
       Sim.refreshShip(G.ship);
@@ -5264,19 +5280,57 @@
    * rather than an object reference on purpose: traffic states are rebuilt
    * every frame, and a held reference would quietly become a snapshot of
    * where that ship was when you locked it. */
+  /* ONE ENTRY, NOT THE LIST (2026-11-09). This used to build the whole
+   * of navList - every body's state, every ship, every range, sorted - to
+   * find the one entry it wanted, and half a dozen things ask for the lock
+   * every frame (the pip, the assist, the status column, the flight band,
+   * the holo names). That was 1.2 ms a frame of a 1 ms budget for the
+   * intercept pip (test/intercept.test.js "what it costs"). It now builds
+   * the entry for the locked thing alone, field for field what navList
+   * would have made, under navList's own rules: a ship is only there while
+   * traffic is shown. */
+  function navEntry(kind, id) {
+    var i;
+    if (kind === 'body') {
+      for (i = 0; i < G.sys.bodies.length; i++) {
+        var b = G.sys.bodies[i];
+        if (b.id !== id) continue;
+        var bs = Sim.bodyState(b, G.sys, G.t);
+        return {
+          kind: 'body', id: b.id, obj: b, name: b.name,
+          type: b.typeName || b.kind, pos: bs.pos, vel: bs.vel,
+          color: bodyDotColor(b.kind),
+          range: V.dist(bs.pos, G.ship.pos)
+        };
+      }
+      return null;
+    }
+    if (kind === 'ship' && G.showTraffic) {
+      var ships = Sim.shipsAll(G.sys, G.t);
+      for (i = 0; i < ships.length; i++) {
+        var s = ships[i];
+        if (s.id !== id) continue;
+        return {
+          kind: 'ship', id: s.id, obj: s, name: s.name,
+          type: s.className, pos: s.pos, vel: s.vel,
+          color: s.color, hostile: s.hostile,
+          range: V.dist(s.pos, G.ship.pos)
+        };
+      }
+    }
+    return null;
+  }
+
   function navTargetState() {
     if (!G.navTarget) return null;
-    var list = navList();
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].kind === G.navTarget.kind && list[i].id === G.navTarget.id) {
-        var e = list[i];
-        var rel = V.sub(e.pos, G.ship.pos);
-        var vrel = V.sub(e.vel, G.ship.vel);
-        e.closing = e.range > 1e-9 ? -V.dot(rel, vrel) / e.range : 0;
-        e.relSpeed = V.len(vrel);
-        e.eta = e.closing > 1e-6 ? e.range / e.closing : Infinity;
-        return e;
-      }
+    var e = navEntry(G.navTarget.kind, G.navTarget.id);
+    if (e) {
+      var rel = V.sub(e.pos, G.ship.pos);
+      var vrel = V.sub(e.vel, G.ship.vel);
+      e.closing = e.range > 1e-9 ? -V.dot(rel, vrel) / e.range : 0;
+      e.relSpeed = V.len(vrel);
+      e.eta = e.closing > 1e-6 ? e.range / e.closing : Infinity;
+      return e;
     }
     // The lock has gone — a docked freighter that departed, most likely.
     G.navTarget = null;
@@ -5799,6 +5853,26 @@
     var got = global.Mining.refuelFromHold(G.ship, keep);
     if (got <= 0) { say('That hydrogen is under contract - it is not yours to burn', 3); return 0; }
     say('Jump tank +' + got.toFixed(2) + 't from the hold  -  ' + G.ship.fuel.toFixed(1) + ' / ' + G.ship.fuelCap + ' t', 3);
+    if (G.invSel >= heldCargo().length) G.invSel = Math.max(0, heldCargo().length - 1);
+    return got;
+  }
+
+  /* Milfuel in the hold into the milfuel drive's tank (2026-11-09,
+   * Slip.milFuelFromHold): the TO DRIVE button on the milfuel row of the
+   * SHIP screen, or Enter on that row. Its tank is sized to the ship (an
+   * eighth of her hydrogen tank) and is only there with a drive that
+   * burns milfuel. Contract milfuel stays in the hold. */
+  function milFuelFromHold() {
+    var have = (G.ship.cargo && G.ship.cargo.milfuel) || 0;
+    var cap = Slip.milFuelCap(G.ship);
+    if (!cap) { say('No drive aboard burns milfuel', 3); return 0; }
+    if (have <= 0) { say('No milfuel in the hold', 2); return 0; }
+    if (cap - Slip.milFuelOf(G.ship) < 0.01) { say('Milfuel tank already full', 2); return 0; }
+    var keep = global.Missions && global.Missions.bondedTonnes ? global.Missions.bondedTonnes(G, 'milfuel') : 0;
+    var got = Slip.milFuelFromHold(G.ship, keep);
+    if (got <= 0) { say('That milfuel is under contract - it is not yours to burn', 3); return 0; }
+    Sim.refreshShip(G.ship);
+    say('Milfuel tank +' + got.toFixed(2) + 't from the hold  -  ' + Slip.milFuelOf(G.ship).toFixed(1) + ' / ' + cap + ' t', 3);
     if (G.invSel >= heldCargo().length) G.invSel = Math.max(0, heldCargo().length - 1);
     return got;
   }
@@ -16791,7 +16865,11 @@
       }
     } else mfdRow(ctx, y, 'credits', fmtCredits(s.credits), MFD_HOT);
 
-    mfdLabelled(ctx, y + 20, 'jump fuel  ' + s.fuel.toFixed(1) + ' / ' + s.fuelCap + ' t',
+    /* The milfuel tank on the same line when a drive aboard burns it
+     * (2026-11-09): two tanks, one decision about how far. */
+    var milCap = Slip.milFuelCap ? Slip.milFuelCap(s) : 0;
+    mfdLabelled(ctx, y + 20, 'jump fuel  ' + s.fuel.toFixed(1) + ' / ' + s.fuelCap + ' t' +
+                (milCap ? '  ·  mil ' + Slip.milFuelOf(s).toFixed(1) + ' / ' + milCap : ''),
                 fmtLy(Galaxy.maxRange(s)), MFD_INK);
     mfdBar(ctx, y + 25, s.fuel / s.fuelCap, s.fuel / s.fuelCap < 0.2 ? '#ff7a7a' : '#6ef0c0');
 
@@ -18047,6 +18125,13 @@
               }
             }
             Render.setMoverRiders(riders);
+            /* And the car her transit has sent for, which is drawn where
+             * its schedule has it rather than under whoever is nearest
+             * (Sim moverAt, 2026-11-09). */
+            if (Render.setMoverStates) {
+              var ap0 = G.arrivalPose;
+              Render.setMoverStates(ap0 && ap0.mover && G.ship && G.ship.arrival && G.ship.arrival.port === b.id ? [ap0.mover] : []);
+            }
           }
           /* A sea platform's mesh is in kilometres (Render.seaPlatformMesh),
            * and its domes are drawn on their own hinges after it. */
@@ -20003,10 +20088,14 @@
         ctx.fillStyle = 'rgba(125,250,255,0.10)';
         ctx.fillRect(px + 14, y - 12, pw - 28, 17);
         ctx.fillStyle = '#7dfaff';
-        ctx.font = 'bold 12px ui-monospace, monospace';
-        ctx.fillText('▶', px + 22, y);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillText('▶', px + 15, y - 1);
         ctx.restore();
       }
+      /* THE GOOD ITSELF (2026-11-09): Astra's model of each cargo, a small
+       * still at the head of its row (cached, Render.drawItemIcon), between
+       * the selection mark and the name. */
+      if (Render.drawItemIcon) Render.drawItemIcon(ctx, px + 26, y - 13, 16, 'good_' + r.id);
 
       ctx.save();
       ctx.font = 'bold 12px ui-monospace, monospace';
@@ -20044,9 +20133,18 @@
          * to nothing, if it would reach the column. */
         ctx.font = 'bold 12px ui-monospace, monospace';
         var wx = px + 44 + ctx.measureText(r.name).width + 8;
+        /* AND MEASURED AGAINST THE PRICE ACTUALLY THERE (2026-11-09).
+         * Astra's screenshot: "(pays you to haul i" still ran into "293 cr".
+         * The room was worked out against an assumed 56 px for the widest
+         * ask in a monospace font — but `ui-monospace` is not the same face
+         * on every machine, and where it falls back to a wider one the
+         * guess was short. So the ask that will be printed is measured in
+         * the font it will be printed in, with a gap of its own. */
+        var askTxt = r.buy === null ? '—' : fmtCredits(r.buy);
+        var askW = ctx.measureText(askTxt).width;
         ctx.fillStyle = 'rgba(255,184,107,0.65)';
         ctx.font = 'bold 10px ui-monospace, monospace';
-        var room = px + 330 - 60 - wx;   // the widest ask, '-1,234 cr', is ~56 px at 12px
+        var room = px + 330 - askW - 14 - wx;
         var notes = r.sink ? ['(accepts for disposal)', '(takes it)'] : ['(pays you to haul it)', '(paid to haul)'];
         for (var ni = 0; ni < notes.length; ni++) {
           if (ctx.measureText(notes[ni]).width <= room) { ctx.fillText(notes[ni], wx, y); break; }
@@ -20083,6 +20181,8 @@
       ctx.restore();
     }
 
+    drawMarketPortrait(ctx, w, h, px, py, pw, list[m.sel]);
+
     ctx.save();
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.7)';
@@ -20110,6 +20210,38 @@
       ctx.fillStyle = '#7fd6c0';
       ctx.fillText(G.ledgerLog[0].text, px + 20, py + ph - 16);
     }
+    ctx.restore();
+  }
+
+  /* The selected good, turning, in a frame beside the market panel - to its
+   * right where the window has the room, else to its left, else not at all
+   * (the row's still is still there). Its name and what a tonne of it is
+   * worth here go under it. */
+  var MARKET_PIC = 156;
+  function drawMarketPortrait(ctx, w, h, px, py, pw, r) {
+    if (!r || !Render.drawItemPortrait || !Render.itemKey('good_' + r.id)) return;
+    var size = MARKET_PIC, gap = 12, fx;
+    if (w - (px + pw) >= size + gap + 12) fx = px + pw + gap;
+    else if (px >= size + gap + 12) fx = px - gap - size;
+    else return;
+    var fy = py, fh = size + 44;
+    ctx.save();
+    ctx.fillStyle = 'rgba(4,12,18,0.92)';
+    ctx.fillRect(fx, fy, size, fh);
+    ctx.strokeStyle = 'rgba(74,151,176,0.55)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(fx + 0.5, fy + 0.5, size - 1, fh - 1);
+    ctx.restore();
+    var spin = ((typeof performance !== 'undefined' ? performance.now() : 0) / 1000) / 9 * Math.PI * 2;
+    Render.drawItemPortrait(ctx, fx + 4, fy + 4, size - 8, 'good_' + r.id, spin);
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(clipText(r.name, Math.floor((size - 12) / 7.3)), fx + 8, fy + size + 14);
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#9fb6d4';
+    var line = r.buy !== null ? 'buy ' + fmtCredits(r.buy) : r.sell !== null ? 'sell ' + fmtCredits(r.sell) : 'not traded here';
+    ctx.fillText(clipText(line + ' / t', Math.floor((size - 12) / 6.1)), fx + 8, fy + size + 32);
     ctx.restore();
   }
 
@@ -22344,7 +22476,7 @@
       G: G,
       say: say, selectPanel: selectPanel, hot: hot,
       navList: navList, navTargetState: navTargetState, navMark: navMark,
-      jettison: jettison, heldCargo: heldCargo, refuelFromHold: refuelFromHold,
+      jettison: jettison, heldCargo: heldCargo, refuelFromHold: refuelFromHold, milFuelFromHold: milFuelFromHold,
       /* The trade console, handed over because the way IN to it is now the
        * docked port's own comms channel rather than a letter key. */
       openMarket: openMarket,

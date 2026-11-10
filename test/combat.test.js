@@ -702,8 +702,10 @@ section('--- slots, power and mass ---');
   /* Eight in four since 2026-10-19: the drive bay, which holds the cruise
    * drive (see test/cruisedrive.test.js) and comes last so no older key
    * moved. */
-  check('a Talon has eight slots in four flavours, the drive bay last',
-        Combat.slotKeys(s).length === 8 && Combat.slotKeys(s)[7] === 'drive0' &&
+  /* Nine since 2026-11-09: the slipspace bay after the drive bay, for
+   * the same reason (combat.js THE SLIPSPACE BAY). */
+  check('a Talon has nine slots, the drive bay and then the slipspace bay last',
+        Combat.slotKeys(s).length === 9 && Combat.slotKeys(s)[7] === 'drive0' && Combat.slotKeys(s)[8] === 'core0' &&
         Combat.slotKeys(s).filter(function (k) {
           return Combat.slotType(k) === 'hardpoint';
         }).length === 2, Combat.slotKeys(s).join(','));
@@ -839,8 +841,9 @@ section('--- migrating a career that predates slots ---');
    * now a fitting, so a career that predates slots is handed the thing it
    * has always been able to do rather than quietly losing it. */
   /* And five since the cruise drive: every hull's standard Class 1. */
-  check('nothing was silently confiscated, and the scoop and drive were issued',
-        Combat.fittedList(s).length === 5 && s.fit.drive0 === 'cruise1' &&
+  /* And six since the slipspace bay (2026-11-09): her size's drive. */
+  check('nothing was silently confiscated, and the scoop and drives were issued',
+        Combat.fittedList(s).length === 6 && s.fit.drive0 === 'cruise1' && s.fit.core0 === 'slipdriveI' &&
         Combat.hasScoop(s), JSON.stringify(s.fit));
 
   // Idempotent: migrating an already-migrated ship changes nothing.
@@ -1976,8 +1979,11 @@ section('--- and the two ways to get a ship agree ---');
   var scoops = Object.keys(keeper.ship.fit).filter(function (key) {
     return keeper.ship.fit[key] === 'cargoscoop';
   }).length;
+  /* The one standard thing she IS issued is her frame's own slipspace
+   * drive: the Talon's Class I stayed with the Talon (THE SLIPSPACE BAY). */
   check('a pilot who kept theirs is not issued a second',
-        k2.ok && scoops === 1 && (k2.standard || []).length === 0,
+        k2.ok && scoops === 1 && JSON.stringify(k2.standard || []) === '["slipdriveIII"]' &&
+        keeper.ship.fit.core0 === 'slipdriveIII',
         scoops + ' scoops, standard=' + JSON.stringify(k2.standard));
   check('and nothing they owned was displaced to make room',
         Object.keys(keeper.ship.fit).length >= beforeN,

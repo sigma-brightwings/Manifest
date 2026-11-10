@@ -17,9 +17,9 @@
  */
 (function (global) {
   var Release = {
-    version: '1.2.0-beta',
-    name: 'Brian',
-    /* 'Manifest 1.2.0-beta "Brian"' -- the one way it is written out. */
+    version: '1.3.0-beta',
+    name: 'Cricket',
+    /* 'Manifest 1.3.0-beta "Cricket"' -- the one way it is written out. */
     label: function () { return 'Manifest ' + Release.version + ' \u201c' + Release.name + '\u201d'; }
   };
   if (typeof document !== 'undefined' && document.title) document.title = Release.label();

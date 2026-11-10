@@ -90,8 +90,14 @@
    *
    * `falloff` is how much of the damage is lost at maximum range:
    * 0 keeps all of it, 0.85 keeps a seventh. See damageAtRange. */
+  /*   proton     (2026-11-09, Astra's linac models.) Stable - it never
+   *              decays - but charged and heavy, so a bunch of them pushes
+   *              itself apart on the way and arrives as a wider, weaker
+   *              spot. Half its damage is gone at full reach: worse than a
+   *              muon, far better than a pion. The middle rung. */
   var PARTICLE = {
     photon: { falloff: 0.00, label: 'photon' },
+    proton: { falloff: 0.50, label: 'proton' },
     pion:   { falloff: 0.85, label: 'pion' },
     muon:   { falloff: 0.25, label: 'muon' }
   };
@@ -158,6 +164,22 @@
     phbeam:  laser('phbeam', 'Photon beam laser', 'photon', 'beam',
                    3100, 3.0, 2.5, 2, 0.12, 30, 12, '#ff3b8a', [0, -100],
                    'Reaches as far as you can aim it. Light does not get tired.'),
+
+    /* PROTON LINAC (2026-11-09) — the working gun. A linear accelerator:
+     * drift tubes, a klystron feeding them, protons out of the end. About
+     * twice a photon's damage at three-quarters of its reach, about half a
+     * pion's at twice its reach, and on sale at any port with a machine
+     * shop to anyone at all. What a freighter captain who has been shot at
+     * twice buys the third time. */
+    linpulse: laser('linpulse', 'Proton pulse linac', 'proton', 'pulse',
+                    2600, 3.0, 2.5, 11, 0.40, 18, 3, '#7dffb0', [0.30, -100],
+                    'Eleven points a pulse and no apologies for the noise. The drift tubes hum when it is cold.'),
+    linint:   laser('linint', 'Proton intermittent linac', 'proton', 'intermittent',
+                    4600, 3.8, 3.0, 30, 1.00, 21, 6, '#5fe39a', [0.30, -100],
+                    'Two tubes, one shot, thirty points. Count to one between them and it will never let you down.'),
+    linbeam:  laser('linbeam', 'Proton beam linac', 'proton', 'beam',
+                    7200, 4.8, 3.5, 4, 0.12, 24, 17, '#3fc77f', [0.30, -100],
+                    'Holds a beam on a shield until the shield gives up. Mind the klystrons; they mind the heat.'),
 
     /* PION — the brawler. Enormous close, nearly nothing at its own
      * maximum range. Wants a developed port and a civil word for you. */
@@ -1552,10 +1574,56 @@
    * already reads Combat.GUNS has to learn anything new. */
   /* 'drive' LAST, so every existing key (hardpoint0, internal2 ...) keeps
    * its index and no save's fit map moves. */
-  var SLOT_ORDER = ['hardpoint', 'utility', 'internal', 'capital', 'drive'];
+  var SLOT_ORDER = ['hardpoint', 'utility', 'internal', 'capital', 'drive', 'core'];
   var SLOT_LABEL = { hardpoint: 'Hardpoint', utility: 'Utility',
                      internal: 'Internal', capital: 'Capital mount',
-                     drive: 'Drive' };
+                     drive: 'Drive', core: 'Slipspace bay' };
+
+  /* ---- THE SLIPSPACE BAY (2026-11-09) --------------------------------------
+   * Astra: "you need a slipspace drive or milfuel drive to travel from one
+   * star system to another; a class I drive is standard with the spaceframe
+   * of the S size ships, and class II comes with M size ships."
+   *
+   * So the drive core is part of the spaceframe: every hull has ONE bay
+   * for it (`core0`), of its own type, and arrives with the civil drive of
+   * its size's class in it - I for S, II for M, and (not stated; the same
+   * step, chosen 2026-11-09) III for L and IV for XL. Each of those covers
+   * its size fully laden, so no hull leaves a yard unable to jump.
+   *
+   * Its own bay rather than an internal slot, for the cruise drive's
+   * reason: every ship in this game has always jumped, so the drive was
+   * always aboard, and making it visible must not take a slot or a tonne
+   * from anybody. A fighter has one internal slot; a mandatory drive in it
+   * would have been a fighter with none. For the same reason the STOCK
+   * drive costs nothing against the fit budget - the frame was built round
+   * it - and a bigger one costs only what it weighs and draws ABOVE the
+   * stock drive (coreAllowance). The bay is never empty: the drive can be
+   * replaced (a trade-in, like the cruise drive) but not sold off. */
+  var STOCK_CORE = { S: 'I', M: 'II', L: 'III', XL: 'IV' };
+  var CORE_CLASSES = ['I', 'II', 'III', 'IV'];
+  function stockCoreClass(hullOrId) {
+    var h = typeof hullOrId === 'string' ? HULLS[hullOrId] : hullOrId;
+    return STOCK_CORE[(h && h.size) || 'S'] || 'I';
+  }
+  function stockCore(hullOrId) { return 'slipdrive' + stockCoreClass(hullOrId); }
+  function coreSlotCount(h) {
+    if (!h) return 0;
+    return (h.slots && h.slots.core !== undefined) ? h.slots.core : 1;
+  }
+  function coreAllowance(ship) {
+    var cls = stockCoreClass(hullOf(ship)), f = SLIP_FIT.slipdrive;
+    return { mass: f.mass[cls] || 0, power: f.power[cls] || 0 };
+  }
+  /* What an item asks of the fit budget on THIS ship: its own figures,
+   * less the stock drive's for whatever sits in the slipspace bay. */
+  function budgetMass(ship, item) {
+    var m = item.mass || 0;
+    return item.slot === 'core' ? Math.max(0, m - coreAllowance(ship).mass) : m;
+  }
+  function budgetPower(ship, item) {
+    var p = item.power || 0;
+    return item.slot === 'core' ? Math.max(0, p - coreAllowance(ship).power) : p;
+  }
 
   /* ---- CRUISE DRIVES (2026-10-19) ----------------------------------------
    * Astra: "each drive class ... class two costs about 10 times as much as
@@ -1638,10 +1706,11 @@
 
   /* One drive's own factor: its class, and five times that if it is a
    * milfuel drive with slugs aboard to burn. */
+  /* Out of the milfuel TANK (2026-11-09, Slip.milFuelOf), not the hold. */
+  function milTank(ship) { return (ship && ship.milFuel) || 0; }
   function driveFactor(item, ship) {
     var f = Math.pow(2, (item.cruiseClass || 1) - 1);
-    var slugs = (ship && ship.cargo && ship.cargo.milfuel) || 0;
-    if (item.mil && slugs > 1e-6) f *= CRUISE_MIL_FACTOR;
+    if (item.mil && milTank(ship) > 1e-6) f *= CRUISE_MIL_FACTOR;
     return f;
   }
 
@@ -1660,8 +1729,7 @@
   /* Is a milfuel drive the one doing the work right now? main.js burns
    * slugs instead of reaction mass while it is. */
   function cruiseOnMilfuel(ship) {
-    var slugs = (ship && ship.cargo && ship.cargo.milfuel) || 0;
-    if (slugs <= 1e-6) return false;
+    if (milTank(ship) <= 1e-6) return false;
     return cruiseDrives(ship).some(function (d) { return d.item.mil; });
   }
 
@@ -1678,6 +1746,28 @@
     if (!key) return false;
     fitMap(ship)[key] = 'cruise1';
     return true;
+  }
+
+  /* Every ship has a drive in her slipspace bay (THE SLIPSPACE BAY). A save
+   * from before the bay had none - she was jumping on a drive nobody had
+   * listed - and is given her size's standard one, which is exactly the
+   * drive she was always flying on. A drive core fitted in an internal
+   * slot (the first days of the civil drive) moves into the bay. Returns
+   * the id fitted, or null if she already had one. */
+  function ensureSlipCore(ship) {
+    var h = hullOf(ship);
+    if (!coreSlotCount(h)) return null;
+    var map = fitMap(ship);
+    for (var k in map) {
+      var it = EQUIPMENT[map[k]];
+      if (it && it.slot === 'core' && slotType(k) !== 'core') {
+        if (!map.core0) map.core0 = it.id;
+        delete map[k];
+      }
+    }
+    if (map.core0 && EQUIPMENT[map.core0]) return null;
+    map.core0 = stockCore(h);
+    return map.core0;
   }
 
   /* ---- the two slipspace modules, as things you can actually buy ---------
@@ -1735,11 +1825,24 @@
      * yard sells one to a civilian only if the yard is good enough to build
      * them and the civilian is ALLIED. Nobody stumbles into one. */
     mildrive: {
-      slotType: 'internal', label: 'Military Slipspace Drive',
+      slotType: 'core', label: 'Military Slipspace Drive',
       mass: { I: 6, II: 9, III: 12, IV: 16 },
       power: { I: 4.0, II: 5.5, III: 7.2, IV: 9.0 },
-      minDev: 0.80, minStanding: 40,
+      minDev: 0.80, minStanding: 40, group: 'slipcore',
       pitch: 'Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody\'s idea of clean.'
+    },
+    /* THE CIVIL DRIVE (2026-11-09, slipspace.js RANGE_BY_CLASS). The
+     * drive every hull leaves the yard with, in the slipspace bay - its
+     * size's class (THE SLIPSPACE BAY) - and the upgrade a pilot buys to
+     * reach further on a tank. Lighter and far less hungry than the
+     * military drive of its class, on sale at any decent yard to anyone.
+     * The same drive core: `group` 'slipcore', one or the other. */
+    slipdrive: {
+      slotType: 'core', label: 'Slipspace Drive',
+      mass: { I: 5, II: 7, III: 10, IV: 13 },
+      power: { I: 2.4, II: 3.3, III: 4.4, IV: 5.8 },
+      minDev: 0.60, minStanding: -100, group: 'slipcore',
+      pitch: 'Further on a tank than the class below it, on the same hydrogen. The yard keeps your old one as part of the price.'
     }
   };
 
@@ -1762,7 +1865,7 @@
           /* One of each, whatever the class. Two anchors do not stack — the
            * second field is inside the first — and a Class I under a Class
            * III is the same accounting error the reactors already refuse. */
-          uniqueGroup: 'slip' + kind,
+          uniqueGroup: fit.group || 'slip' + kind,
           slipKind: kind, slipClass: cid,
           price: price,
           mass: fit.mass[cid], power: fit.power[cid],
@@ -1808,7 +1911,7 @@
     if (!h || !h.slots) return out;
     for (var i = 0; i < SLOT_ORDER.length; i++) {
       var type = SLOT_ORDER[i];
-      var n = type === 'drive' ? driveSlotCount(h) : (h.slots[type] || 0);
+      var n = type === 'drive' ? driveSlotCount(h) : type === 'core' ? coreSlotCount(h) : (h.slots[type] || 0);
       for (var j = 0; j < n; j++) out.push(type + j);
     }
     return out;
@@ -1853,8 +1956,8 @@
      * fireGroup turns into guns that cycle slower. */
     var gm = gunPowerMul(ship);
     for (var i = 0; i < list.length; i++) {
-      power += (list[i].item.power || 0) * (list[i].item.kind === 'gun' ? gm : 1);
-      mass += list[i].item.mass || 0;
+      power += budgetPower(ship, list[i].item) * (list[i].item.kind === 'gun' ? gm : 1);
+      mass += budgetMass(ship, list[i].item);
       bonus += list[i].item.powerBonus || 0;      // reactors
     }
     var cap = ((h && h.powerMW) || 0) + bonus;
@@ -1876,6 +1979,10 @@
   function canFit(ship, id, key) {
     var item = EQUIPMENT[id];
     if (!item) return { ok: false, why: 'no such equipment' };
+    /* The slipspace bay is never empty, so a drive for it is always a
+     * replacement of whatever is there - never "no free slot", and never
+     * "already fitted" for the drive core it is replacing. */
+    if ((key === undefined || key === null) && item.slot === 'core') key = 'core0';
 
     /* One is enough. Lasers stack across hardpoints quite happily; a second
      * shield generator, heat shield or turret is dead weight the legacy
@@ -1914,21 +2021,21 @@
     var freeP = sum.powerFree, freeM = sum.massFree;
     if (occupant && EQUIPMENT[occupant]) {
       var occ = EQUIPMENT[occupant];
-      freeP += (occ.power || 0) * (occ.kind === 'gun' ? gunPowerMul(ship) : 1) - (occ.powerBonus || 0);   // pulling a reactor costs its bonus
-      freeM += occ.mass || 0;
+      freeP += budgetPower(ship, occ) * (occ.kind === 'gun' ? gunPowerMul(ship) : 1) - (occ.powerBonus || 0);   // pulling a reactor costs its bonus
+      freeM += budgetMass(ship, occ);
     }
     /* Net demand, because a reactor is an item with negative draw: what it
      * asks of the budget is its own consumption minus what it contributes. */
     /* A gun is judged at the draw the gunnery console runs it on. */
-    var drawP = (item.power || 0) * (item.kind === 'gun' ? gunPowerMul(ship) : 1);
+    var drawP = budgetPower(ship, item) * (item.kind === 'gun' ? gunPowerMul(ship) : 1);
     var demandP = drawP - (item.powerBonus || 0);
     if (demandP > freeP + 1e-9) {
       return { ok: false, key: key, why: 'needs ' + drawP.toFixed(1) +
-               ' MW, only ' + freeP.toFixed(1) + ' free' };
+               ' MW' + (item.slot === 'core' ? ' over the standard drive' : '') + ', only ' + freeP.toFixed(1) + ' free' };
     }
-    if ((item.mass || 0) > freeM + 1e-9) {
-      return { ok: false, key: key, why: 'needs ' + (item.mass || 0).toFixed(1) +
-               ' t, only ' + freeM.toFixed(1) + ' free' };
+    if (budgetMass(ship, item) > freeM + 1e-9) {
+      return { ok: false, key: key, why: 'needs ' + budgetMass(ship, item).toFixed(1) +
+               ' t' + (item.slot === 'core' ? ' over the standard drive' : '') + ', only ' + freeM.toFixed(1) + ' free' };
     }
     /* A HAB UNIT IS BUILT INTO THE HOLD, so it cannot be fitted around
      * cargo that is already in there. Refused with the number rather than
@@ -1981,6 +2088,7 @@
      * normalises forward the first time an old fit is touched. */
     fitMap(ship)[v.key] = EQUIPMENT[id].id;
     syncLegacy(ship);
+    settleMilTank(ship);
     return { ok: true, key: v.key, item: EQUIPMENT[id] };
   }
 
@@ -1989,9 +2097,27 @@
     if (!id) return null;
     /* The last cruise drive stays: see CRUISE DRIVES. Replace it instead. */
     if (EQUIPMENT[id] && EQUIPMENT[id].kind === 'cruisedrive' && cruiseDrives(ship).length <= 1) return null;
+    /* So does the slipspace drive: without one she cannot leave the
+     * system (THE SLIPSPACE BAY). It is replaced, never sold off. */
+    if (EQUIPMENT[id] && EQUIPMENT[id].slot === 'core') return null;
     delete map[key];
     syncLegacy(ship);
+    settleMilTank(ship);
     return EQUIPMENT[id] || null;
+  }
+
+  /* The last drive that burns milfuel takes its tank with it (2026-11-09):
+   * what was in the tank goes back into the hold, as cargo, rather than
+   * vanishing or riding in a tank that is not there. Called on unfit AND
+   * on fit, because a drive bought into a full bay overwrites the old one
+   * in place (the trade-in) without ever unfitting it. */
+  function settleMilTank(ship) {
+    if (!ship || !((ship.milFuel || 0) > 0) || !Slip || !Slip.milFuelCap) return;
+    var cap = Slip.milFuelCap(ship), over = ship.milFuel - cap;
+    if (over <= 1e-9) return;
+    ship.cargo = ship.cargo || {};
+    ship.cargo.milfuel = (ship.cargo.milfuel || 0) + over;
+    ship.milFuel = cap;
   }
 
   /* A refit is a haircut, not an investment. */
@@ -2216,6 +2342,10 @@
       var key = v.key || firstFreeSlot(ship, (EQUIPMENT[id] || {}).slot);
       if (key && !ship.fit[key]) { ship.fit[key] = id; added.push(id); }
     }
+    /* Her size's slipspace drive, if the bay came across empty (THE
+     * SLIPSPACE BAY) - reported with the rest, so the yard can say so. */
+    var core = ensureSlipCore(ship);
+    if (core) added.push(core);
     if (added.length) syncLegacy(ship);
     return added;
   }
@@ -2286,6 +2416,8 @@
       var key = v.key || firstFreeSlot(ship, (EQUIPMENT[id] || {}).slot);
       if (key) ship.fit[key] = id;
     }
+    ensureSlipCore(ship);            // and her size's slipspace drive (THE SLIPSPACE BAY)
+    ship.milFuel = 0;                // a tank went down with the old one, if she had one
     syncLegacy(ship);
     return ship;
   }
@@ -2296,6 +2428,7 @@
        * fit map from before drives existed simply has no drive slot, and
        * gets the Class 1 it was always flying on. */
       ensureCruiseDrive(ship);
+      ensureSlipCore(ship);          // and the slipspace drive she always jumped on
       syncLegacy(ship);
       return ship;
     }
@@ -2332,6 +2465,7 @@
       var key = (v.key) || firstFreeSlot(ship, (EQUIPMENT[want[i]] || {}).slot);
       if (key) ship.fit[key] = want[i];
     }
+    ensureSlipCore(ship);
     syncLegacy(ship);
     return ship;
   }
@@ -2354,10 +2488,17 @@
      * at a slot that has moved or stopped existing. */
     var moved = {};
     for (var i = 0; i < list.length; i++) {
+      /* The standard slipspace drive is part of the spaceframe and stays
+       * with the old hull; the new one arrives with her own (THE SLIPSPACE
+       * BAY). A drive worth more than her standard one - military, or a
+       * civil drive of a higher class - comes across instead. */
+      var ci = list[i].item;
+      if (ci.slot === 'core' && ci.slipKind === 'slipdrive' &&
+          CORE_CLASSES.indexOf(ci.slipClass) <= CORE_CLASSES.indexOf(stockCoreClass(toHull))) continue;
       var v = canFit(probe, list[i].item.id);
       if (!v.ok) {
         return { ok: false, why: list[i].item.name + ' will not fit a ' +
-                 toHull.name + ' — ' + v.why + '; sell it first' };
+                 toHull.name + ' — ' + v.why + (ci.slot === 'core' ? '; trade it for a smaller drive first' : '; sell it first') };
       }
       probe.fit[v.key] = list[i].item.id;
       moved[list[i].key] = v.key;
@@ -7042,6 +7183,16 @@
      * three and the courier hull has two barrels. The extra ones wrap round
      * and are nudged outboard, so they still read as separate weapons rather
      * than as two beams drawn exactly on top of each other. */
+    /* THE GUN ON THAT HARDPOINT (2026-11-09). Each hardpoint now carries
+     * its fitted weapon's own model (render.js armedMesh), so the shot
+     * leaves that model's barrel: first barrel of a twin, the fork's tip of
+     * a pion gun. It is measured off this ship's hull, not the courier's,
+     * which the old line below still assumed every player was flying. */
+    var own = (global.Render && global.Render.shipMuzzlesFor) ? global.Render.shipMuzzlesFor(ship) : null;
+    if (own && own[n] && own[n].length) {
+      var om = own[n][0], oks = hullLen(ship) / hullLen();
+      return { r: om.r * oks, u: om.u * oks, f: om.f * oks };
+    }
     var real = (global.Render && global.Render.shipMuzzles) ? global.Render.shipMuzzles() : null;
     if (real && real.length) {
       var m = real[n % real.length];
@@ -9251,7 +9402,11 @@
         if (ds.length) { key = ds[0].key; oldKey = key; }
       }
     }
-    if (item.kind === 'cruisedrive' && key && fitMap(s)[key]) {
+    /* The slipspace bay is never empty, so its drive is always a trade-in
+     * too (THE SLIPSPACE BAY) - the standard one included, at the same
+     * RESALE as anything else, since it was in the hull's price. */
+    if (item.slot === 'core' && !key) key = 'core0';
+    if ((item.kind === 'cruisedrive' || item.slot === 'core') && key && fitMap(s)[key]) {
       var old = EQUIPMENT[fitMap(s)[key]];
       if (old && old.id === item.id) return { ok: false, why: item.name + ' is already fitted there' };
       if (old) tradeIn = Math.round((old.price || 0) * RESALE);
@@ -9272,6 +9427,7 @@
    * c, for the ship as loaded now). Mirrors buyEquipment's choice of slot. */
   function drivePreview(G, id) {
     var s = G.ship, item = EQUIPMENT[id];
+    if (item && item.slot === 'core') return corePreview(s, item);
     if (!item || item.kind !== 'cruisedrive') return null;
     var key = firstFreeSlot(s, 'drive'), tradeIn = 0, replaces = null;
     if (!key) {
@@ -9288,6 +9444,22 @@
     probe.fit[key] = item.id;
     return { ok: true, key: key, replaces: replaces, tradeIn: tradeIn,
              net: item.price - tradeIn, topC: cruiseTopC(probe), nowC: cruiseTopC(s) };
+  }
+
+  /* The same for the slipspace bay: what it replaces, the trade-in, the
+   * net price, and the reach a tank gives before and after (Slipspace
+   * rangeFactor, for her as loaded now). */
+  function corePreview(s, item) {
+    var old = EQUIPMENT[fitMap(s).core0];
+    if (old && old.id === item.id) return { ok: false, why: 'already fitted', key: 'core0' };
+    var tradeIn = old ? Math.round((old.price || 0) * RESALE) : 0;
+    var probe = { hullId: s.hullId, dryMass: s.dryMass, fuel: s.fuel, thrusterFuel: s.thrusterFuel,
+                  milFuel: s.milFuel, milArmed: s.milArmed, cargo: s.cargo, fit: {} };
+    for (var k in fitMap(s)) probe.fit[k] = fitMap(s)[k];
+    probe.fit.core0 = item.id;
+    var rf = Slip && Slip.rangeFactor ? Slip.rangeFactor : function () { return 1; };
+    return { ok: true, key: 'core0', replaces: old || null, tradeIn: tradeIn,
+             net: item.price - tradeIn, reachNow: rf(s), reachAfter: rf(probe), core: true };
   }
 
   /* The original signature, preserved. Positive = bought at that price,
@@ -9802,6 +9974,8 @@
     s.hullHp = Math.min(rec.hullHp != null ? rec.hullHp : h.hullMax, h.hullMax);
     s.fit = {};
     for (var fk in (rec.fit || {})) s.fit[fk] = rec.fit[fk];
+    ensureSlipCore(s);             // parked before the slipspace bay existed: her size's drive
+    s.milFuel = rec.milFuel || 0;
     s.groups = {};
     s.cargo = cargo;
     s.crew = crew;
@@ -9895,6 +10069,8 @@
     CRUISE_DRIVES: CRUISE_DRIVES, CRUISE_BASE_C: CRUISE_BASE_C, CRUISE_REF_MASS: CRUISE_REF_MASS,
     cruiseDrives: cruiseDrives, cruiseMultiplier: cruiseMultiplier, cruiseTopC: cruiseTopC,
     cruiseOnMilfuel: cruiseOnMilfuel, drivePreview: drivePreview, driveSlotCount: driveSlotCount,
+    STOCK_CORE: STOCK_CORE, stockCore: stockCore, stockCoreClass: stockCoreClass,
+    ensureSlipCore: ensureSlipCore, budgetMass: budgetMass, budgetPower: budgetPower,
     ensureCruiseDrive: ensureCruiseDrive,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
     scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel,

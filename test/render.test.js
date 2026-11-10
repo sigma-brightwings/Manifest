@@ -902,9 +902,17 @@ console.log('--- the hull library ---');
    * puts them back in hull space. That makes this check strictly stronger
    * than it was: it now fails if a leg is emitted in the wrong place, which
    * is the one mistake the split makes possible. */
+  /* THE BARE HULL AND ITS MOUNTS (2026-11-09). The modelled guns come out
+   * of the hull now (glb2hulls GUNPART_RE) and a fitted weapon is hung on
+   * each mount instead, at its own length - so the hull alone is short of
+   * unit length wherever a gun was its nose (the couriers' chin guns), and
+   * the armed hull can be longer than one (a mass driver past her nose).
+   * What the converter promises is the model AS AUTHORED: the bare hull,
+   * its gear, and each gun the art had, which reached from its mount to its
+   * muzzle. */
   var allGood = true, allLit = true, detail = '';
   for (var i = 0; i < ids.length; i++) {
-    var mesh = R.libHull(ids[i]);
+    var mesh = R.libHullBare(ids[i]);
     var mins = [1e9, 1e9, 1e9], maxs = [-1e9, -1e9, -1e9];
     var a;
     function grow(x, y, z) {
@@ -923,6 +931,10 @@ console.log('--- the hull library ---');
              part.pivot[1] + part.mesh.v[g][1],
              part.pivot[2] + part.mesh.v[g][2]);
       }
+    });
+    (mesh.mounts || []).forEach(function (mt) {
+      grow(mt.at[0], mt.at[1], mt.at[2]);
+      grow(mt.mz[0], mt.mz[1], mt.mz[2]);
     });
     var longest = Math.max(maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]);
     var centred = Math.abs(maxs[0] + mins[0]) < 0.05 &&
@@ -1305,6 +1317,48 @@ console.log('--- the yard, the board, and a fight on screen ---');
     mousedown({ clientX: missile.x + 2, clientY: missile.y + 2 });
     check('clicking the rack buys a missile', G.ship.missiles === had + 1,
           had + ' -> ' + G.ship.missiles);
+  }
+
+  /* THE ITEM CARD (2026-11-09). A click on an equipment row opens its
+   * card and spends nothing; BUY on the card is what spends; outside the
+   * card or Esc closes it. */
+  G.yardItem = null;
+  /* The missile racks come first and can fill a short window, so page
+   * down until an equipment row is on screen. */
+  var eqRow = null;
+  for (var pg = 0; pg < 12 && !eqRow; pg++) {
+    G.yardScroll = pg * 4;
+    frames(2);
+    eqRow = G.hotspots.filter(function (h) {
+      if (!h.hint) return false;
+      var m = /^(.+?) — \d+ cr/.exec(h.hint);
+      if (!m) return false;
+      for (var id in Combat.EQUIPMENT) if (Combat.EQUIPMENT[id].name.toUpperCase() === m[1]) return true;
+      return false;
+    })[0] || null;
+  }
+  check('the BUY tab lists equipment rows', !!eqRow);
+  if (eqRow) {
+    G.ship.credits = 1e6;
+    var cr0 = G.ship.credits;
+    mousedown({ clientX: eqRow.x + 4, clientY: eqRow.y + 4 });
+    frames(2);
+    check('clicking an equipment row opens its card', !!G.yardItem, String(G.yardItem));
+    check('and spends nothing', G.ship.credits === cr0, cr0 + ' -> ' + G.ship.credits);
+    check('the card renders', errorsSince(mark).length === 0, errorsSince(mark)[0]);
+    var buyBtn = G.hotspots.filter(function (h) { return h.hint && /^BUY  —/.test(h.hint); })[0];
+    var closeBtn = G.hotspots.filter(function (h) { return h.hint === 'CLOSE  Esc'; })[0];
+    check('the card has BUY or says why not', !!buyBtn ||
+          drawn.texts.slice(mark).some(function (t) { return /^BUY  —/.test(t.text || t); }));
+    check('the card has a close control', !!closeBtn);
+    var spec = drawn.texts.slice(mark).some(function (t) { return /Power draw|Power$/.test(t.text || t); });
+    check('the card lists the power line', spec);
+    if (closeBtn) {
+      mousedown({ clientX: closeBtn.x + 4, clientY: closeBtn.y + 4 });
+      frames(2);
+      check('CLOSE puts the card away', !G.yardItem);
+    }
+    G.yardItem = null;
   }
 
   // The board, and a signature on it.

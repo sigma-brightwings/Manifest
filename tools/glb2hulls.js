@@ -154,6 +154,23 @@ var GLASS_RE = /cockpitGlass/i;
  * box: two guns are two muzzles, and a merged bound would put both beams
  * out of the centreline between them. */
 var EMITTER_RE = /laserEmitter/i;
+/* ---- the guns come OFF the hull (2026-11-09) ----------------------------
+ * Astra: the hardpoints "can be removed on all ships and replaced with
+ * hardpoint acceptor slots, which will each accept one of the new weapon
+ * models and display it on the exterior of the ship." So each modelled gun
+ * - a `laserPylon`, a `laserBarrel` and a `laserEmitter`, however the model
+ * groups them (`laserChin0`, `laserBelly3`, `laser1` holding two, or loose
+ * on the enforcer_heavy) - is left out of the hull mesh and recorded as a
+ * MOUNT instead: where the pylon meets the hull, which way the hull is from
+ * the gun, how long the gun was and where its muzzle was. render.js hangs
+ * the fitted weapon's own model there. The muzzles list is unchanged.
+ *
+ * Measured into the hull's bounds all the same, as the landing gear is, so
+ * that taking the guns off renormalises nothing: a courier's chin guns ARE
+ * the front of the courier, and every number tuned against her length
+ * would move if they stopped counting. The Crawler's dorsal turret
+ * (`laserTurret*`) is a turret, not a hardpoint, and stays on her. */
+var GUNPART_RE = /^laser(Pylon|Barrel|Emitter)(?:[._]?\d+)?$/i;
 /* One `engineGlow` node per engine: the model says how many engines it has,
  * and the renderer draws one plume per glow. */
 var ENGINE_RE = /^engineGlow/i;
@@ -1346,13 +1363,22 @@ function convert(file) {
   var engines = [];         // one accumulated bounding box per engineGlow
   var hinged = [];          // one bucket per Hinge node — the parts that move
   var extTag = [];          // per exterior face, the node it came from (hull-seal's report; not emitted)
+  var gunParts = [];        // { kind: 'Pylon'|'Barrel'|'Emitter', min, max } - see GUNPART_RE
+  var gunV = { v: [], f: [], c: [] };   // their geometry: bounded, never drawn
 
-  function walk(nodeIdx, parentMat, inInterior, inEmitter, inHinge, legName, inEngine) {
+  function walk(nodeIdx, parentMat, inInterior, inEmitter, inHinge, legName, inEngine, inGun) {
     var node = j.nodes[nodeIdx];
     var local = node.matrix ? node.matrix.slice()
                             : matFromTRS(node.translation, node.rotation, node.scale);
     var world = matMul(parentMat, local);
     var name = node.name || '';
+    var gun = inGun || null;
+    var gm = !PORTS && !gun && GUNPART_RE.exec(name);
+    if (gm) {
+      gun = { kind: gm[1].charAt(0).toUpperCase() + gm[1].slice(1).toLowerCase(),
+              min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+      gunParts.push(gun);
+    }
 
     /* A hinge opens its own bucket, and everything under it goes in there
      * rather than into the hull. Nested hinges are not a thing these models
@@ -1407,7 +1433,7 @@ function convert(file) {
        * mesh, drawn with its own frame. The test comes first because a
        * gear door is exterior geometry and would otherwise be welded into
        * the hull exactly as it is today. */
-      var into = hinge ? hinge : (mine ? inr : ext);
+      var into = gun ? gunV : hinge ? hinge : (mine ? inr : ext);
       for (var p = 0; p < mesh.primitives.length; p++) {
         var prim = mesh.primitives[p];
         if (prim.mode !== undefined && prim.mode !== 4) continue;   // triangles only
@@ -1435,6 +1461,12 @@ function convert(file) {
               if (w[a2] > engine.max[a2]) engine.max[a2] = w[a2];
             }
           }
+          if (gun) {
+            for (var a3 = 0; a3 < 3; a3++) {
+              if (w[a3] < gun.min[a3]) gun.min[a3] = w[a3];
+              if (w[a3] > gun.max[a3]) gun.max[a3] = w[a3];
+            }
+          }
         }
         var col = materialColour(g, prim.material);
         var idx = prim.indices !== undefined
@@ -1448,7 +1480,7 @@ function convert(file) {
       }
     }
     for (var ch = 0; ch < (node.children || []).length; ch++) {
-      walk(node.children[ch], world, interior, emitter, hinge, leg, engine);
+      walk(node.children[ch], world, interior, emitter, hinge, leg, engine, gun);
     }
   }
 
@@ -1485,6 +1517,7 @@ function convert(file) {
   }
   bound(ext.v);
   for (var hb = 0; hb < hinged.length; hb++) bound(hinged[hb].v);
+  bound(gunV.v);
   var span = [maxs[0] - mins[0], maxs[1] - mins[1], maxs[2] - mins[2]];
   var mid = [(maxs[0] + mins[0]) / 2, (maxs[1] + mins[1]) / 2, (maxs[2] + mins[2]) / 2];
   var scale = 1 / Math.max(span[0], span[1], span[2], 1e-9);
@@ -1634,6 +1667,45 @@ function convert(file) {
                      e.max[2]]);
       return c;
     }).sort(function (p, q) { return p[0] - q[0] || p[1] - q[1] || p[2] - q[2]; });
+  }
+  /* The mounts (see GUNPART_RE): one per emitter, paired with the barrel
+   * whose front is nearest it and that barrel with its nearest pylon.
+   *   at   where the pylon meets the hull - its face on the far side from
+   *        the barrel - which is where a weapon's base plate goes;
+   *   to   the unit direction from the gun to the hull, in x and y (a belly
+   *        gun's is [0, 1]: the hull is above it);
+   *   len  how long the modelled gun was, pylon to muzzle, so a weapon is
+   *        sized to the art it replaces;
+   *   mz   its muzzle, as in `muzzles`.
+   * Sorted like the muzzles, so mount n and muzzle n are the same gun. */
+  var ems = gunParts.filter(function (p) { return p.kind === 'Emitter' && isFinite(p.min[0]); });
+  var brs = gunParts.filter(function (p) { return p.kind === 'Barrel' && isFinite(p.min[0]); });
+  var pys = gunParts.filter(function (p) { return p.kind === 'Pylon' && isFinite(p.min[0]); });
+  if (ems.length && brs.length) {
+    var ctr = function (p) { return [(p.min[0] + p.max[0]) / 2, (p.min[1] + p.max[1]) / 2, (p.min[2] + p.max[2]) / 2]; };
+    var d2 = function (a, b) { return (a[0] - b[0]) * (a[0] - b[0]) + (a[1] - b[1]) * (a[1] - b[1]) + (a[2] - b[2]) * (a[2] - b[2]); };
+    var r3m = function (x) { return Math.round(x * 1000) / 1000; };
+    out.mounts = ems.map(function (E) {
+      var ec = ctr(E);
+      var B = brs.slice().sort(function (a, b) {
+        return d2([ctr(a)[0], ctr(a)[1], a.max[2]], ec) - d2([ctr(b)[0], ctr(b)[1], b.max[2]], ec);
+      })[0];
+      var bc = ctr(B);
+      var P = pys.length ? pys.slice().sort(function (a, b) { return d2(ctr(a), bc) - d2(ctr(b), bc); })[0] : null;
+      var pc = P ? ctr(P) : [bc[0], bc[1] + (B.max[1] - B.min[1]), bc[2]];
+      var dx = pc[0] - bc[0], dy = pc[1] - bc[1];
+      var to = Math.abs(dx) > Math.abs(dy) ? [dx > 0 ? 1 : -1, 0] : [0, dy >= 0 ? 1 : -1];
+      var foot = P ? [to[0] ? (to[0] > 0 ? P.max[0] : P.min[0]) : pc[0],
+                      to[1] ? (to[1] > 0 ? P.max[1] : P.min[1]) : pc[1],
+                      pc[2]]
+                   : pc;
+      var rear = Math.min(B.min[2], P ? P.min[2] : B.min[2]);
+      return {
+        at: place(foot), to: to,
+        len: r3m((E.max[2] - rear) * scale),
+        mz: place([ec[0], ec[1], E.max[2]])
+      };
+    }).sort(function (p, q) { return p.mz[0] - q.mz[0] || p.mz[1] - q.mz[1] || p.mz[2] - q.mz[2]; });
   }
   /* The engines: [x, y, z, r] per engineGlow, at the AFT face of its box
    * (the hull faces +z, so a plume leaves at min z) with r half the smaller
