@@ -12211,6 +12211,21 @@
     var p = G.ship && G.ship.docked && G.sys ? G.sys.byId[G.ship.docked] : null;
     return !!(p && p.seaPlatform);
   }
+  /* WHOSE LIVERY A DOCK WEARS: 'outlaw' (the Syndicate's), 'fleet' (the
+   * Navy's, Combat.fleetPort) or null. One rule for the station drawn from
+   * outside and for her decks walked on foot, so the two cannot disagree. */
+  function stationSkin(b) {
+    var owner = (b && b.faction && G.sys && G.sys.factionById) ? G.sys.factionById[b.faction] : null;
+    return (owner && owner.outlaw) ? 'outlaw'
+         : (b && Combat.fleetPort && Combat.fleetPort(b)) ? 'fleet' : null;
+  }
+  /* Her surface on the deck plans walked on foot (walk.js), which are
+   * always the port she is berthed at and stand y up (Render.setSurface). */
+  function walkSurface(on) {
+    if (!Render.setSurface) return;
+    var p = on && G.ship && G.ship.docked && G.sys && G.sys.byId ? G.sys.byId[G.ship.docked] : null;
+    Render.setSurface(p || null, p ? stationSkin(p) : null, 'y');
+  }
   function queueHangarFromShip(cam) {
     if (!glLive() || !global.GLWorld || !global.GLWorld.queueMesh) return;
     if (seaBerth()) return;
@@ -12218,7 +12233,9 @@
     if (!hp) return;
     var F = hangarFrame(hp.hangar);
     Render.setIndoors(true);
+    walkSurface(true);
     global.GLWorld.queueMesh(cam, F, global.Walk.meshFor(hp), Render.M, F.up, 0);
+    walkSurface(false);
     Render.setIndoors(false);
   }
 
@@ -13742,12 +13759,18 @@
        * all lit as a room. The deck goes through the mesh pass here, since
        * her rooms take the cockpit pass. */
       Render.setIndoors(true);
+      /* The deck is hers and wears her surface; the ship on it is not. */
+      walkSurface(true);
       global.GLWorld.queueMesh(cam, F, global.Walk.meshFor(p), Render.M, F.up, 0);
+      walkSurface(false);
       Render.drawShipModel(ctx, cam, G.ship, F.up, null);
       Render.setIndoors(false);
       if (Render.queueCockpitRoom && Render.cockpitGpu && Render.cockpitGpu()) Render.queueCockpitRoom(cam, cockpitShip(), { noPortals: true });
     } else {
+      /* Her rooms, on foot: the cockpit pass, with her surface. */
+      walkSurface(true);
       global.GLWorld.queueCockpit(cam, F, null, global.Walk.meshFor(p), [], Render.M);
+      walkSurface(false);
     }
     queueNpcs(cam);
     queueSelf(cam);
@@ -18088,8 +18111,7 @@
            * else wears the ordinary wash. So a dock on approach is one of
            * three obviously different objects before you can read a word
            * on it, which is what a livery is for. */
-          var skin = (owner && owner.outlaw) ? 'outlaw'
-                   : (Combat.fleetPort && Combat.fleetPort(b)) ? 'fleet' : null;
+          var skin = stationSkin(b);
           Render.setAccent(owner && owner.color, skin);
           /* And her own surface: plating, wear, decks, windows and lamps
            * (gl.js SURF_GLSL, 2026-11-10), seeded from her id and worn in
@@ -18251,6 +18273,11 @@
           /* Not at a sea platform: no town on the open sea, no signboards
            * on posts in the water, and no shaft doors or collar lamps -
            * its domes are its doors (drawSeaDomes above). */
+          /* Her surface on these too: the boards' posts, the lamp housings
+           * and the shaft doors are her metal (Astra, 2026-11-10: "All
+           * exterior and interior station models must be textured").
+           * Cleared after the doors. */
+          if (Render.setSurface) Render.setSurface(b, skin);
           if (b.surface && !b.seaPlatform && rpx > 14 && tier === 'near') {
             Render.drawPortDressing(ctx, cam, frame, b, b.radius, sun);
           }
@@ -18274,6 +18301,7 @@
           if (b.surface && !b.seaPlatform && rpx > 5) {
             Render.drawPortDoors(ctx, cam, frame, b, b.radius, sun, doorPhase(b));
           }
+          if (Render.setSurface) Render.setSurface(null);
           /* The section's own walls, drawn after the cut is lifted — they
            * stand exactly on its faces, and cut by it they would not be
            * there at all. */

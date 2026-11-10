@@ -55,30 +55,56 @@
     return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
   }
 
+  /* WHAT A PROP IS MADE OF, from the palette its colour came from (gl.js
+   * surfMat draws each; walk.js SURF_MAT has the codes). Asked of the
+   * colour a call was GIVEN, before box and prism shade it per face, and
+   * against the palettes useStyle has set for this port. In the Navy's
+   * style the "wood" is grey laminate, and is drawn as laminate. */
+  function inPal(pal, c) {
+    if (!pal) return false;
+    if (!Array.isArray(pal)) return String(pal).toLowerCase() === c;
+    for (var i = 0; i < pal.length; i++) if (String(pal[i]).toLowerCase() === c) return true;
+    return false;
+  }
+  function matOf(col) {
+    if (!col || typeof col !== 'string') return undefined;
+    var c = col.toLowerCase();
+    if (inPal(WOOD, c)) return S === STYLES.navy ? 'laminate' : 'wood';
+    if (inPal(VINYL, c)) return 'vinyl';
+    if (inPal(RUST, c)) return 'rust';
+    if (inPal(PIPE, c)) return 'pipe';
+    if (inPal(BRASS, c)) return 'brass';
+    if (inPal(METAL, c) || inPal(S.crate, c) || inPal(S.containers, c)) return 'paint';
+    if (inPal(GLASS, c)) return 'plain';
+    return undefined;
+  }
+
   /* ---- primitives ------------------------------------------------------- */
   function Kit() {
     var q = [];
     return {
       quads: q,
+      /* o.mat names the quad's material; without it, the colour's palette
+       * does (matOf). */
       quad: function (pts, col, o) {
         o = o || {};
-        q.push({ pts: pts, col: col, bias: o.bias || 0, lit: !!o.lit });
+        q.push({ pts: pts, col: col, bias: o.bias || 0, lit: !!o.lit, mat: o.mat || matOf(col) });
       },
       /* An axis-aligned box. Bottom face only when it floats. */
       box: function (x0, y0, z0, x1, y1, z1, col, o) {
         o = o || {};
-        var lit = !!o.lit, top = o.top || shade(col, 1.15);
-        this.quad([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], top, { lit: lit || o.litTop });
-        this.quad([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]], shade(col, 0.8), { lit: lit });
-        this.quad([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], shade(col, 0.8), { lit: lit });
-        this.quad([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], shade(col, 0.9), { lit: lit });
-        this.quad([[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]], shade(col, 0.9), { lit: lit });
-        if (y0 > 0.01) this.quad([[x0, y0, z0], [x0, y0, z1], [x1, y0, z1], [x1, y0, z0]], shade(col, o.under || 0.6), { lit: lit && o.litUnder !== false });
+        var lit = !!o.lit, top = o.top || shade(col, 1.15), mat = o.mat || matOf(col);
+        this.quad([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]], top, { lit: lit || o.litTop, mat: mat });
+        this.quad([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]], shade(col, 0.8), { lit: lit, mat: mat });
+        this.quad([[x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]], shade(col, 0.8), { lit: lit, mat: mat });
+        this.quad([[x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]], shade(col, 0.9), { lit: lit, mat: mat });
+        this.quad([[x1, y0, z0], [x1, y0, z1], [x1, y1, z1], [x1, y1, z0]], shade(col, 0.9), { lit: lit, mat: mat });
+        if (y0 > 0.01) this.quad([[x0, y0, z0], [x0, y0, z1], [x1, y0, z1], [x1, y0, z0]], shade(col, o.under || 0.6), { lit: lit && o.litUnder !== false, mat: mat });
       },
       /* An n-sided upright prism (round tables, stools, lamp shades). */
       prism: function (cx, cz, r0, r1, y0, y1, n, col, o) {
         o = o || {};
-        var a, i, p0 = [], p1 = [];
+        var a, i, p0 = [], p1 = [], mat = o.mat || matOf(col);
         for (i = 0; i < n; i++) {
           a = (i + 0.5) / n * Math.PI * 2;
           p0.push([cx + Math.cos(a) * r0, y0, cz + Math.sin(a) * r0]);
@@ -86,10 +112,10 @@
         }
         for (i = 0; i < n; i++) {
           var j = (i + 1) % n;
-          this.quad([p0[i], p0[j], p1[j], p1[i]], shade(col, 0.75 + 0.25 * Math.abs(Math.cos((i + 0.5) / n * Math.PI * 2 - 0.6))), { lit: o.litSide });
+          this.quad([p0[i], p0[j], p1[j], p1[i]], shade(col, 0.75 + 0.25 * Math.abs(Math.cos((i + 0.5) / n * Math.PI * 2 - 0.6))), { lit: o.litSide, mat: mat });
         }
-        if (!o.openTop) this.quad(p1.slice().reverse(), o.top || shade(col, 1.15), { lit: o.litTop });
-        if (o.bottom) this.quad(p0, o.bottomCol || shade(col, 0.6), { lit: o.litBottom });
+        if (!o.openTop) this.quad(p1.slice().reverse(), o.top || shade(col, 1.15), { lit: o.litTop, mat: mat });
+        if (o.bottom) this.quad(p0, o.bottomCol || shade(col, 0.6), { lit: o.litBottom, mat: mat });
       }
     };
   }
@@ -1113,7 +1139,7 @@
       dir = (t.x - A[0]) * (U[0] - A[0]) + (t.z - A[2]) * (U[2] - A[2]) >= 0 ? 1 : -1;
       tw = w - 0.55 * scale; tc = uc - dir * 0.275 * scale;
     }
-    wallPlate(K, P, uc - w / 2, v0, uc + w / 2, v0 + h, depth, '#0b0d10', { bias: -0.02 });
+    wallPlate(K, P, uc - w / 2, v0, uc + w / 2, v0 + h, depth, '#0b0d10', { bias: -0.02, mat: 'board' });
     if (dir) neonText(K, P, dir > 0 ? '>' : '<', uc + dir * (w / 2 - 0.3 * scale), v0 + h * 0.3, h * 0.42, depth + 0.015, col);
     var fr = shade(col, 0.55), e = 0.03;
     tube(K, P, [uc - w / 2, v0], [uc + w / 2, v0], depth + 0.01, fr, e);
@@ -1163,7 +1189,7 @@
         if (S.banner && tall && sp[1] - sp[0] > 5 && rng.next() < 0.6) {
           var bu = sp[0] + 1.2 + rng.next() * (sp[1] - sp[0] - 2.4), top = room.y1 - 0.4, bw = 1.0, bh = Math.min(2.6, room.y1 - 3.0);
           if (bh < 1.2) return;
-          wallPlate(K, P, bu - bw / 2, top - bh, bu + bw / 2, top, 0.06, S.banner.bg, { bias: -0.025 });
+          wallPlate(K, P, bu - bw / 2, top - bh, bu + bw / 2, top, 0.06, S.banner.bg, { bias: -0.025, mat: 'cloth' });
           var m = S.banner.fg, my = top - bh * 0.42;
           if (S.banner.mark === 'chevron') {
             tube(K, P, [bu - 0.32, my - 0.18], [bu, my + 0.12], 0.07, m, 0.09, true);

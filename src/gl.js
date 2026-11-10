@@ -2299,6 +2299,11 @@
     'in vec3 aCol;',
     'in float aEmis;',
     'in float aAlpha;',
+    /* A face's material and where on its own quad a vertex is, in metres
+     * (u, v, width, height): walk.js decks only (SURF_GLSL surfMat). A mesh
+     * without them leaves the arrays off and reads 0 here. */
+    'in float aMat;',
+    'in vec4 aQuad;',
     'uniform vec3 uModelRel;',     // model origin, already relative to the eye
     'uniform mat3 uRot;',          // the frame's right/up/fwd, as a basis
     'uniform float uScale;',
@@ -2313,13 +2318,13 @@
      * laid out on these, so it is fixed to the metal and not the eye
      * (SURF_GLSL, 2026-11-10). Kept above vAlpha: tear.test looks for
      * vAlpha's line right before TEAR_GLSL. */
-    'out vec3 vLoc; out vec3 vLN;',
+    'out vec3 vLoc; out vec3 vLN; flat out float vMat; out vec4 vQuad;',
     'out float vAlpha;',
     TEAR_GLSL,
     'void main() {',
     '  vec3 rel = uModelRel + uRot * (aPos * uScale);',
     '  vNrm = uRot * aNrm; vCol = aCol; vEmis = aEmis; vRel = rel;',
-    '  vLoc = aPos * uScale; vLN = aNrm;',
+    '  vLoc = aPos * uScale; vLN = aNrm; vMat = aMat; vQuad = aQuad;',
     '  vAlpha = aAlpha;',
     /* A station or ship behind a tear is lensed like the planets are
      * (Astra, 2026-10-21: "I do want the thing to lens planets and stations
@@ -2416,8 +2421,9 @@
    * tileable texture for one surface class can replace that term without
    * touching the rest. */
   var SURF_GLSL = [
-    'uniform vec4 uSurf;',        // on (0/1), seed, style (0 civil, 1 outlaw, 2 fleet), unused
+    'uniform vec4 uSurf;',        // on (0/1), seed, style (0 civil, 1 outlaw, 2 fleet), up (0 z, 1 y)
     'uniform float uSurfT;',      // seconds, for the lamps that blink
+    'uniform vec2 uSurfK;',       // 1 on a ship's hull or rooms; how far her plating is shrunk to her size
     'float sh1(vec2 p) {',
     '  p = fract(p * vec2(0.1031, 0.1030));',
     '  p += dot(p, p.yx + 33.33);',
@@ -2432,10 +2438,19 @@
     /* How much of a line of half-width w (m) covers a pixel d m from it,
      * smoothed over the pixel's own footprint fw (m). */
     'float lineAA(float d, float w, float fw) { return 1.0 - smoothstep(w - fw, w + fw, d); }',
+    /* A HEX GRID, flat-to-flat 1 across: xy is where p is in its hex (from
+     * the centre), zw which hex. hexR is 0.5 on the hex's edge. */
+    'vec4 hexCell(vec2 p) {',
+    '  const vec2 s = vec2(1.0, 1.7320508);',
+    '  vec4 hc = floor(vec4(p, p - vec2(0.5, 1.0)) / s.xyxy) + 0.5;',
+    '  vec4 h = vec4(p - hc.xy * s, p - (hc.zw + 0.5) * s);',
+    '  return dot(h.xy, h.xy) < dot(h.zw, h.zw) ? vec4(h.xy, hc.xy) : vec4(h.zw, hc.zw + 0.5);',
+    '}',
+    'float hexR(vec2 h) { h = abs(h); return max(dot(h, vec2(0.5, 0.8660254)), h.x); }',
     /* `p` metres in the model frame, `n` its face normal turned to the eye,
      * `ind` indoors 0..1. Changes `base` in place and returns light the
      * surface gives off (windows, lamps). */
-    'vec3 surfDetail(vec3 p, vec3 n, float ind, float seed, float style, float t, inout vec3 base) {',
+    'vec3 surfDetail(vec3 p, vec3 n, float ind, float seed, float style, float t, float ship, inout vec3 base) {',
     '  vec3 em = vec3(0.0);',
     '  vec3 an = abs(n);',
     '  vec2 uv; float isFloor = 0.0, isWall = 0.0;',
@@ -2453,6 +2468,8 @@
     '  vec2 qb = uv / B, cb = floor(qb), fb = fract(qb);',
     '  float hb = sh1(cb + seed * 0.37);',
     '  vec2 div = vec2(1.0 + floor(hb * 3.0), 1.0 + floor(fract(hb * 7.13) * 3.0));',
+    /* A hull is all plates: never a whole module in one. */
+    '  if (ship > 0.5) div = vec2(2.0 + floor(hb * 2.0), 2.0 + floor(fract(hb * 7.13) * 2.0));',
     '  vec2 Ss = B / div;',
     '  vec2 qs = fb * div, cs = floor(qs), f = fract(qs);',
     '  vec2 cell = cb * 4.0 + cs;',
@@ -2460,13 +2477,22 @@
     '  float vSub = 1.0 - smoothstep(0.05, 0.12, fw / min(Ss.x, Ss.y));',
     '  float vBig = 1.0 - smoothstep(0.03, 0.08, fw / min(B.x, B.y));',
     '  float sw = mix(0.08, 0.03, ind);',
-    '  float seam = max(max(lineAA(dE.x, sw, fw), lineAA(dE.y, sw, fw)) * 0.26 * vSub,',
-    '                   max(lineAA(dB.x, sw * 1.8, fw), lineAA(dB.y, sw * 1.8, fw)) * 0.45 * vBig);',
+    /* Seams heavier indoors, where the halls are dim and a quarter off a
+     * dark wall is nothing to see. */
+    '  float seam = max(max(lineAA(dE.x, sw, fw), lineAA(dE.y, sw, fw)) * mix(0.26, 0.42, ind) * vSub,',
+    '                   max(lineAA(dB.x, sw * 1.8, fw), lineAA(dB.y, sw * 1.8, fw)) * mix(0.45, 0.6, ind) * vBig);',
+    /* And a lit lip on the upper side of each plate's lower seam, as a
+     * plate's edge stood proud catches the light: it is what makes the
+     * plating read in a dim hall. */
+    '  float lip = isWall * ind * vSub * lineAA(abs(f.y * Ss.y - sw * 2.6), sw * 0.8, fw);',
     '  float h = sh1(cell + seed), h2 = sh1(cell * 1.7 + seed + 19.1);',
     /* Each plate a shade off its neighbours, and now and then one replaced
      * and a clear shade lighter or darker than the rest. */
     '  float tone = 1.0 + (h - 0.5) * mix(0.10, 0.08, ind) * vSub;',
     '  if (h2 > 0.94) tone *= mix(1.0, (h > 0.5 ? 1.13 : 0.87), vSub);',
+    /* A hull is painted light and seen close: her seams and plate shades
+     * a half again as strong, or the plating is lost in the paint. */
+    '  if (ship > 0.5 && ind < 0.5) { seam = min(1.0, seam * 1.6); tone = 1.0 + (tone - 1.0) * 1.6; }',
     /* WEAR, in blotches and in streaks down the walls, faded once it is
      * finer than the pixels showing it */
     '  float gVis = 1.0 - smoothstep(0.6, 2.5, fw);',
@@ -2475,17 +2501,91 @@
     '  float grime = (smoothstep(0.48, 0.95, g) * 0.20 + smoothstep(0.58, 1.0, streak) * 0.14) * gVis;',
     '  if (isFloor > 0.5) grime += ind * 0.07 * vnoise(uv * 1.7 + seed) * vSub;',
     '  if (style > 1.5) grime *= 0.35;',
-    '  float mult = tone * (1.0 - grime) * (1.0 - seam);',
     '  float panelVis = vSub;',
+    /* HEX DECK PLATES on the Syndicate's docks (Astra, 2026-11-10:
+     * "hexagonal deck plates on syndicate stations"). Every deck that faces
+     * up, inside and out, is laid in hexes instead of the rectangular
+     * plates: each its own shade, the odd one replaced, a raised rim just
+     * inside its edge and a bolt at its centre close to. Walls and
+     * ceilings keep the plating. */
+    '  float hexOn = (style > 0.5 && style < 1.5 && isFloor > 0.5 && ship < 0.5) ? 1.0 : 0.0;',
+    '  float HS = mix(4.5, 1.5, ind);',                  // flat to flat, m
+    '  vec4 hx = hexCell(uv / HS);',
+    '  if (hexOn > 0.5) {',
+    '    float vHex = 1.0 - smoothstep(0.05, 0.12, fw / HS);',
+    '    float dH = (0.5 - hexR(hx.xy)) * HS;',          // m to the plate's edge
+    '    seam = lineAA(dH, sw * 1.3, fw) * 0.45 * vHex;',
+    '    float hh = sh1(hx.zw + seed), hh2 = sh1(hx.zw * 1.9 + seed + 7.3);',
+    '    tone = 1.0 + (hh - 0.5) * 0.12 * vHex;',
+    '    if (hh2 > 0.92) tone *= mix(1.0, hh > 0.5 ? 1.14 : 0.85, vHex);',
+    '    float rimVis = 1.0 - smoothstep(0.01, 0.03, fw);',
+    '    tone *= 1.0 + 0.10 * rimVis * lineAA(abs(dH - sw * 3.0), sw * 0.7, fw);',
+    '    panelVis = vHex;',
+    '  }',
+    /* ARMOUR on the Navy's hulls (Astra, 2026-11-10: "Navy stations should
+     * have armor plates on the exterior, and this should be textured").
+     * Outside, every face is heavy plate in place of the light plating:
+     * big plates laid in staggered courses, dark joints between them, a
+     * chamfer round each that catches the light from above and falls into
+     * shade below, a row of bolts a hand inside every edge, and cast-steel
+     * mottle in the metal itself. Now and then a plate is newer than its
+     * neighbours and a shade darker. Her halls inside are as they were. */
+    '  float armOn = (style > 1.5 && ind < 0.5) ? 1.0 : 0.0;',
+    '  float boltA = 0.0;',
+    '  if (armOn > 0.5) {',
+    '    vec2 A = isWall > 0.5 ? vec2(14.0, 7.0) : vec2(12.0);',
+    '    vec2 qa = uv / A;',
+    '    qa.x += 0.5 * mod(floor(qa.y), 2.0);',          // staggered courses
+    '    vec2 ca = floor(qa), fa = fract(qa);',
+    '    vec2 dA = min(fa, 1.0 - fa) * A;',
+    '    float dMin = min(dA.x, dA.y);',
+    '    float aVis = 1.0 - smoothstep(0.02, 0.06, fw / min(A.x, A.y));',
+    /* The joint kept about a pixel wide out to where the plates go, so
+     * the courses still read at 600 m, where 28 cm is under a pixel. */
+    '    seam = lineAA(dMin, max(0.14, fw * 0.75), fw) * 0.60 * aVis;',
+    '    float bevVis = 1.0 - smoothstep(0.15, 0.40, fw);',
+    '    float bev = (1.0 - smoothstep(0.5 - fw, 0.5 + fw, dMin)) * bevVis;',
+    /* Which way the chamfer faces: the top edge lit, the bottom in shade,
+     * the sides between. On a deck "up" is the course direction. */
+    '    float side = dA.y < dA.x ? (fa.y > 0.5 ? 1.0 : -1.0) : (fa.x > 0.5 ? 0.45 : -0.45);',
+    '    float ah = sh1(ca + seed * 0.61), ah2 = sh1(ca * 2.3 + seed + 3.7);',
+    '    tone = (1.0 + (ah - 0.5) * 0.09 * aVis) * (1.0 + side * 0.15 * bev);',
+    '    if (ah2 > 0.93) tone *= mix(1.0, 0.86, aVis);',
+    '    float mot = vnoise(uv * 1.9 + seed) * 0.5 + vnoise(uv * 5.3 - seed) * 0.5;',
+    '    tone *= 1.0 + (mot - 0.5) * 0.09 * (1.0 - smoothstep(0.05, 0.30, fw));',
+    '    float bVis = 1.0 - smoothstep(0.03, 0.08, fw);',
+    '    if (bVis > 0.0) {',
+    '      vec2 am = fa * A;',
+    '      float bx = lineAA(abs(dA.x - 0.3), 0.08, fw) * lineAA(abs(fract(am.y) - 0.5), 0.08, fw);',
+    '      float by = lineAA(abs(dA.y - 0.3), 0.08, fw) * lineAA(abs(fract(am.x) - 0.5), 0.08, fw);',
+    '      boltA = max(bx, by) * bVis;',
+    '    }',
+    '    panelVis = aVis;',
+    '  }',
+    '  float mult = tone * (1.0 - grime) * (1.0 - seam) * (1.0 - boltA * 0.35) * (1.0 + 0.30 * lip * (1.0 - hexOn));',
+    /* A HULL'S OWN DETAIL, outside (ships only): now and then a plate is
+     * an access hatch, its outline inset from the plate's seams, and more
+     * rarely a vent, a grille of slots across it. */
+    '  if (ship > 0.5 && ind < 0.5 && armOn < 0.5) {',
+    '    float hh3 = sh1(cell * 2.9 + seed + 41.0);',
+    '    float inset = min(Ss.x, Ss.y) * 0.16;',
+    '    float dIn = min(dE.x, dE.y);',
+    '    if (hh3 < 0.14) mult *= 1.0 - 0.35 * lineAA(abs(dIn - inset), sw * 0.7, fw) * vSub;',
+    '    else if (hh3 < 0.18 && dIn > inset) {',
+    '      float sl = fract(f.x * Ss.x / 0.22);',
+    '      mult *= 1.0 - 0.45 * lineAA(abs(sl - 0.5) * 0.22, 0.045, fw) * vSub;',
+    '    }',
+    '  }',
     /* RIVETS at the plate corners, indoors and close */
     '  float rivVis = ind * (1.0 - smoothstep(0.015, 0.05, fw));',
     '  if (rivVis > 0.0) {',
-    '    float rr = length(dE - vec2(0.18));',
-    '    mult *= 1.0 - 0.30 * rivVis * lineAA(rr, 0.04, fw);',
+    '    float rr = hexOn > 0.5 ? length(hx.xy) * HS : length(dE - vec2(0.18));',
+    '    mult *= 1.0 - 0.30 * rivVis * lineAA(rr, hexOn > 0.5 ? 0.06 : 0.04, fw);',
     '  }',
-    /* DECKS */
+    /* DECKS (the grating is the rectangular decks' own; hex plates are
+     * solid) */
     '  if (isFloor > 0.5 && ind > 0.5) {',
-    '    float gv = 1.0 - smoothstep(0.02, 0.08, fw);',
+    '    float gv = (1.0 - hexOn) * (1.0 - smoothstep(0.02, 0.08, fw));',
     '    vec2 gq = fract(uv / 0.6) * 0.6, gd = min(gq, 0.6 - gq);',
     '    mult *= 1.0 - 0.22 * gv * max(lineAA(gd.x, 0.02, fw), lineAA(gd.y, 0.02, fw));',
     '    float lane = step(3.5, mod(cb.x + floor(seed), 4.0)) * lineAA(abs(fb.x - 0.5) * B.x, 0.16, fw);',
@@ -2494,7 +2594,7 @@
     '  }',
     '  base *= mult;',
     /* WINDOWS, outside, in every third row of panels */
-    '  if (ind < 0.5 && isWall > 0.5) {',
+    '  if (ind < 0.5 && isWall > 0.5 && ship < 0.5) {',
     '    float winVis = 1.0 - smoothstep(0.12, 0.35, fw);',
     '    if (winVis > 0.0 && mod(floor(uv.y / S.y), 3.0) == 1.0 && hb > 0.25) {',
     '      vec2 wq = uv / vec2(1.6, 1.1), wc = floor(wq), wf = fract(wq);',
@@ -2538,11 +2638,22 @@
      * hangar decks and ceilings with great lit slabs) keeps its light but
      * shows its module joints and a plate's shade, so a lit deck reads as a
      * deck. Small lamps are left as they are: their joints fall outside. */
-    'vec3 surfLit(vec3 p, vec3 n, float ind, float seed, vec3 col) {',
+    'vec3 surfLit(vec3 p, vec3 n, float ind, float seed, float style, vec3 col) {',
     '  vec3 an = abs(n);',
     '  if (!(an.z >= an.x && an.z >= an.y)) return col;',
     '  vec2 uv = p.xy;',
     '  float fw = max(length(fwidth(uv)), 1e-4);',
+    /* A Syndicate deck's lit slabs carry on the hexes of the deck round
+     * them, on the same grid, so the light sits in the plates. */
+    '  if (style > 0.5 && style < 1.5 && n.z > 0.0) {',
+    '    float HS = mix(4.5, 1.5, ind);',
+    '    vec4 hx = hexCell(uv / HS);',
+    '    float vHex = 1.0 - smoothstep(0.05, 0.12, fw / HS);',
+    '    float dH = (0.5 - hexR(hx.xy)) * HS;',
+    '    float seamH = lineAA(dH, mix(0.08, 0.03, ind) * 1.3, fw) * 0.45 * vHex;',
+    '    float toneH = 1.0 + (sh1(hx.zw + seed) - 0.5) * 0.10 * vHex;',
+    '    return col * toneH * (1.0 - seamH);',
+    '  }',
     '  vec2 B = mix(vec2(27.0), vec2(6.6), ind);',
     '  vec2 qb = uv / B, cb = floor(qb), fb = fract(qb);',
     '  vec2 dB = min(fb, 1.0 - fb) * B;',
@@ -2550,6 +2661,117 @@
     '  float seam = max(lineAA(dB.x, 0.06, fw), lineAA(dB.y, 0.06, fw)) * 0.5 * vBig;',
     '  float tone = 1.0 + (sh1(cb + seed) - 0.5) * 0.10 * vBig;',
     '  return col * tone * (1.0 - seam);',
+    '}',
+    /* MATERIALS, for the decks walked on foot (2026-11-10). Astra: the
+     * finish is for "the general station interior decoration, with the
+     * billboards and whatnot. Everything from disembarking from the ship
+     * onward." The dressing (dressing.js) builds every prop from named
+     * palettes - wood, vinyl, metal, rust, pipe, brass - and walk.js passes
+     * which one each face is (aMat; the codes are walk.js SURF_MAT) and
+     * where on its own quad each pixel is, in metres (aQuad: u, v, width,
+     * height), so a plank's grain runs along the plank and a booth's
+     * buttons sit square on it. Every term fades by the pixel's own size
+     * in metres, finest first, as the plating does.
+     *   1 tile       composite floor tiles, grout, scuffs in the walkways
+     *   2 wood       planks, grain and rings, staggered butt joints, worn edges
+     *   3 woodfloor  the same, wider and longer, scuffed underfoot
+     *   4 vinyl      tufted upholstery: diamond creases, buttons, piping
+     *   5 paint      painted metal: stamped ribs, chips to bare metal at the
+     *                edges, scratches
+     *   6 rust       mottle at three scales, and pitting
+     *   7 pipe       clamp bands, streaks along it
+     *   8 brass      brushed along its length, polished edges, tarnish
+     *   9 board      a sign or ad board: bezel lit along its top, screws in
+     *                its corners, scanlines and a dark screen's faint glow
+     *  10 cloth      a banner: folds and weave
+     *  11 plain      nothing (glass, bottles)
+     *  12 laminate   smooth panels, fine seams (the Navy's "wood")
+     * `gr` is how much grime the livery keeps: the fleet is clean. */
+    'vec3 surfMat(float mat, vec4 q, float seed, float style, inout vec3 base) {',
+    '  vec3 em = vec3(0.0);',
+    '  int mi = int(mat + 0.5);',
+    '  vec2 uv = q.xy; float W = q.z, H = q.w;',
+    '  float fw = max(length(fwidth(uv)), 1e-5);',
+    '  float edge = min(min(uv.x, W - uv.x), min(uv.y, H - uv.y));',
+    '  float along = W >= H ? uv.x : uv.y, across = W >= H ? uv.y : uv.x;',
+    '  float fine = 1.0 - smoothstep(0.003, 0.012, fw);',
+    '  float mid = 1.0 - smoothstep(0.02, 0.08, fw);',
+    '  float gr = style > 1.5 ? 0.3 : (style > 0.5 ? 1.0 : 0.8);',
+    '  float m = 1.0;',
+    '  if (mi == 1) {',
+    '    vec2 tq = uv / 0.8, tc = floor(tq), tf = fract(tq);',
+    '    vec2 td = min(tf, 1.0 - tf) * 0.8;',
+    '    float grout = lineAA(min(td.x, td.y), 0.006, fw) * mid;',
+    '    m *= (1.0 + (sh1(tc + seed) - 0.5) * 0.10 * mid) * (1.0 - 0.35 * grout);',
+    '    m *= 1.0 - 0.12 * gr * smoothstep(0.55, 1.0, vnoise(uv * 0.7 + seed));',
+    '    m *= 1.0 + 0.05 * (vnoise(uv * 9.0) - 0.5) * fine;',
+    '  } else if (mi == 2 || mi == 3) {',
+    '    float pw = mi == 3 ? 0.16 : 0.12, plen = mi == 3 ? 2.4 : 1.6;',
+    '    float pk = floor(across / pw), pf = fract(across / pw);',
+    '    float ph = sh1(vec2(pk, seed));',
+    '    float aq = (along + ph * plen) / plen;',
+    '    float id = sh1(vec2(pk, floor(aq)) + seed * 1.3), af = fract(aq);',
+    '    float joint = max(lineAA(min(pf, 1.0 - pf) * pw, 0.002, fw), lineAA(min(af, 1.0 - af) * plen, 0.002, fw)) * mid;',
+    '    float grain = vnoise(vec2(along * 1.2 + id * 37.0, across * 60.0));',
+    '    float ring = 0.5 + 0.5 * sin(across * 90.0 + vnoise(vec2(along * 0.9, across * 8.0) + id * 11.0) * 9.0);',
+    '    m *= mix(1.0, mix(0.92, 1.08, grain), mix(0.4, 1.0, fine)) * mix(1.0, 0.9 + 0.2 * ring, fine);',
+    '    m *= (1.0 + (id - 0.5) * 0.16 * mid) * (1.0 - 0.45 * joint);',
+    '    if (mi == 2) m *= 1.0 + 0.12 * (1.0 - smoothstep(0.0, 0.015, edge)) * mid;',
+    '    else m *= 1.0 - 0.14 * gr * smoothstep(0.5, 1.0, vnoise(uv * 0.6 + seed));',
+    '  } else if (mi == 4) {',
+    '    vec2 d = vec2(uv.x + uv.y, uv.x - uv.y) / 0.22;',
+    '    vec2 df = fract(d) - 0.5;',
+    '    float crease = lineAA(min(abs(df.x), abs(df.y)) * 0.155, 0.004, fw) * mid;',
+    '    float button = lineAA(length(0.5 - abs(df)) * 0.155, 0.012, fw) * mid;',
+    '    float puff = 1.0 - 0.6 * dot(df, df);',
+    '    m *= mix(1.0, 0.85 + 0.25 * puff, mid) * (1.0 - 0.35 * crease) * (1.0 - 0.45 * button);',
+    '    m *= 1.0 + 0.06 * (vnoise(uv * 40.0) - 0.5) * fine;',
+    '    m *= 1.0 + 0.15 * (1.0 - smoothstep(0.0, 0.02, edge)) * mid;',
+    '  } else if (mi == 5) {',
+    '    float rf = fract(along / 0.45);',
+    '    float rib = lineAA(min(rf, 1.0 - rf) * 0.45, 0.012, fw) * mid * step(1.2, max(W, H));',
+    '    float chipN = vnoise(uv * 14.0 + seed) * 0.6 + vnoise(uv * 41.0 - seed) * 0.4;',
+    /* Chipped along the edges only: on a thin face (a table leg) every
+     * pixel is near an edge, so the band narrows with the face. */
+    '    float cb = min(0.07, 0.18 * min(W, H));',
+    '    float chip = step(0.66, chipN) * (1.0 - smoothstep(cb * 0.3, cb, edge)) * mid * gr * step(0.08, min(W, H));',
+    '    base = mix(base, vec3(0.55, 0.56, 0.58), chip * 0.8);',
+    '    float scr = smoothstep(0.85, 1.0, vnoise(vec2(along * 3.0, across * 45.0) + seed)) * fine;',
+    '    m *= (1.0 - 0.18 * rib) * (1.0 + 0.10 * scr) * (1.0 - 0.12 * gr * smoothstep(0.5, 1.0, vnoise(uv * 1.1 + seed)));',
+    '  } else if (mi == 6) {',
+    '    float r2 = vnoise(uv * 11.0 - seed);',
+    '    float r = vnoise(uv * 3.0 + seed) * 0.55 + r2 * 0.3 + vnoise(uv * 37.0) * 0.15 * mix(0.3, 1.0, fine);',
+    '    base = mix(base * vec3(0.75, 0.62, 0.55), base * vec3(1.35, 1.05, 0.8), r);',
+    '    m *= 1.0 - 0.25 * step(0.82, r2) * mid;',
+    '  } else if (mi == 7) {',
+    '    float band = lineAA(abs(fract(along / 1.4) - 0.5) * 1.4, 0.035, fw) * mid;',
+    '    m *= (1.0 + 0.25 * band) * (1.0 + 0.08 * (vnoise(vec2(along * 2.0, across * 20.0)) - 0.5));',
+    '    m *= 1.0 - 0.15 * gr * smoothstep(0.6, 1.0, vnoise(vec2(along * 0.8, across * 3.0) + seed));',
+    '  } else if (mi == 8) {',
+    '    float br = vnoise(vec2(along * 4.0, across * 120.0));',
+    '    m *= mix(1.0, 0.9 + 0.2 * br, mix(0.3, 1.0, fine)) * (1.0 + 0.2 * (1.0 - smoothstep(0.0, 0.03, edge)) * mid);',
+    '    m *= 1.0 - 0.2 * smoothstep(0.55, 1.0, vnoise(uv * 4.0 + seed));',
+    '  } else if (mi == 9) {',
+    '    float inF = smoothstep(0.05 - fw, 0.05 + fw, edge);',
+    '    float isTop = step(H - uv.y, edge + 1e-4), isBot = step(uv.y, edge + 1e-4);',
+    '    vec3 frame = vec3(0.20, 0.21, 0.23) * (1.0 + 0.4 * isTop - 0.3 * isBot);',
+    '    base = mix(base, frame, (1.0 - inF) * mid);',
+    '    float scan = lineAA(abs(fract(uv.y / 0.008) - 0.5) * 0.008, 0.0015, fw) * fine;',
+    '    float vig = smoothstep(0.0, 0.35, edge);',
+    '    m *= (1.0 - 0.25 * scan * inF) * mix(1.0, mix(0.75, 1.0, vig), inF);',
+    '    vec2 sc = vec2(min(uv.x, W - uv.x), min(uv.y, H - uv.y));',
+    '    m *= 1.0 - 0.5 * lineAA(length(sc - vec2(0.025)), 0.008, fw) * fine;',
+    '    em += vec3(0.010, 0.014, 0.020) * inF * vig * (1.0 - 0.5 * scan);',
+    '  } else if (mi == 10) {',
+    '    float fold = sin(uv.x * 9.0 + vnoise(vec2(uv.x * 2.0, uv.y * 0.5) + seed) * 3.0);',
+    '    float wv = sin(uv.x * 1570.0) * sin(uv.y * 1570.0) * (1.0 - smoothstep(0.0008, 0.002, fw));',
+    '    m *= (1.0 + 0.12 * fold * mid) * (1.0 + 0.05 * wv);',
+    '  } else if (mi == 12) {',
+    '    float lf = fract(along / 1.2);',
+    '    m *= (1.0 - 0.3 * lineAA(min(lf, 1.0 - lf) * 1.2, 0.0015, fw) * mid) * (1.0 + 0.04 * (vnoise(uv * 2.0 + seed) - 0.5));',
+    '  }',
+    '  base *= m;',
+    '  return em;',
     '}'
   ].join('\n');
 
@@ -2558,7 +2780,7 @@
     'precision highp float;',
     'in vec3 vNrm; in vec3 vCol; in float vEmis; in vec3 vRel;',
     'in float vAlpha;',
-    'in vec3 vLoc; in vec3 vLN;',
+    'in vec3 vLoc; in vec3 vLN; flat in float vMat; in vec4 vQuad;',
     SURF_GLSL,
     'uniform vec3 uSunDir;',
     'uniform vec3 uFwd;',
@@ -2768,9 +2990,18 @@
      * lamps, on her own metal, before it is lit. Off for everything that is
      * not a station (uSurf.x 0) and for the art's own lamps. */
     '  vec3 sEm = vec3(0.0);',
-    '  if (uSurf.x > 0.5 && vEmis < 0.5) {',
-    '    vec3 ln = normalize(vLN) * nSign;',
-    '    sEm = surfDetail(vLoc * 1000.0, ln, min(uIndoors, 1.0), uSurf.y, uSurf.z, uSurfT, base);',
+    /* Station models stand z up; the deck plans you walk on (walk.js)
+     * stand y up, and uSurf.w says so: turned here so a floor is a floor
+     * to SURF_GLSL either way. */
+    '  vec3 sP = vLoc * 1000.0, sN = normalize(vLN) * nSign;',
+    '  if (uSurf.w > 0.5) { sP = sP.xzy; sN = sN.xzy; }',
+    /* A hull's plating at her size: everything laid out in metres is
+     * shrunk by k, the seams, grime and bolts with it. */
+    '  if (uSurfK.x > 0.5) sP *= uSurfK.y;',
+    /* Not on glass: a canopy or a pane is not plated. */
+    '  if (uSurf.x > 0.5 && vEmis < 0.5 && vAlpha * uAlpha > 0.98) {',
+    '    if (vMat > 0.5 && vQuad.z > 0.0) sEm = surfMat(vMat, vQuad, uSurf.y, uSurf.z, base);',
+    '    else sEm = surfDetail(sP, sN, min(uIndoors, 1.0), uSurf.y, uSurf.z, uSurfT, uSurfK.x, base);',
     '  }',
     '  vec3 lit = base * (0.26 + 0.70 * lam * uSunK);',
     /* SKY FILL (2026-11-02): under a daylit ground sky the shade side of a
@@ -2793,7 +3024,7 @@
     '  float ind = min(uIndoors, 1.0);',
     '  vec3 dim = base * (0.10 + 0.55 * lamp) * max(1.0, uIndoors);',
     '  vec3 litCol = vCol;',
-    '  if (uSurf.x > 0.5 && vEmis > 0.5) litCol = surfLit(vLoc * 1000.0, normalize(vLN) * nSign, ind, uSurf.y, vCol);',
+    '  if (uSurf.x > 0.5 && vEmis > 0.5 && vMat < 0.5) litCol = surfLit(sP, sN, ind, uSurf.y, uSurf.z, vCol);',
     '  vec3 c = vEmis > 0.5 ? litCol * 1.15 : mix(lit, dim, ind);',
     '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, ind) : 0.0;',
     /* Its windows and lamps are its own light: added, and fed to the glow
@@ -3310,7 +3541,7 @@
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp', 'uCutCap',
                                         'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
-                                        'uPaint', 'uTrim', 'uSurf', 'uSurfT',
+                                        'uPaint', 'uTrim', 'uSurf', 'uSurfT', 'uSurfK',
                                         'uTear', 'uTearK', 'uTearN']);
     } catch (e) {
       if (global.console) console.error(e.message);
@@ -3852,6 +4083,21 @@
     attr(pos, 'aPos', 3); attr(nrm, 'aNrm', 3);
     attr(col, 'aCol', 3); attr(emi, 'aEmis', 1);
     attr(alp, 'aAlpha', 1);
+    /* A face's material and its quad's own metres (walk.js meshFor), for
+     * SURF_GLSL surfMat. Only meshes that carry them pay for them: with the
+     * arrays left off, the shader reads 0 and plates the face as before. */
+    if (mesh.mat) {
+      var mat = new Float32Array(tris * 3), qd = new Float32Array(tris * 12);
+      for (var mi = 0; mi < tris; mi++) {
+        var mf = mesh.f[mi], mc = mesh.mat[mi] || 0;
+        for (var mk = 0; mk < 3; mk++) {
+          mat[mi * 3 + mk] = mc;
+          var uq = mesh.uvq ? mesh.uvq[mf[mk]] : null;
+          if (uq) { var qo = (mi * 3 + mk) * 4; qd[qo] = uq[0]; qd[qo + 1] = uq[1]; qd[qo + 2] = uq[2]; qd[qo + 3] = uq[3]; }
+        }
+      }
+      attr(mat, 'aMat', 1); attr(qd, 'aQuad', 4);
+    }
     gl.bindVertexArray(null);
 
     mesh._gl = { vao: vaoM, count: tris * 3, id: ++meshSeq, bufs: bufs };
@@ -3890,9 +4136,17 @@
    * berthed in her and every other station keep their own look. */
   var surfFlag = null;
   var SURF_STYLE = { outlaw: 1, fleet: 2 };
+  /* `ship` (2026-11-10): a hull, outside or in. Outside, `k` shrinks the
+   * plating to her size (render.js shipSurface): a station's plate is 8 m,
+   * a courier's 2. No windows and no hexes on a hull; hatches instead. */
   GL.setSurface = function (s) {
-    surfFlag = s ? { seed: (s.seed || 0) % 1000, style: SURF_STYLE[s.style] || 0 } : null;
+    surfFlag = s ? { seed: (s.seed || 0) % 1000, style: SURF_STYLE[s.style] || 0, up: s.up === 'y' ? 1 : 0,
+                     ship: s.ship ? 1 : 0, k: s.k > 0 ? s.k : 1 } : null;
   };
+  /* What is set, and putting it back: a ship drawn in the middle of a
+   * station's meshes restores the station's surface after her. */
+  GL.getSurface = function () { return surfFlag; };
+  GL.putSurface = function (f) { surfFlag = f || null; };
   GL.setIndoors = function (on) { indoorsFlag = !on ? 0 : (typeof on === 'number' ? on : 1); };
 
   /* THE CUTAWAY, for everything queued until it is cleared — the same
@@ -4810,7 +5064,11 @@
       };
       return { mesh: mesh, rel: { x: p.x - cam.eye.x, y: p.y - cam.eye.y, z: p.z - cam.eye.z },
                scale: scale, sun: ZERO3, r: frame.right, u: frame.up, f: frame.fwd, cam: cam,
-               glow: 0, wind: ZERO3, alpha: 1, paint: null, indoors: 1, cut: null };
+               glow: 0, wind: ZERO3, alpha: 1, paint: null, indoors: 1, cut: null,
+               /* A station's rooms walked on foot come through here, and
+                * wear her surface like the rest of her (2026-11-10); a
+                * ship's cockpit is queued with none set. */
+               surf: surfFlag };
     }
     cockpitQ = {
       cam: cam,
@@ -4856,8 +5114,9 @@
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
       gl.uniform1f(meshUni.uSheen, m.sheen || 0);
-      if (m.surf) gl.uniform4f(meshUni.uSurf, 1, m.surf.seed, m.surf.style, 0);
+      if (m.surf) gl.uniform4f(meshUni.uSurf, 1, m.surf.seed, m.surf.style, m.surf.up || 0);
       else gl.uniform4f(meshUni.uSurf, 0, 0, 0, 0);
+      gl.uniform2f(meshUni.uSurfK, m.surf ? m.surf.ship || 0 : 0, m.surf ? m.surf.k || 1 : 1);
       /* Wall-clock seconds, wrapped so float32 keeps them exact enough for
        * a lamp to blink on time. */
       gl.uniform1f(meshUni.uSurfT, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000) % 3600);

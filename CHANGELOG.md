@@ -40,6 +40,82 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-10, hex decks, Navy armour, every station surface, the decks on foot and every ship)
+
+Astra: "let's have some hexagonal deck plates on syndicate stations, and
+Navy stations should have armor plates on the exterior, and this should be
+textured. All exterior and interior station models must be textured."
+Then: "textures can include higher-quality bars and ship hulls, also." Asked
+what "bars" meant: "the general station interior decoration, with the
+billboards and whatnot. Everything from disembarking from the ship
+onward." And for ships: "All ships, outside and in".
+
+- **Hex deck plates on the Syndicate's stations.** Every deck that faces up
+  on a Syndicate dock, inside and out, is laid in hexagonal plates instead
+  of rectangular ones. Each hex is its own shade, the odd one has been
+  replaced, and close to there's a raised rim inside its edge and a bolt at
+  its centre. The big lit deck slabs carry on the same hexes. Walls and
+  ceilings keep their plating. The Syndicate's concourse is hex plate too,
+  where everyone else's is tiled.
+- **Armour on the Navy's stations.** Outside, every face of a Navy station
+  is heavy armour plate in place of the light plating: big plates in
+  staggered courses, dark joints, a chamfered edge that catches the light
+  above and falls into shade below, a row of bolts a hand inside every
+  edge, and a cast-steel mottle in the metal. Now and then a plate is newer
+  and a shade darker. The joints stay about a pixel wide out to 600 m, so
+  the courses still read from a distance. Her halls inside are as they
+  were.
+- **Every station model, inside and out.** Before, the surface reached a
+  station's hull, spinning part, interior and outworks. Now it also covers:
+  - a ground port's boards and posts, lamp housings and shaft doors;
+  - the hangar deck she berths on, seen from aboard;
+  - every deck and room you walk on foot (they go through the cockpit's
+    pass, which never carried the surface before).
+
+  The deck plans you walk on stand y up where the station art stands z up,
+  so the shader is told which, or floors would have come out plated as
+  walls. Left plain on purpose: lights, the small craft working round her,
+  the earth and rock of a ground port's cut, and glass.
+- **The decks on foot get materials.** The dressing already builds every
+  prop from named palettes. Each face now carries which one it was (and,
+  for the Navy, grey laminate where the others have wood), and each quad
+  its own metres, so a pattern runs along its plank or sits square on its
+  booth:
+  - tiled floors in the concourse and the crew hall, and floorboards in
+    the bar;
+  - planked wood with grain, rings, butt joints and worn edges on counters
+    and tables;
+  - tufted vinyl on the booths, with diamond creases, buttons and piping;
+  - painted metal chipped at its edges, with stamped ribs and scratches, on
+    crates, lockers and chairs;
+  - rust, banded pipes, brushed brass;
+  - billboards and signs: a bezel lit along its top edge, screws in the
+    corners, and scanlines and a dark screen's faint glow behind the neon;
+  - cloth banners with folds and weave.
+
+  The halls' plating has heavier seams indoors, plus a lit lip on each
+  plate, so it reads in dim rooms. Everything fades by the pixel's size, so
+  nothing shimmers at a distance.
+- **Every ship, outside and in.** Hulls are plated at their own size, with
+  each plate about a fourteenth of her length (1.2 m on the smallest hull,
+  6 m on a capital). Seams and shading are stronger than a station's, or
+  they'd be lost in her paint. Now and then a plate is an access hatch or a
+  vent. Navy and police hulls and capitals wear the armour plate; outlaw
+  and pirate hulls are worn harder. There are no windows or hexes on a
+  hull. Her rooms, her cockpit, and her cabin seen through her windows take
+  the surface at their own metres. Each ship is seeded from her own id, so
+  she wears the same plates every time. A ship drawn inside a station
+  gives the station its surface back afterwards.
+- **For Astra's own textures later:** each material is its own branch in
+  the shader (gl.js `surfMat`; the codes are walk.js `SURF_MAT`), so an
+  image can replace one without touching the rest.
+- **Tests:** `test/surfaces.test.js` (24 checks): each surface is in the
+  shader, and every deck face gets its material in every livery. It also
+  checks that every draw path that puts station or ship metal on screen
+  sets a surface round it. It fails on a path that forgets.
+- **Saves:** unaffected. The walk-aboard decks are rebuilt from the seed as
+  before, now with their materials.
+
 ### Added (2026-11-10, stations get a surface: plating, wear, decks, windows and lamps)
 
 Astra: "texture the interior of the space ports, to make them feel more

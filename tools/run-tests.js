@@ -57,7 +57,7 @@ var GROUPS = {
     'test/cockpit.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
     'test/hangar.test.js', 'test/cruisesky.test.js', 'test/navsystem.test.js',
     'test/tear.test.js', 'test/groundport-look.test.js', 'test/outworks.test.js',
-    'test/galaxyzoom.test.js'
+    'test/galaxyzoom.test.js', 'test/surfaces.test.js'
   ],
   berths: ['test/berths.test.js', 'test/interiors.test.js'],
   ships: [

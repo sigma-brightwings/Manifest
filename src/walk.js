@@ -1146,6 +1146,29 @@
     if (!m) return '#808080';
     return '#' + [m[1], m[2], m[3]].map(function (n) { return ('0' + (+n).toString(16)).slice(-2); }).join('');
   }
+  /* MATERIAL CODES for gl.js surfMat (its comment lists what each looks
+   * like). A quad's `mat` is one of these names: dressing.js sets it from
+   * the palette a prop is built from, and meshFor sets a room's floor. */
+  var SURF_MAT = { tile: 1, wood: 2, woodfloor: 3, vinyl: 4, paint: 5, rust: 6, pipe: 7,
+                   brass: 8, board: 9, cloth: 10, plain: 11, laminate: 12 };
+  var FLOOR_MAT = { concourse: 'tile', crewhall: 'tile', bar: 'woodfloor' };
+  /* A quad's own metres: u along pts[0]->pts[1], v square to it in the
+   * quad's plane, shifted so both start at 0; and its width and height. */
+  function quadUV(pts) {
+    var o = pts[0], a = [pts[1][0] - o[0], pts[1][1] - o[1], pts[1][2] - o[2]];
+    var la = Math.hypot(a[0], a[1], a[2]) || 1, u = [a[0] / la, a[1] / la, a[2] / la];
+    var e = pts[pts.length - 1], b = [e[0] - o[0], e[1] - o[1], e[2] - o[2]];
+    var bu = b[0] * u[0] + b[1] * u[1] + b[2] * u[2];
+    var w = [b[0] - u[0] * bu, b[1] - u[1] * bu, b[2] - u[2] * bu];
+    var lw = Math.hypot(w[0], w[1], w[2]) || 1, v = [w[0] / lw, w[1] / lw, w[2] / lw];
+    var uv = pts.map(function (p) {
+      var d = [p[0] - o[0], p[1] - o[1], p[2] - o[2]];
+      return [d[0] * u[0] + d[1] * u[1] + d[2] * u[2], d[0] * v[0] + d[1] * v[1] + d[2] * v[2]];
+    });
+    var u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+    uv.forEach(function (t) { u0 = Math.min(u0, t[0]); u1 = Math.max(u1, t[0]); v0 = Math.min(v0, t[1]); v1 = Math.max(v1, t[1]); });
+    return uv.map(function (t) { return [t[0] - u0, t[1] - v0, u1 - u0, v1 - v0]; });
+  }
   function meshFor(plan) {
     if (plan._mesh) return plan._mesh;
     var quads = [];
@@ -1174,6 +1197,16 @@
     plan.rooms.forEach(function (r) {
       var from = quads.length;
       roomQuads(plan, r, quads);
+      /* The room's own floor, in its own material (gl.js surfMat): tiles
+       * in the concourse and the crew hall, boards in the bar. The rest
+       * are decks, plated (and laid in hexes on the Syndicate's). The
+       * Syndicate's concourse is deck too: hex plate, not tile. */
+      var fm = FLOOR_MAT[r.kind];
+      if (fm === 'tile' && plan.livery === 'syn') fm = null;
+      if (fm) for (var fq = from; fq < quads.length; fq++) {
+        var Q = quads[fq];
+        if (!Q.mat && !Q.lit && !Q.bias && Q.pts.every(function (p) { return Math.abs(p[1]) < 0.02; })) Q.mat = fm;
+      }
       for (var w0 = from; w0 < quads.length; w0++) {
         if (quads[w0].bias) continue;            // the trim: its own centimetre, below
         var ax = onPlane(quads[w0], r);
@@ -1200,14 +1233,23 @@
     if (plan.dress) Object.keys(plan.dress).forEach(function (id) {
       plan.dress[id].forEach(function (q) { quads.push(q); });
     });
-    var m = { v: [], f: [], c: [] };
+    /* Each face's material (gl.js surfMat) and, per vertex, where on its
+     * own quad it is in metres - u along the quad's first edge, v across
+     * it, and the quad's width and height - so the shader lays a plank,
+     * a tile or a booth's buttons on the quad itself. */
+    var m = { v: [], f: [], c: [], mat: [], uvq: [] };
     quads.forEach(function (q) {
       /* A pane is a window, not a plate: see tubeQuads and panesFor. */
       if (q.pane) return;
       var col = hexOf(q.col), lit = q.lit || col.toLowerCase() === '#e8f4ff' || (q.bias || 0) <= -0.04;
-      var n = m.v.length;
+      var n = m.v.length, mc = SURF_MAT[q.mat] || 0;
       q.pts.forEach(function (p) { m.v.push([p[0], p[1], p[2]]); });
-      for (var i = 1; i + 1 < q.pts.length; i++) { m.f.push([n, n + i, n + i + 1]); m.c.push((lit ? '!' : '') + col); }
+      /* A floor is laid in many quads, so its tiles and boards are set out
+       * in the deck's own metres (x along, z across) and run on unbroken
+       * from quad to quad; everything else on its own quad. */
+      if (q.mat === 'tile' || q.mat === 'woodfloor') q.pts.forEach(function (p) { m.uvq.push([p[0], p[2], 1000, 999]); });
+      else quadUV(q.pts).forEach(function (t) { m.uvq.push(t); });
+      for (var i = 1; i + 1 < q.pts.length; i++) { m.f.push([n, n + i, n + i + 1]); m.c.push((lit ? '!' : '') + col); m.mat.push(mc); }
     });
     plan._mesh = m;
     return m;
@@ -1380,7 +1422,7 @@
     layout: layout, standable: standable, roomAt: roomAt,
     start: start, step: step, look: look, facing: facing, draw: draw,
     sizeClass: sizeClass, meshFor: meshFor, panesFor: panesFor,
-    placeTradeTerminal: placeTradeTerminal
+    placeTradeTerminal: placeTradeTerminal, SURF_MAT: SURF_MAT, quadUV: quadUV
   };
 
   global.Walk = Walk;

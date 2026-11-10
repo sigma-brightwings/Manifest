@@ -4558,9 +4558,42 @@
     for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
     return (h % 997) + 0.5;
   }
-  function setSurface(port, style) {
+  /* `up` 'y' for the deck plans walked on foot (walk.js), which stand y up
+   * where the station art stands z up. */
+  function setSurface(port, style, up) {
     if (!global.GLWorld || !global.GLWorld.setSurface) return;
-    global.GLWorld.setSurface(port ? { seed: surfaceSeed(port.id), style: style || null } : null);
+    global.GLWorld.setSurface(port ? { seed: surfaceSeed(port.id), style: style || null, up: up || null } : null);
+  }
+  /* SHIPS WEAR A SURFACE TOO (2026-11-10). Astra: texture "ship hulls,
+   * also", every ship, "outside and in". The station's plating, shrunk to
+   * the hull: a plate about a fourteenth of her length (1.2 m on the
+   * smallest, 6 m on a capital), seeded from her id so she wears the same
+   * plates every time, in her owner's livery - a Navy hull in armour plate,
+   * the Syndicate's and the pirates' worn harder. No windows (a hull has
+   * its own) and hatches and vents instead. Her rooms take it at their
+   * own metres. Ship meshes stand y up. Pushed and popped rather than set
+   * and cleared: a ship is drawn inside a station's own meshes (berthed in
+   * her) and must give the station's surface back after her. */
+  function shipSurfaceSkin(s) {
+    if (!s) return null;
+    if (s.faction === 'outlaw' || s.kind === 'pirate' || s.pirate) return 'outlaw';
+    if (s.kind === 'navy' || s.kind === 'police' || s.kind === 'capital') return 'fleet';
+    return null;
+  }
+  function pushShipSurface(s, lengthKm, inside) {
+    var G2 = global.GLWorld;
+    if (!G2 || !G2.setSurface || !G2.getSurface) return undefined;
+    var prev = G2.getSurface();
+    var Lm = (lengthKm > 0 ? lengthKm : 0.025) * 1000;
+    var plate = Math.max(1.2, Math.min(6, Lm / 14));
+    var base = (s && s._base) || s;
+    G2.setSurface({ seed: surfaceSeed((base && (base.id || base.name || base.hullId)) || 'ship'),
+                    style: shipSurfaceSkin(base), up: 'y', ship: true, k: inside ? 1 : 8 / plate });
+    return prev;
+  }
+  function popSurface(prev) {
+    var G2 = global.GLWorld;
+    if (G2 && G2.putSurface && prev !== undefined) G2.putSurface(prev);
   }
 
   /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
@@ -5486,11 +5519,13 @@
       if (swapped) mesh = libHull(swapped);
     }
     mesh = mesh || shipMeshes()[kind] || shipMeshes().courier;
+    var prevS = pushShipSurface(ship || frame, lengthKm, false);
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir))) {
       paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
     }
     drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint,
                  gearTravelOf(ship || frame));
+    popSurface(prevS);
   }
 
   /* The player's own hull. A ship object already carries pos/fwd/up/right,
@@ -5545,6 +5580,9 @@
      * her frame at however far down it is. Only your own ship carries an
      * airlock state, so nobody else's belly is opened. */
     var ramp = (ship && ship.airlock && ship.hullId && !(opts && opts.fromBridge)) ? rampExterior(ship, mesh, L) : null;
+    /* Her surface, on everything of her outside (see pushShipSurface);
+     * her rooms through her windows take theirs in queueRoomsInPlace. */
+    var prevS = pushShipSurface(ship, L, false);
     if (ramp) {
       mesh = ramp.hull;
       /* With her rooms drawn in place (windows), the airlock box the bay
@@ -5579,6 +5617,7 @@
      * the way down and the first thing a pad touches — and giving them the
      * hull's re-entry glow would light them up before the nose. */
     drawHullGear(ctx, cam, ship, mesh, L, sunDir, tint, gearTravelOf(ship));
+    popSurface(prevS);
     if (win) queueRoomsInPlace(cam, ship, win, sunDir);
   }
 
@@ -5662,8 +5701,10 @@
     if (!G2 || !G2.queueMesh || !d.meshes || !d.meshes.room) return;
     var F = bridgeFrame(ship);
     setIndoors(CABIN_SEEN_GLOW);
+    var prevS = pushShipSurface(ship, 0, true);
     G2.queueMesh(cam, F, d.meshes.room, M, F.up, 0);
     if (d.meshes.fittings) G2.queueMesh(cam, F, d.meshes.fittings, M, F.up, 0);
+    popSurface(prevS);
     setIndoors(false);
     if (d.meshes.portals) G2.queueMesh(cam, F, d.meshes.portals, M, sunDir, 0, null, WINDOW_ALPHA);
   }
@@ -17882,7 +17923,10 @@
     if (d.meshes.fittings) parts.push({ mesh: d.meshes.fittings });
     /* From outside her (2026-10-26) there is no glass to see the world
      * through, only her own skin, so the panes are not drawn. */
+    /* Her rooms and cockpit, in her surface at their own metres. */
+    var prevS = pushShipSurface(ship, 0, true);
     var ok = global.GLWorld.queueCockpit(cam, frame, opts.noPortals ? null : d.meshes.portals, d.meshes.room, parts, M);
+    popSurface(prevS);
     if (ok) { ROOM_QUEUED.ship = ship; ROOM_QUEUED.cam = cam; }
     return ok;
   }
