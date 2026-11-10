@@ -38,7 +38,45 @@ before they update.
 
 ---
 
-## Unreleased
+## 1.3.0-beta "Cricket" (2026-11-10)
+
+Named for Cricket, a pigeon from the rescue. Everything below, down to
+Brian, is in this release: the nine days since Brian was tagged.
+
+**The ground and the sea.** Worlds have biomes, ground ports sit on real
+ground with towns around them, and sea platforms stand on open water. The
+drive works in an atmosphere. Systems can have more than one star, and
+habitable zones are warmer and fuller.
+
+**Getting where you are going.** A lead pip shows where to meet a moving
+target, and an intercept assist flies you there. The galaxy chart zooms.
+Every hull now carries a slipspace drive sized to her frame (Class I on S
+hulls, II on M, III on L, IV on XL), and a better one reaches further on a
+tank. The military drive has a milfuel tank sized to the ship, filled from
+the hold on the SHIP screen.
+
+**Trade and the yard.** Captain Halloway teaches the first run. The
+economy is retuned, and there is a trade analyser and trading houses that
+run an account for your ships. Every item on sale has its own model: the
+yard opens a card with it turning and a BUY button. Fitted guns show on
+the hull, and the proton linacs and civil slipspace drives are new.
+
+**Stations.** Stations got four passes on their geometry: lifts that come
+for you and carry you, routes that miss the walls, and level pads in the
+tilted bays.
+
+**Surfaces.** Everything you see is plated, worn and lit: stations inside
+and out, the decks and rooms you walk from the ramp onward (wood, tile,
+vinyl, chipped paint, billboards), and every ship, outside and in. The
+Syndicate's docks lay their decks in hex plate and the Navy's wear armour.
+
+**Saves:** a Brian career loads. On load, every ship (yours and the
+fleet's) is given her frame's slipspace drive, which jumps exactly as far
+as she always did on an S hull. Milfuel in the hold moves into a military
+drive's tank once, as far as it fits. Each entry below has its own Saves
+note where one was needed.
+
+Everything that changed is listed below, newest first.
 
 ### Added (2026-11-10, hex decks, Navy armour, every station surface, the decks on foot and every ship)
 
@@ -169,41 +207,6 @@ It now reads the packed copy, which is what ships, as `city-sites.test.js`
 already did. The game itself was never affected.
 
 - **Saves:** unaffected.
-
-## 1.3.0-beta "Cricket" (2026-11-10)
-
-Named for Cricket, a pigeon from the rescue. Everything below, down to
-Brian, is in this release: the nine days since Brian was tagged.
-
-**The ground and the sea.** Worlds have biomes, ground ports sit on real
-ground with towns around them, and sea platforms stand on open water. The
-drive works in an atmosphere. Systems can have more than one star, and
-habitable zones are warmer and fuller.
-
-**Getting where you are going.** A lead pip shows where to meet a moving
-target, and an intercept assist flies you there. The galaxy chart zooms.
-Every hull now carries a slipspace drive sized to her frame (Class I on S
-hulls, II on M, III on L, IV on XL), and a better one reaches further on a
-tank. The military drive has a milfuel tank sized to the ship, filled from
-the hold on the SHIP screen.
-
-**Trade and the yard.** Captain Halloway teaches the first run. The
-economy is retuned, and there is a trade analyser and trading houses that
-run an account for your ships. Every item on sale has its own model: the
-yard opens a card with it turning and a BUY button. Fitted guns show on
-the hull, and the proton linacs and civil slipspace drives are new.
-
-**Stations.** Stations got four passes on their geometry: lifts that come
-for you and carry you, routes that miss the walls, and level pads in the
-tilted bays.
-
-**Saves:** a Brian career loads. On load, every ship (yours and the
-fleet's) is given her frame's slipspace drive, which jumps exactly as far
-as she always did on an S hull. Milfuel in the hold moves into a military
-drive's tank once, as far as it fits. Each entry below has its own Saves
-note where one was needed.
-
-Everything that changed is listed below, newest first.
 
 ### Fixed (2026-11-10, station routes: level onto the lifts where the art has room, and nothing through the walls)
 
