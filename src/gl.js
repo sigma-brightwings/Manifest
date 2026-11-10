@@ -2308,11 +2308,18 @@
     /* Shared with the fragment stage — one uniform, one upload. */
     'uniform float uNear;',
     'out vec3 vNrm; out vec3 vCol; out float vEmis; out vec3 vRel;',
+    /* Where on the model this is, in its own frame (km from its origin),
+     * and which way the face looks there: the station's surface detail is
+     * laid out on these, so it is fixed to the metal and not the eye
+     * (SURF_GLSL, 2026-11-10). Kept above vAlpha: tear.test looks for
+     * vAlpha's line right before TEAR_GLSL. */
+    'out vec3 vLoc; out vec3 vLN;',
     'out float vAlpha;',
     TEAR_GLSL,
     'void main() {',
     '  vec3 rel = uModelRel + uRot * (aPos * uScale);',
     '  vNrm = uRot * aNrm; vCol = aCol; vEmis = aEmis; vRel = rel;',
+    '  vLoc = aPos * uScale; vLN = aNrm;',
     '  vAlpha = aAlpha;',
     /* A station or ship behind a tear is lensed like the planets are
      * (Astra, 2026-10-21: "I do want the thing to lens planets and stations
@@ -2375,11 +2382,184 @@
     '}'
   ].join('\n');
 
+  /* ---- A STATION'S SURFACE, PER PIXEL (2026-11-10) -------------------------
+   * Astra: "texture the interior of the space ports, to make them feel more
+   * alive, as well as the exterior", and of the two ways offered, "Option 1
+   * is the right start; I can always edit the textures later".
+   *
+   * Option 1 is this: detail worked out here from where a pixel is on the
+   * model and which way its face looks, with no UVs and no images, because
+   * the station art carries neither (glb2hulls keeps one colour a face) and
+   * five of the models cannot be re-exported to get them. Everything is
+   * laid out in metres in the model's own frame (vLoc), on the plane the
+   * face is most nearly in (z is up in a station model), so a panel is the
+   * same size on every station and stays put on the metal as you move.
+   *
+   *   - PLATING: panels, smaller and closer indoors, their seams drawn
+   *     dark; each panel a shade lighter or darker than its neighbours.
+   *   - WEAR: grime in blotches, and streaks running down the walls; scuffs
+   *     on the decks. The fleet keeps hers clean.
+   *   - RIVETS at the panel corners, indoors and close to.
+   *   - DECKS indoors: a fine grating, and painted lane lines every few
+   *     panels.
+   *   - WINDOWS outside: rows of them on the walls, a few lit, warm or cool.
+   *   - LIFE indoors: status lamps on the walls, some steady, some blinking
+   *     on the station's own clock.
+   *
+   * Seeded per station (uSurf.y, from her id), so a station looks the same
+   * every visit and two stations of one model do not look stamped out.
+   * Every feature fades out once it is smaller than a couple of pixels, so
+   * a station far off is the clean silhouette it was and nothing shimmers.
+   * Self-lit faces (the art's own lamps and strips) are left alone.
+   *
+   * Room for her images later: each feature is its own term below, so a
+   * tileable texture for one surface class can replace that term without
+   * touching the rest. */
+  var SURF_GLSL = [
+    'uniform vec4 uSurf;',        // on (0/1), seed, style (0 civil, 1 outlaw, 2 fleet), unused
+    'uniform float uSurfT;',      // seconds, for the lamps that blink
+    'float sh1(vec2 p) {',
+    '  p = fract(p * vec2(0.1031, 0.1030));',
+    '  p += dot(p, p.yx + 33.33);',
+    '  return fract((p.x + p.y) * p.x);',
+    '}',
+    'float vnoise(vec2 p) {',
+    '  vec2 i = floor(p), f = fract(p);',
+    '  vec2 u = f * f * (3.0 - 2.0 * f);',
+    '  return mix(mix(sh1(i), sh1(i + vec2(1.0, 0.0)), u.x),',
+    '             mix(sh1(i + vec2(0.0, 1.0)), sh1(i + vec2(1.0, 1.0)), u.x), u.y);',
+    '}',
+    /* How much of a line of half-width w (m) covers a pixel d m from it,
+     * smoothed over the pixel's own footprint fw (m). */
+    'float lineAA(float d, float w, float fw) { return 1.0 - smoothstep(w - fw, w + fw, d); }',
+    /* `p` metres in the model frame, `n` its face normal turned to the eye,
+     * `ind` indoors 0..1. Changes `base` in place and returns light the
+     * surface gives off (windows, lamps). */
+    'vec3 surfDetail(vec3 p, vec3 n, float ind, float seed, float style, float t, inout vec3 base) {',
+    '  vec3 em = vec3(0.0);',
+    '  vec3 an = abs(n);',
+    '  vec2 uv; float isFloor = 0.0, isWall = 0.0;',
+    '  if (an.z >= an.x && an.z >= an.y) { uv = p.xy; isFloor = n.z > 0.0 ? 1.0 : 0.0; }',
+    '  else if (an.x >= an.y) { uv = vec2(p.y, p.z); isWall = 1.0; }',
+    '  else { uv = vec2(p.x, p.z); isWall = 1.0; }',
+    '  float fw = max(length(fwidth(uv)), 1e-4);',        // metres a pixel
+    /* PLATING: big modules, each split by its own hash into 1 to 3 plates
+     * a side, so the metal reads as plating and not as tiles. A module's
+     * joint is heavier than a plate's seam, and both go once they would be
+     * fewer than a dozen pixels apart. */
+    '  vec2 S = mix(vec2(8.0, 5.0), vec2(2.6, 1.8), ind);',
+    '  if (isWall < 0.5) S = mix(vec2(9.0), vec2(2.2), ind);',
+    '  vec2 B = S * 3.0;',
+    '  vec2 qb = uv / B, cb = floor(qb), fb = fract(qb);',
+    '  float hb = sh1(cb + seed * 0.37);',
+    '  vec2 div = vec2(1.0 + floor(hb * 3.0), 1.0 + floor(fract(hb * 7.13) * 3.0));',
+    '  vec2 Ss = B / div;',
+    '  vec2 qs = fb * div, cs = floor(qs), f = fract(qs);',
+    '  vec2 cell = cb * 4.0 + cs;',
+    '  vec2 dE = min(f, 1.0 - f) * Ss, dB = min(fb, 1.0 - fb) * B;',
+    '  float vSub = 1.0 - smoothstep(0.05, 0.12, fw / min(Ss.x, Ss.y));',
+    '  float vBig = 1.0 - smoothstep(0.03, 0.08, fw / min(B.x, B.y));',
+    '  float sw = mix(0.08, 0.03, ind);',
+    '  float seam = max(max(lineAA(dE.x, sw, fw), lineAA(dE.y, sw, fw)) * 0.26 * vSub,',
+    '                   max(lineAA(dB.x, sw * 1.8, fw), lineAA(dB.y, sw * 1.8, fw)) * 0.45 * vBig);',
+    '  float h = sh1(cell + seed), h2 = sh1(cell * 1.7 + seed + 19.1);',
+    /* Each plate a shade off its neighbours, and now and then one replaced
+     * and a clear shade lighter or darker than the rest. */
+    '  float tone = 1.0 + (h - 0.5) * mix(0.10, 0.08, ind) * vSub;',
+    '  if (h2 > 0.94) tone *= mix(1.0, (h > 0.5 ? 1.13 : 0.87), vSub);',
+    /* WEAR, in blotches and in streaks down the walls, faded once it is
+     * finer than the pixels showing it */
+    '  float gVis = 1.0 - smoothstep(0.6, 2.5, fw);',
+    '  float g = vnoise(uv * 0.11 + seed) * 0.6 + vnoise(uv * 0.37 - seed) * 0.4;',
+    '  float streak = isWall * vnoise(vec2(uv.x * 0.9, uv.y * 0.06) + seed * 1.7);',
+    '  float grime = (smoothstep(0.48, 0.95, g) * 0.20 + smoothstep(0.58, 1.0, streak) * 0.14) * gVis;',
+    '  if (isFloor > 0.5) grime += ind * 0.07 * vnoise(uv * 1.7 + seed) * vSub;',
+    '  if (style > 1.5) grime *= 0.35;',
+    '  float mult = tone * (1.0 - grime) * (1.0 - seam);',
+    '  float panelVis = vSub;',
+    /* RIVETS at the plate corners, indoors and close */
+    '  float rivVis = ind * (1.0 - smoothstep(0.015, 0.05, fw));',
+    '  if (rivVis > 0.0) {',
+    '    float rr = length(dE - vec2(0.18));',
+    '    mult *= 1.0 - 0.30 * rivVis * lineAA(rr, 0.04, fw);',
+    '  }',
+    /* DECKS */
+    '  if (isFloor > 0.5 && ind > 0.5) {',
+    '    float gv = 1.0 - smoothstep(0.02, 0.08, fw);',
+    '    vec2 gq = fract(uv / 0.6) * 0.6, gd = min(gq, 0.6 - gq);',
+    '    mult *= 1.0 - 0.22 * gv * max(lineAA(gd.x, 0.02, fw), lineAA(gd.y, 0.02, fw));',
+    '    float lane = step(3.5, mod(cb.x + floor(seed), 4.0)) * lineAA(abs(fb.x - 0.5) * B.x, 0.16, fw);',
+    '    vec3 paint = style > 0.5 && style < 1.5 ? vec3(0.78, 0.12, 0.10) : vec3(0.86, 0.66, 0.14);',
+    '    base = mix(base, paint, lane * 0.55 * panelVis);',
+    '  }',
+    '  base *= mult;',
+    /* WINDOWS, outside, in every third row of panels */
+    '  if (ind < 0.5 && isWall > 0.5) {',
+    '    float winVis = 1.0 - smoothstep(0.12, 0.35, fw);',
+    '    if (winVis > 0.0 && mod(floor(uv.y / S.y), 3.0) == 1.0 && hb > 0.25) {',
+    '      vec2 wq = uv / vec2(1.6, 1.1), wc = floor(wq), wf = fract(wq);',
+    '      float inWin = step(0.15, wf.x) * step(wf.x, 0.85) * step(0.22, wf.y) * step(wf.y, 0.78);',
+    '      float dens = style > 1.5 ? 0.22 : (style > 0.5 ? 0.08 : 0.16);',
+    '      float lit = step(sh1(wc + seed * 3.1), dens);',
+    '      vec3 wc1 = style > 0.5 && style < 1.5 ? vec3(1.0, 0.45, 0.25)',
+    '               : (sh1(wc + 7.7) < 0.5 ? vec3(1.0, 0.82, 0.55) : vec3(0.65, 0.85, 1.0));',
+    '      base = mix(base, base * 0.35, inWin * winVis);',
+    '      em += wc1 * 0.95 * lit * inWin * winVis;',
+    '    }',
+    '  }',
+    /* TRIM LIGHT, indoors: now and then a module's lower joint carries a
+     * strip of light along it, cyan or amber (the Syndicate's red), the
+     * neon the halls are dressed in. */
+    '  if (ind > 0.5 && isWall > 0.5 && vBig > 0.0) {',
+    '    float hs = sh1(cb * 1.31 + seed * 2.9);',
+    '    if (hs < 0.16) {',
+    '      float strip = lineAA(abs(fb.y * B.y - 0.35), 0.06, fw) * vBig;',
+    '      vec3 sc = style > 0.5 && style < 1.5 ? vec3(1.0, 0.18, 0.12) : (hs < 0.08 ? vec3(0.25, 0.85, 1.0) : vec3(1.0, 0.62, 0.22));',
+    '      em += sc * 0.9 * strip;',
+    '    }',
+    '  }',
+    /* STATUS LAMPS, indoors on the walls: a few to a hall, big enough to
+     * be seen across it */
+    '  if (ind > 0.5 && isWall > 0.5) {',
+    '    float lv = 1.0 - smoothstep(0.08, 0.25, fw);',
+    '    if (lv > 0.0 && h2 < 0.09) {',
+    '      vec2 lp = vec2(0.82, 0.86) * Ss;',
+    '      float led = lineAA(length(f * Ss - lp), 0.12, fw);',
+    '      float k = sh1(cell + seed * 5.3);',
+    '      vec3 lc = style > 0.5 && style < 1.5 ? vec3(1.0, 0.15, 0.1)',
+    '              : (k < 0.5 ? vec3(0.25, 1.0, 0.45) : (k < 0.8 ? vec3(1.0, 0.72, 0.2) : vec3(1.0, 0.22, 0.18)));',
+    '      float blink = k > 0.6 ? step(0.5, fract(t * (0.5 + k) + h)) : 1.0;',
+    '      em += lc * 1.3 * led * lv * blink;',
+    '    }',
+    '  }',
+    '  return em;',
+    '}',
+    /* A SELF-LIT FACE that is a floor or a ceiling panel (the art lights its
+     * hangar decks and ceilings with great lit slabs) keeps its light but
+     * shows its module joints and a plate's shade, so a lit deck reads as a
+     * deck. Small lamps are left as they are: their joints fall outside. */
+    'vec3 surfLit(vec3 p, vec3 n, float ind, float seed, vec3 col) {',
+    '  vec3 an = abs(n);',
+    '  if (!(an.z >= an.x && an.z >= an.y)) return col;',
+    '  vec2 uv = p.xy;',
+    '  float fw = max(length(fwidth(uv)), 1e-4);',
+    '  vec2 B = mix(vec2(27.0), vec2(6.6), ind);',
+    '  vec2 qb = uv / B, cb = floor(qb), fb = fract(qb);',
+    '  vec2 dB = min(fb, 1.0 - fb) * B;',
+    '  float vBig = 1.0 - smoothstep(0.03, 0.08, fw / min(B.x, B.y));',
+    '  float seam = max(lineAA(dB.x, 0.06, fw), lineAA(dB.y, 0.06, fw)) * 0.5 * vBig;',
+    '  float tone = 1.0 + (sh1(cb + seed) - 0.5) * 0.10 * vBig;',
+    '  return col * tone * (1.0 - seam);',
+    '}'
+  ].join('\n');
+
   var FRAG_MESH = [
     '#version 300 es',
     'precision highp float;',
     'in vec3 vNrm; in vec3 vCol; in float vEmis; in vec3 vRel;',
     'in float vAlpha;',
+    'in vec3 vLoc; in vec3 vLN;',
+    SURF_GLSL,
     'uniform vec3 uSunDir;',
     'uniform vec3 uFwd;',
     'uniform float uNear, uInvLogRange;',
@@ -2546,7 +2726,8 @@
      * to face the camera before it is lit. A mis-wound triangle shades
      * correctly instead of leaving a hole. */
     '  vec3 toCam = normalize(-vRel);',
-    '  if (dot(n, toCam) < 0.0) n = -n;',
+    '  float nSign = 1.0;',
+    '  if (dot(n, toCam) < 0.0) { n = -n; nSign = -1.0; }',
     '  float lam = max(0.0, dot(n, uSunDir));',
     /* The same two constants paintMesh uses, so a hull looks like itself
      * whichever renderer drew it: 1.15 flat for self-lit faces, and
@@ -2583,6 +2764,14 @@
     '    vec3 pc = (pl > 0.62 ? uTrim : uPaint.rgb) * (0.55 + 0.9 * pl);',
     '    base = mix(vCol, min(pc, vec3(1.0)), uPaint.w);',
     '  }',
+    /* The station's surface (SURF_GLSL): plating, wear, decks, windows and
+     * lamps, on her own metal, before it is lit. Off for everything that is
+     * not a station (uSurf.x 0) and for the art's own lamps. */
+    '  vec3 sEm = vec3(0.0);',
+    '  if (uSurf.x > 0.5 && vEmis < 0.5) {',
+    '    vec3 ln = normalize(vLN) * nSign;',
+    '    sEm = surfDetail(vLoc * 1000.0, ln, min(uIndoors, 1.0), uSurf.y, uSurf.z, uSurfT, base);',
+    '  }',
     '  vec3 lit = base * (0.26 + 0.70 * lam * uSunK);',
     /* SKY FILL (2026-11-02): under a daylit ground sky the shade side of a
      * structure is lit by the sky, not black - a sea platform's domes,
@@ -2603,8 +2792,14 @@
      * CABIN_SEEN_GLOW). At exactly 1, every room is lit as it was. */
     '  float ind = min(uIndoors, 1.0);',
     '  vec3 dim = base * (0.10 + 0.55 * lamp) * max(1.0, uIndoors);',
-    '  vec3 c = vEmis > 0.5 ? vCol * 1.15 : mix(lit, dim, ind);',
+    '  vec3 litCol = vCol;',
+    '  if (uSurf.x > 0.5 && vEmis > 0.5) litCol = surfLit(vLoc * 1000.0, normalize(vLN) * nSign, ind, uSurf.y, vCol);',
+    '  vec3 c = vEmis > 0.5 ? litCol * 1.15 : mix(lit, dim, ind);',
     '  float glow = vEmis > 0.5 ? mix(1.0, 0.28, ind) : 0.0;',
+    /* Its windows and lamps are its own light: added, and fed to the glow
+     * pass a little, as the art's own lamps are. */
+    '  c += sEm;',
+    '  glow = max(glow, min(1.0, dot(sEm, vec3(0.33)) * mix(0.8, 0.35, ind)));',
     /* THE ROOM STEPS BACK WHILE YOU LOOK THROUGH IT (2026-10-11). With the
      * keyhole open the subject is the cut and the ship at the bottom of
      * it, and the hangar's neon strips — every one a full-strength lamp —
@@ -3115,7 +3310,7 @@
                                         'uAlpha', 'uCut', 'uCutR', 'uCutRim',
                                         'uCutBand', 'uCutUp', 'uCutCap',
                                         'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
-                                        'uPaint', 'uTrim',
+                                        'uPaint', 'uTrim', 'uSurf', 'uSurfT',
                                         'uTear', 'uTearK', 'uTearN']);
     } catch (e) {
       if (global.console) console.error(e.message);
@@ -3689,6 +3884,15 @@
    * platform's domes, render.js drawSeaDomes); 0 for everything else. */
   var sheenFlag = 0;
   GL.setSheen = function (k) { sheenFlag = k > 0 ? k : 0; };
+  /* A STATION'S SURFACE DETAIL (SURF_GLSL), for the meshes queued while it
+   * is set: { seed, style } or null. Set and cleared by main.js round one
+   * station's meshes, exactly as setIndoors and the accent are, so a ship
+   * berthed in her and every other station keep their own look. */
+  var surfFlag = null;
+  var SURF_STYLE = { outlaw: 1, fleet: 2 };
+  GL.setSurface = function (s) {
+    surfFlag = s ? { seed: (s.seed || 0) % 1000, style: SURF_STYLE[s.style] || 0 } : null;
+  };
   GL.setIndoors = function (on) { indoorsFlag = !on ? 0 : (typeof on === 'number' ? on : 1); };
 
   /* THE CUTAWAY, for everything queued until it is cleared — the same
@@ -3756,6 +3960,7 @@
                       * them is being looked at from within. */
                      indoors: indoorsFlag,
                      sheen: sheenFlag,
+                     surf: surfFlag,
                      /* Relative to the eye here, in doubles, for the same
                       * reason `rel` is. */
                      box: (cutFlag && cutFlag.box) ? cutFlag.box : null,
@@ -4651,6 +4856,11 @@
       }
       gl.uniform1f(meshUni.uIndoors, m.indoors);
       gl.uniform1f(meshUni.uSheen, m.sheen || 0);
+      if (m.surf) gl.uniform4f(meshUni.uSurf, 1, m.surf.seed, m.surf.style, 0);
+      else gl.uniform4f(meshUni.uSurf, 0, 0, 0, 0);
+      /* Wall-clock seconds, wrapped so float32 keeps them exact enough for
+       * a lamp to blink on time. */
+      gl.uniform1f(meshUni.uSurfT, ((typeof performance !== 'undefined' ? performance.now() : Date.now()) / 1000) % 3600);
       var fill = groundSky && groundSky.fill;
       gl.uniform3f(meshUni.uSkyFill, fill ? fill[0] : 0, fill ? fill[1] : 0, fill ? fill[2] : 0);
       gl.uniform1f(meshUni.uSunK, (groundSky && groundSky.over) ? groundSky.over.sunK : 1);

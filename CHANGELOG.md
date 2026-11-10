@@ -40,6 +40,48 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-10, stations get a surface: plating, wear, decks, windows and lamps)
+
+Astra: "texture the interior of the space ports, to make them feel more
+alive, as well as the exterior." Of the two ways offered she chose detail
+worked out per pixel on the GPU: "Option 1 is the right start; I can
+always edit the textures later."
+
+- **No UVs and no images needed** (`gl.js` SURF_GLSL). The station art
+  carries one colour a face, and five of the models can't be re-exported.
+  So the detail is laid out in metres on the model's own frame, on the
+  plane each face is most nearly in: a plate is the same size on every
+  station and stays put on the metal as you move.
+- **Plating.** Big modules, each split by its own hash into one to three
+  plates a side. Module joints are heavier than plate seams. Each plate is
+  a shade off its neighbours, and now and then one is replaced, a clear
+  shade lighter or darker. Smaller and closer together indoors.
+- **Wear.** Grime in blotches, streaks running down the walls, scuffs on
+  the decks. The fleet's docks keep theirs clean.
+- **Indoors:** rivets at the plate corners close to; a fine grating and
+  painted lane lines on the decks (red on Syndicate docks); status lamps on
+  the walls, some steady and some blinking on the station's clock; and now
+  and then a strip of cyan or amber light along a module's lower joint
+  (red at the Syndicate's).
+- **The lit decks** (the art's great self-lit floor and ceiling slabs) keep
+  their light but show their module joints and plate shades, so a lit deck
+  reads as a deck.
+- **Outside:** rows of windows on the walls, some lit, warm or cool. The
+  fleet's are busier and the Syndicate's fewer and red-orange.
+- **Seeded per station** from her id, so she looks the same every visit and
+  two stations of one model don't look stamped out. Every feature fades out
+  once it's smaller than a couple of pixels, so a station seen from afar is
+  the clean silhouette it was and nothing shimmers. Each feature is its own
+  term in the shader, so a tileable image of Astra's can later replace one
+  surface class's pattern without touching the rest.
+- **Where:** a station's model, spinning part, interior and outworks
+  (`Render.setSurface`, set and cleared round them in main.js like the
+  accent). Ships, cockpits and everything else are unchanged. The 2D
+  painter has no per-pixel stage and draws stations as before.
+- **Cost:** none measurable in the browser at Halden Yard, inside or out
+  (the frame held at its 33 ms either way).
+- **Saves:** unaffected.
+
 ### Fixed (2026-11-10, the Cricket build: a test that couldn't see packed models)
 
 Cricket's tag went up but neither the Windows nor the Linux build was made.

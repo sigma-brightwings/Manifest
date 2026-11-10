@@ -4549,6 +4549,20 @@
     }
   }
 
+  /* See gl.js setSurface (2026-11-10): a station's own surface detail for
+   * the meshes queued while it is set. The seed is from her id, so she
+   * looks the same every visit; `style` is her skin ('outlaw', 'fleet' or
+   * none). The 2D painter has no per-pixel stage and draws her as before. */
+  function surfaceSeed(id) {
+    var s = String(id || ''), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return (h % 997) + 0.5;
+  }
+  function setSurface(port, style) {
+    if (!global.GLWorld || !global.GLWorld.setSurface) return;
+    global.GLWorld.setSurface(port ? { seed: surfaceSeed(port.id), style: style || null } : null);
+  }
+
   /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
    * it has no per-pixel stage to do it in — which is why main.js only asks
    * for a cutaway when the GPU layer is live and keeps the old boom clamp
@@ -18319,7 +18333,7 @@
     drawStationInterior: drawStationInterior,
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
-    setIndoors: setIndoors,
+    setIndoors: setIndoors, setSurface: setSurface, surfaceSeed: surfaceSeed,
     setCutaway: setCutaway,
     standTopKm: standTopKm,
     drawCutGreebles: drawCutGreebles,

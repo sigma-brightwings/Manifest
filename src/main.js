@@ -18091,6 +18091,10 @@
           var skin = (owner && owner.outlaw) ? 'outlaw'
                    : (Combat.fleetPort && Combat.fleetPort(b)) ? 'fleet' : null;
           Render.setAccent(owner && owner.color, skin);
+          /* And her own surface: plating, wear, decks, windows and lamps
+           * (gl.js SURF_GLSL, 2026-11-10), seeded from her id and worn in
+           * her skin. Cleared with the accent below. */
+          if (Render.setSurface) Render.setSurface(b, skin);
           /* ONE COMPARTMENT WHEN YOU ARE IN ONE. Astra's design: every
            * section has a blast door, so the renderer only ever draws the
            * section around the ship. From outside, `null` — the whole hull
@@ -18203,6 +18207,7 @@
           }
           if (roomLit) Render.setIndoors(false);
           Render.setAccent(null);
+          if (Render.setSurface) Render.setSurface(null);
           /* Beacons and approach strings on an orbital dock — see
            * Render.drawStationLights. From outside only, and early: like
            * the pad lamps, a station's lights are the first thing about it
@@ -18215,8 +18220,10 @@
           /* And the outworks round it — same tier, same reasoning. */
           if (!b.surface && !indoors && rpx > 6 && tier === 'near' && Render.drawStationOutworks) {
             Render.setAccent(owner && owner.color, skin);
+            if (Render.setSurface) Render.setSurface(b, skin);
             Render.drawStationOutworks(ctx, cam, frame, b, model, b.radius, sun);
             Render.setAccent(null);
+            if (Render.setSurface) Render.setSurface(null);
           }
           /* And the small craft that work round it — Render.drawStationTraffic.
            * Sim time, not wall clock: they are on rails through the world,
