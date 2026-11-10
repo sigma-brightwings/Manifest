@@ -38,6 +38,20 @@ before they update.
 
 ---
 
+## Unreleased
+
+### Fixed (2026-11-10, the Cricket build: a test that couldn't see packed models)
+
+Cricket's tag went up but neither the Windows nor the Linux build was made.
+One check in `ground.test.js` ("every ground site model, the shed and the
+tunnel fit inside INLAND_FOOT") read only the plain `src/ports/*site*.js`,
+which are gitignored working copies. A fresh checkout, as on the build
+machines, holds only the `.js.gz`, so the check found no models and failed.
+It now reads the packed copy, which is what ships, as `city-sites.test.js`
+already did. The game itself was never affected.
+
+- **Saves:** unaffected.
+
 ## 1.3.0-beta "Cricket" (2026-11-10)
 
 Named for Cricket, a pigeon from the rescue. Everything below, down to
