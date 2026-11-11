@@ -54,6 +54,8 @@
       fit: fit,
       cargo: cargo,
       fuel: ship.fuel, thrusterFuel: ship.thrusterFuel,
+      /* Her milfuel tank goes with her (2026-11-09, Slip.milFuelCap). */
+      milFuel: ship.milFuel || 0,
       hullHp: ship.hullHp,
       port: portId || null,
       /* THE PEOPLE STAY WITH THE SHIP. They signed on to a hull, not to a

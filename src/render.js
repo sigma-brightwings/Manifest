@@ -967,13 +967,32 @@
    * work rather than with a traffic class, and assigning it to something
    * that flies a timetable would be worse than leaving it unused. */
 
-  var LIB_CACHE = {};
+  var LIB_CACHE = {}, BARE_CACHE = {};
+  /* A library hull as NPCs and the showroom see it: the bare hull with a
+   * stock gun on every mount its art has (see armedMesh). The player's own
+   * ship is drawn with what she has actually fitted (hullPreviewMesh). */
   function libHull(id) {
+    if (LIB_CACHE[id]) return LIB_CACHE[id];
+    var bare = libHullBare(id);
+    if (!bare) return null;
+    var n = bare.mounts ? bare.mounts.length : 0, guns = [];
+    for (var i = 0; i < n; i++) guns.push(stockGun(id));
+    LIB_CACHE[id] = n ? armedMesh(bare, guns) : bare;
+    return LIB_CACHE[id];
+  }
+  function libHullBare(id) {
     var lib = global.HullLib;
     if (!lib || !lib[id]) return null;
-    if (LIB_CACHE[id]) return LIB_CACHE[id];
+    if (BARE_CACHE[id]) return BARE_CACHE[id];
     var src = lib[id];
-    var mesh = { v: src.v, f: src.f, c: [] };
+    var mesh = { v: src.v, f: src.f, c: [], libId: id };
+    /* Where the guns go (glb2hulls GUNPART_RE): the modelled guns are no
+     * longer part of the hull, and these are the places they were. */
+    if (src.mounts && src.mounts.length) mesh.mounts = src.mounts;
+    /* The model's whole extent as authored, guns and gear included - the
+     * box hullSpan reports and every berth, clearance and collision check
+     * is sized against. armedMesh keeps every gun inside it. */
+    if (src.span) mesh.span = src.span;
     for (var i = 0; i < src.ci.length; i++) mesh.c.push(src.pal[src.ci[i]]);
     /* The parts that move, hung off the hull they belong to. Each carries
      * its own small mesh plus the pivot and axis it turns about, and the
@@ -996,8 +1015,169 @@
         return { x: e[0], y: e[1], z: e[2], r: e[3] };
       });
     }
-    LIB_CACHE[id] = mesh;
+    BARE_CACHE[id] = mesh;
     return mesh;
+  }
+
+  /* ---- GUNS ON THE HULL (2026-11-09) --------------------------------------
+   * Astra: the hardpoints "can be removed on all ships and replaced with
+   * hardpoint acceptor slots, which will each accept one of the new weapon
+   * models and display it on the exterior of the ship."
+   *
+   * A hull's art had its guns modelled in; glb2hulls now leaves them out
+   * and records a MOUNT where each one was (at, to, len, mz - see the tool).
+   * This hangs a weapon's own model (src/itemmodels.js, the same model the
+   * yard card turns) on each mount: its base plate against the hull, its
+   * barrel along the hull's nose, sized against the gun the art had there.
+   *
+   * GUN_REF_LEN is how long, in the weapon models' own units, a gun is that
+   * exactly fills the length of the one it replaces. A middling gun (the
+   * photon intermittent, 1.87) about does; a pulse laser comes out shorter
+   * and a mass driver longer, which is the point of their models being
+   * different lengths. */
+  var GUN_REF_LEN = 2.0;
+  var ARMED_CACHE = {}, ARMED_KEYS = [];
+  var ACCEPTOR_COL = '#4a535e', ACCEPTOR_LIT = '!#c98a2e';
+
+  /* The gun an NPC of this model carries in the art's place: one look per
+   * family, so a navy cruiser and a tug do not wear the same laser. */
+  function stockGun(libId) {
+    var fam = String(libId || '').replace(/-[sml]$/, '');
+    var by = { navy: 'mupulse', police: 'phbeam', enforcer: 'syndbeam', enforcer_heavy: 'mubeam',
+               fighter: 'pipulse', courier: 'phint', runner: 'greyphint' };
+    return by[fam] || 'phpulse';
+  }
+
+  /* Mounts for a hull whose art carried no guns (capitals, carriers, the
+   * bulk hauler, the runner): along her belly ahead of the middle, in pairs
+   * stepping outboard, each set against the underside of the hull where it
+   * is. Measured off the mesh once and kept. */
+  function synthMounts(bare, n) {
+    bare._synth = bare._synth || [];
+    var out = bare._synth;
+    while (out.length < n) {
+      var k = out.length, side = (k % 2) ? -1 : 1, rank = Math.floor(k / 2);
+      var x = (n === 1 ? 0 : side * (0.05 + 0.06 * rank)), z = 0.22 - 0.04 * rank, low = Infinity;
+      for (var i = 0; i < bare.v.length; i++) {
+        var p = bare.v[i];
+        if (Math.abs(p[0] - x) < 0.03 && Math.abs(p[2] - z) < 0.05 && p[1] < low) low = p[1];
+      }
+      if (!isFinite(low)) low = -0.05;
+      out.push({ at: [x, low, z], to: [0, 1], len: 0.1, mz: [x, low - 0.03, z + 0.08], synth: true });
+    }
+    return out.slice(0, n);
+  }
+
+  /* Weapon frame -> hull frame for a mount: the weapon's down (-y, its base
+   * plate) turned to face the hull (`to`), its nose (+z) kept forward. */
+  function mountRot(to, q) {
+    if (to[1] > 0) return [-q[0], -q[1], q[2]];        // hull above: hang it upside down
+    if (to[0] > 0) return [-q[1], q[0], q[2]];         // hull to starboard
+    if (to[0] < 0) return [q[1], -q[0], q[2]];         // hull to port
+    return [q[0], q[1], q[2]];                         // hull below: stand it up
+  }
+
+  /* HOW BIG A GUN IS ON THIS MOUNT. Sized against the gun the art had
+   * there (mount.len / GUN_REF_LEN), and then - Astra, 2026-11-09: "rescale
+   * weapons so that existing collision boxes still work" - shrunk until it
+   * fits inside the hull's own box, the extent the art was normalised to
+   * (`span`, centred on the origin). That box is what hullSpan reports, and
+   * berths, the bay's clearance, docking and the ships' collision all size
+   * a hull by it, so a gun that never leaves it changes none of them. A
+   * mass driver under a courier's chin is the case that bites: at the
+   * middling size it would reach a fifth of her length past her nose, so
+   * on her it comes out a little over half that size, while on a freighter
+   * it fits at full size. Measured over every vertex of the gun's hull
+   * copy, in the hull's frame, once per gun per mount (armedMesh caches). */
+  function gunScale(bare, mt, at, gun) {
+    var s0 = mt.len / GUN_REF_LEN, sp = bare.span, k = 1;
+    if (!sp) return s0;
+    var ft = gun.foot;
+    for (var i = 0; i < gun.v.length; i++) {
+      var q = mountRot(mt.to, [(gun.v[i][0] - ft[0]) * s0, (gun.v[i][1] - ft[1]) * s0, (gun.v[i][2] - ft[2]) * s0]);
+      for (var a = 0; a < 3; a++) {
+        var hi = sp[a] / 2, lo = -sp[a] / 2;
+        if (q[a] > 1e-9 && at[a] + q[a] > hi) k = Math.min(k, Math.max(0, hi - at[a]) / q[a]);
+        if (q[a] < -1e-9 && at[a] + q[a] < lo) k = Math.min(k, Math.max(0, at[a] - lo) / -q[a]);
+      }
+    }
+    return s0 * k;
+  }
+
+  /* `guns` is one entry per hardpoint, in slot order: an item id, or null
+   * for an empty hardpoint, which shows its acceptor plate. More hardpoints
+   * than the art has mounts wrap round and step outboard (as combat.js's
+   * muzzles always did); fewer leave the spare mounts bare. Returns a new
+   * mesh with everything the hull carries (gear, engines, ...) and
+   * `_muzzles`: per hardpoint, the barrel tips of what is on it, in the
+   * hull's normalised frame. Cached by hull and loadout - gl.js keeps its
+   * buffers on the mesh, so the same loadout must be the same object. */
+  function armedMesh(bare, guns) {
+    if (!bare || !bare.v) return bare;
+    var key = (bare.libId || 'hull') + '|' + guns.map(function (g) { return g || '-'; }).join(',');
+    if (ARMED_CACHE[key]) return ARMED_CACHE[key];
+    var mounts = bare.mounts && bare.mounts.length ? bare.mounts : synthMounts(bare, guns.length);
+    var m = {};
+    for (var p in bare) if (p.charAt(0) !== '_' && p !== 'v' && p !== 'f' && p !== 'c') m[p] = bare[p];
+    m.v = bare.v.slice(); m.f = bare.f.slice(); m.c = bare.c ? bare.c.slice() : [];
+    while (m.c.length < m.f.length) m.c.push(null);
+    m._muzzles = [];
+    for (var h = 0; h < guns.length; h++) {
+      if (!mounts.length) { m._muzzles.push(null); continue; }
+      var mt = mounts[h % mounts.length], wrap = Math.floor(h / mounts.length);
+      var at = [mt.at[0] * (1 + 0.5 * wrap), mt.at[1], mt.at[2]];
+      /* A wrapped mount stepped outboard stays inside her box. */
+      if (bare.span) at[0] = Math.max(-0.45 * bare.span[0], Math.min(0.45 * bare.span[0], at[0]));
+      var gun = guns[h] ? itemMesh(guns[h], true) : null;
+      if (!gun || !gun.foot) {
+        /* An empty acceptor: a plate where a gun bolts on, with a lit
+         * socket, so a bare hardpoint reads as a place for something. */
+        var L = mt.len, s0 = mt.to[1] > 0 ? -1 : 1;
+        var plate = box(0.11 * L, 0.025 * L, 0.2 * L);
+        merge(m, plate, at[0], at[1] + s0 * 0.025 * L, at[2], 1, ACCEPTOR_COL);
+        merge(m, box(0.04 * L, 0.012 * L, 0.04 * L), at[0], at[1] + s0 * 0.055 * L, at[2], 1, ACCEPTOR_LIT);
+        m._muzzles.push([[at[0], at[1] + s0 * 0.06 * L, at[2] + 0.1 * L]]);
+        continue;
+      }
+      var s = gunScale(bare, mt, at, gun), ft = gun.foot, base = m.v.length;
+      for (var i = 0; i < gun.v.length; i++) {
+        var q = mountRot(mt.to, [(gun.v[i][0] - ft[0]) * s, (gun.v[i][1] - ft[1]) * s, (gun.v[i][2] - ft[2]) * s]);
+        m.v.push([at[0] + q[0], at[1] + q[1], at[2] + q[2]]);
+      }
+      /* Every mountRot is a rotation, not a mirror, so no face is turned
+       * over and the windings stand as modelled. */
+      for (var j = 0; j < gun.f.length; j++) {
+        var fc = gun.f[j];
+        m.f.push([fc[0] + base, fc[1] + base, fc[2] + base]);
+        m.c.push(gun.c[j]);
+      }
+      m._muzzles.push((gun.muzzles || [[0, 0, gun.size[2] / 2]]).map(function (mz) {
+        var q2 = mountRot(mt.to, [(mz[0] - ft[0]) * s, (mz[1] - ft[1]) * s, (mz[2] - ft[2]) * s]);
+        return [at[0] + q2[0], at[1] + q2[1], at[2] + q2[2]];
+      }));
+    }
+    ARMED_CACHE[key] = m;
+    ARMED_KEYS.push(key);
+    /* Loadouts change at the yard, not every frame; a few dozen kept is
+     * every ship on screen and the ones you just sold. */
+    if (ARMED_KEYS.length > 96) delete ARMED_CACHE[ARMED_KEYS.shift()];
+    return m;
+  }
+
+  /* What a ship has on its hardpoints, in slot order (Combat's own order -
+   * the one fire groups and muzzles are keyed by): an equipment id when it
+   * is a gun, null when the hardpoint is empty or holds something that is
+   * not drawn as one. */
+  function hardpointGuns(ship) {
+    var C = global.Combat;
+    if (!C || !C.slotKeys || !ship) return [];
+    var keys = C.slotKeys(ship), fit = ship.fit || {}, out = [];
+    for (var i = 0; i < keys.length; i++) {
+      if (C.slotType(keys[i]) !== 'hardpoint') continue;
+      var id = fit[keys[i]], it = id && C.EQUIPMENT && C.EQUIPMENT[id];
+      out.push(it && (it.kind === 'gun' || it.slot === 'hardpoint') && itemKey(id) ? id : null);
+    }
+    return out;
   }
 
   function hullIds() {
@@ -1982,11 +2162,28 @@
    * how far its keel sits below its centre, in km. */
   var MOVER_RIDERS = [];
   function setMoverRiders(list) { MOVER_RIDERS = list || []; }
+  /* SCHEDULED CARS (2026-11-09). A car a transit has sent for (Sim's
+   * arrival pose `mover`: { node, s }) is drawn exactly where the schedule
+   * has it, along its own axis — it waits at her end before she reaches
+   * the door, carries her, and goes home after. Only cars nobody has sent
+   * for fall back to following a rider, as before. Astra: "elevator pad is
+   * at the top of the shaft when ship is being moved from inside the
+   * station to the launch pad. The elevator pad on the cargo lifts must be
+   * waiting for the ship by the time it gets there." */
+  var MOVER_STATES = {};
+  function setMoverStates(list) {
+    MOVER_STATES = {};
+    (list || []).forEach(function (m) { if (m && m.node && typeof m.s === 'number') MOVER_STATES[m.node] = m.s; });
+  }
 
-  /* Where along its run a car should be: under the first rider found inside
-   * its ride, else where the art left it. In model units along `axis`. */
+  /* Where along its run a car should be: where a transit has sent it, else
+   * under the first rider found inside its ride, else where the art left
+   * it. In model units along `axis`. */
   function moverPose(mv, frame, radiusKm) {
     if (!mv.axis || !(mv.range[1] - mv.range[0] > 1e-6)) return 0;
+    if (typeof MOVER_STATES[mv.node] === 'number') {
+      return Math.max(mv.range[0], Math.min(mv.range[1], MOVER_STATES[mv.node]));
+    }
     var ax = mv.axis, mid = mv.mid;
     var hx = (mv.max[0] - mv.min[0]) / 2, hy = (mv.max[1] - mv.min[1]) / 2, hz = (mv.max[2] - mv.min[2]) / 2;
     var halfAlong = Math.abs(ax[0]) * hx + Math.abs(ax[1]) * hy + Math.abs(ax[2]) * hz;
@@ -4352,6 +4549,53 @@
     }
   }
 
+  /* See gl.js setSurface (2026-11-10): a station's own surface detail for
+   * the meshes queued while it is set. The seed is from her id, so she
+   * looks the same every visit; `style` is her skin ('outlaw', 'fleet' or
+   * none). The 2D painter has no per-pixel stage and draws her as before. */
+  function surfaceSeed(id) {
+    var s = String(id || ''), h = 2166136261;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    return (h % 997) + 0.5;
+  }
+  /* `up` 'y' for the deck plans walked on foot (walk.js), which stand y up
+   * where the station art stands z up. */
+  function setSurface(port, style, up) {
+    if (!global.GLWorld || !global.GLWorld.setSurface) return;
+    global.GLWorld.setSurface(port ? { seed: surfaceSeed(port.id), style: style || null, up: up || null } : null);
+  }
+  /* SHIPS WEAR A SURFACE TOO (2026-11-10). Astra: texture "ship hulls,
+   * also", every ship, "outside and in". The station's plating, shrunk to
+   * the hull: a plate about a fourteenth of her length (1.2 m on the
+   * smallest, 6 m on a capital), seeded from her id so she wears the same
+   * plates every time, in her owner's livery - a Navy hull in armour plate,
+   * the Syndicate's and the pirates' worn harder. No windows (a hull has
+   * its own) and hatches and vents instead. Her rooms take it at their
+   * own metres. Ship meshes stand y up. Pushed and popped rather than set
+   * and cleared: a ship is drawn inside a station's own meshes (berthed in
+   * her) and must give the station's surface back after her. */
+  function shipSurfaceSkin(s) {
+    if (!s) return null;
+    if (s.faction === 'outlaw' || s.kind === 'pirate' || s.pirate) return 'outlaw';
+    if (s.kind === 'navy' || s.kind === 'police' || s.kind === 'capital') return 'fleet';
+    return null;
+  }
+  function pushShipSurface(s, lengthKm, inside) {
+    var G2 = global.GLWorld;
+    if (!G2 || !G2.setSurface || !G2.getSurface) return undefined;
+    var prev = G2.getSurface();
+    var Lm = (lengthKm > 0 ? lengthKm : 0.025) * 1000;
+    var plate = Math.max(1.2, Math.min(6, Lm / 14));
+    var base = (s && s._base) || s;
+    G2.setSurface({ seed: surfaceSeed((base && (base.id || base.name || base.hullId)) || 'ship'),
+                    style: shipSurfaceSkin(base), up: 'y', ship: true, k: inside ? 1 : 8 / plate });
+    return prev;
+  }
+  function popSurface(prev) {
+    var G2 = global.GLWorld;
+    if (G2 && G2.putSurface && prev !== undefined) G2.putSurface(prev);
+  }
+
   /* See gl.js setCutaway. The 2D painter cannot cut a hole in a wall —
    * it has no per-pixel stage to do it in — which is why main.js only asks
    * for a cutaway when the GPU layer is live and keeps the old boom clamp
@@ -5275,11 +5519,13 @@
       if (swapped) mesh = libHull(swapped);
     }
     mesh = mesh || shipMeshes()[kind] || shipMeshes().courier;
+    var prevS = pushShipSurface(ship || frame, lengthKm, false);
     if (!(gpuWorld() && global.GLWorld.queueMesh(cam, frame, mesh, lengthKm, sunDir))) {
       paintMesh(ctx, cam, frame, mesh, lengthKm, sunDir, tint);
     }
     drawHullGear(ctx, cam, frame, mesh, lengthKm, sunDir, tint,
                  gearTravelOf(ship || frame));
+    popSurface(prevS);
   }
 
   /* The player's own hull. A ship object already carries pos/fwd/up/right,
@@ -5334,6 +5580,9 @@
      * her frame at however far down it is. Only your own ship carries an
      * airlock state, so nobody else's belly is opened. */
     var ramp = (ship && ship.airlock && ship.hullId && !(opts && opts.fromBridge)) ? rampExterior(ship, mesh, L) : null;
+    /* Her surface, on everything of her outside (see pushShipSurface);
+     * her rooms through her windows take theirs in queueRoomsInPlace. */
+    var prevS = pushShipSurface(ship, L, false);
     if (ramp) {
       mesh = ramp.hull;
       /* With her rooms drawn in place (windows), the airlock box the bay
@@ -5368,6 +5617,7 @@
      * the way down and the first thing a pad touches — and giving them the
      * hull's re-entry glow would light them up before the nose. */
     drawHullGear(ctx, cam, ship, mesh, L, sunDir, tint, gearTravelOf(ship));
+    popSurface(prevS);
     if (win) queueRoomsInPlace(cam, ship, win, sunDir);
   }
 
@@ -5451,8 +5701,10 @@
     if (!G2 || !G2.queueMesh || !d.meshes || !d.meshes.room) return;
     var F = bridgeFrame(ship);
     setIndoors(CABIN_SEEN_GLOW);
+    var prevS = pushShipSurface(ship, 0, true);
     G2.queueMesh(cam, F, d.meshes.room, M, F.up, 0);
     if (d.meshes.fittings) G2.queueMesh(cam, F, d.meshes.fittings, M, F.up, 0);
+    popSurface(prevS);
     setIndoors(false);
     if (d.meshes.portals) G2.queueMesh(cam, F, d.meshes.portals, M, sunDir, 0, null, WINDOW_ALPHA);
   }
@@ -11133,6 +11385,32 @@
     }
     return true;
   }
+  /* THE WHOLE CROSS-SECTION, NOT FIVE LINES (2026-11-10). routeLegClear
+   * casts the centre and four edge lines, which is enough for a leg the
+   * router pulled taut through open hall, but a graph-paper leg runs ALONG
+   * the hall's walls, past every rib and conduit on them, and a thin one
+   * between the lines goes unseen. She is drawn wherever she actually is,
+   * turning on to the leg, so interiors.test catches it: spine-m b0/b4 on
+   * a 0.56-half-width line. So a leg the paper adds is judged on a grid
+   * across her: five across by four up. */
+  var DENSE_ACROSS = [-1, -0.5, 0, 0.5, 1], DENSE_UP = [-0.6, 0, 0.5, 1];
+  function routeLegClearDense(role, a, b, half, doors) {
+    var d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+    var L = Math.sqrt(dot3(d, d));
+    if (!(L > 1e-12)) return true;
+    d = [d[0] / L, d[1] / L, d[2] / L];
+    var r = [d[1], -d[0], 0], rl = Math.sqrt(r[0] * r[0] + r[1] * r[1]);
+    r = rl > 1e-6 ? [r[0] / rl, r[1] / rl, 0] : [1, 0, 0];
+    var u = [d[1] * r[2] - d[2] * r[1], d[2] * r[0] - d[0] * r[2], d[0] * r[1] - d[1] * r[0]];
+    var w = half.w * 0.9, h = half.h * 0.9;
+    for (var i = 0; i < DENSE_ACROSS.length; i++) for (var j = 0; j < DENSE_UP.length; j++) {
+      var sa = DENSE_ACROSS[i] * w, su = DENSE_UP[j] * h;
+      var o = [r[0] * sa + u[0] * su, r[1] * sa + u[1] * su, r[2] * sa + u[2] * su];
+      if (portSegmentHit(role, [a[0] + o[0], a[1] + o[1], a[2] + o[2]],
+                         [b[0] + o[0], b[1] + o[1], b[2] + o[2]], doors || ROUTE_DOORS)) return false;
+    }
+    return true;
+  }
 
   /* IN SLICES (2026-11-03). A leg's grid search is 0.3-2 s at a big station
    * (measured in node: cylinder-s at 5.99 km, 2.1 s of routeLeg over four
@@ -11148,7 +11426,10 @@
     return r.value;
   }
   function routeLeg(role, a, b, half, grow, tight, doors) { return drainJob(routeLegJob(role, a, b, half, grow, tight, doors)); }
-  function* routeLegJob(role, a, b, half, grow, tight, doors) {
+  /* `axial` (2026-11-09, axialRouteJob): six neighbours rather than 26,
+   * and the cells handed back as they are rather than pulled taut — the
+   * caller puts the corners on paper itself. */
+  function* routeLegJob(role, a, b, half, grow, tight, doors, axial) {
     var ix = portTriangles(role);
     if (!ix) return null;
     var work = 0;
@@ -11317,6 +11598,7 @@
       var z3 = (cq / NXY) | 0, r3 = cq - z3 * NXY, y3 = (r3 / NX) | 0, x3 = r3 - y3 * NX;
       for (var dz = -1; dz <= 1; dz++) for (var dy = -1; dy <= 1; dy++) for (var dx = -1; dx <= 1; dx++) {
         if (!dx && !dy && !dz) continue;
+        if (axial && Math.abs(dx) + Math.abs(dy) + Math.abs(dz) !== 1) continue;
         var nx = x3 + dx, ny = y3 + dy, nz = z3 + dz;
         if (nx < 0 || ny < 0 || nz < 0 || nx >= NX || ny >= NY || nz >= NZ) continue;
         var nq = at(nx, ny, nz);
@@ -11336,6 +11618,7 @@
       return [lo[0] + (x4 + 0.5) * cell, lo[1] + (y4 + 0.5) * cell, lo[2] + (z4 + 0.5) * cell];
     });
     pts[0] = a.slice(); pts[pts.length - 1] = b.slice();
+    if (axial) return pts;
     /* Pulled taut by the EXACT test, so a corner is dropped only where the
      * hull's whole cross-section clears the triangles between its
      * neighbours. Binary search on the furthest visible cell keeps it to a
@@ -11425,6 +11708,153 @@
       for (var k = 1; k < leg.length; k++) out.push(leg[k]);
     }
     out.blocked = blocked;
+    return out;
+  }
+
+  /* ---- GRAPH PAPER (2026-11-09) -------------------------------------------
+   * Astra: "Treat the pathing for the ships like they are moving along a
+   * piece of graph paper. Many layers of paper can be stacked up to
+   * represent a 3d space", corners "stop turn go", and "diagonals only on
+   * the cargo elevator". clearRouteJob above finds a way through and then
+   * pulls it TAUT, which is what drew the 20-50 degree glides across halls
+   * (tools/probe-lanes.cjs: 1,210 of 1,594 transfer legs off every model
+   * axis). This takes a cleared polyline and puts every leg on paper.
+   *
+   * A sheet's lines run along one of a few FRAMES: the model's own axes,
+   * and the frames the caller adds — a bay's (its normal, its up, across),
+   * a lift's level heading. A cylinder's arm is rolled 60 degrees round the
+   * hub, and its bay is on its own paper rather than a staircase across
+   * the model's. A leg already along a line of any frame is kept. Any other
+   * is replaced by the shortest clear dog-leg along one frame's lines (each
+   * of the six axis orders, tried shortest first, every leg judged by the
+   * exact test with the hull's cross-section, as clearRoute judges); failing
+   * that, a route found cell to cell with no diagonal steps, its corners
+   * reduced the same way. A leg nothing clears is kept as it was and
+   * counted (`offAxis`), so the tests can say where the paper ran out. */
+  var AXIAL_TOL = Math.cos(1.5 * Math.PI / 180);
+  function frameAxes(f) { return [f.u, f.v, f.w]; }
+  function legAxial(a, b, frames) {
+    var d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], L = Math.sqrt(dot3(d, d));
+    if (!(L > 1e-12)) return true;
+    for (var fi = 0; fi < frames.length; fi++) {
+      var ax = frameAxes(frames[fi]);
+      for (var k = 0; k < 3; k++) if (Math.abs(dot3(d, ax[k])) / L >= AXIAL_TOL) return true;
+    }
+    return false;
+  }
+  /* The six orders of a dog-leg along one frame's lines, shortest first by
+   * corner count, each judged leg by leg. Generator, like the rest. */
+  function* frameDogLegJob(role, a, b, half, doors, f) {
+    var d = [b[0] - a[0], b[1] - a[1], b[2] - a[2]], ax = frameAxes(f);
+    var c = [dot3(d, ax[0]), dot3(d, ax[1]), dot3(d, ax[2])];
+    var orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+    /* Fewer corners first: an order that starts with a zero component is
+     * the same dog-leg as one that does not, and is skipped. */
+    var tried = {};
+    for (var o = 0; o < orders.length; o++) {
+      var pts = [a.slice()], p = a.slice();
+      for (var s = 0; s < 3; s++) {
+        var k = orders[o][s];
+        if (Math.abs(c[k]) < 1e-9) continue;
+        p = [p[0] + ax[k][0] * c[k], p[1] + ax[k][1] * c[k], p[2] + ax[k][2] * c[k]];
+        pts.push(p);
+      }
+      pts[pts.length - 1] = b.slice();
+      var key = pts.map(function (q) { return q.map(function (x) { return x.toFixed(6); }).join(','); }).join('|');
+      if (tried[key]) continue;
+      tried[key] = true;
+      var ok = true;
+      for (var m = 1; m < pts.length && ok; m++) {
+        ok = routeLegClearDense(role, pts[m - 1], pts[m], half, doors);
+        yield 0;
+      }
+      if (ok) return pts;
+    }
+    return null;
+  }
+  /* Corners of a cell path, collinear runs merged. */
+  function mergeCollinear(pts) {
+    var out = [pts[0]];
+    for (var i = 1; i < pts.length; i++) {
+      if (out.length >= 2) {
+        var p0 = out[out.length - 2], p1 = out[out.length - 1], p2 = pts[i];
+        var d1 = [p1[0] - p0[0], p1[1] - p0[1], p1[2] - p0[2]], d2 = [p2[0] - p1[0], p2[1] - p1[1], p2[2] - p1[2]];
+        var l1 = Math.sqrt(dot3(d1, d1)), l2 = Math.sqrt(dot3(d2, d2));
+        if (l1 > 1e-12 && l2 > 1e-12 && dot3(d1, d2) / (l1 * l2) > 0.99999) { out[out.length - 1] = p2; continue; }
+        if (l2 < 1e-12) continue;
+      }
+      out.push(pts[i]);
+    }
+    return out;
+  }
+  /* A corner wants more room than a leg (2026-11-10, interiors.test): she
+   * stops and turns on it, and her quarters sweep wider than the leg's
+   * own cross-section, so a dog-leg is judged with a hull a third wider
+   * than the one it is for. spine-l b0/b2's corners hugged the hall wall. */
+  var AXIAL_ROOM = 1.3;
+  function* axialRouteJob(role, pts, half0, doors, extraFrames) {
+    if (!pts || pts.length < 2 || !half0) return pts;
+    var half = { w: half0.w * AXIAL_ROOM, h: half0.h * AXIAL_ROOM };
+    var MODEL = { u: [1, 0, 0], v: [0, 1, 0], w: [0, 0, 1] };
+    var frames = [MODEL].concat(extraFrames || []);
+    var out = [pts[0]], off = 0;
+    for (var i = 1; i < pts.length; i++) {
+      var a = out[out.length - 1], b = pts[i];
+      if (legAxial(a, b, frames)) { out.push(b); continue; }
+      var leg = null;
+      for (var fi = 0; fi < frames.length && !leg; fi++) leg = yield* frameDogLegJob(role, a, b, half, doors, frames[fi]);
+      if (!leg) {
+        /* Cell to cell, no diagonal steps, then its corners on paper. */
+        var cells = yield* routeLegJob(role, a, b, half, 0.35, false, doors, true);
+        if (cells && cells.length >= 2) {
+          var cs = mergeCollinear(cells), got = [cs[0]], j0 = 0;
+          while (j0 < cs.length - 1 && got) {
+            var reached = false;
+            for (var j = Math.min(cs.length - 1, j0 + 16); j > j0; j--) {
+              /* Furthest corner first that a dog-leg on the model's paper
+               * reaches clear; a neighbouring corner is usually one leg. */
+              var dl = yield* frameDogLegJob(role, cs[j0], cs[j], half, doors, MODEL);
+              if (dl) {
+                for (var q = 1; q < dl.length; q++) got.push(dl[q]);
+                j0 = j; reached = true; break;
+              }
+            }
+            if (!reached) got = null;
+          }
+          leg = got;
+        }
+      }
+      if (!leg) { off++; out.push(b); continue; }
+      for (var k = 1; k < leg.length; k++) out.push(leg[k]);
+    }
+    out = mergeCollinear(out);
+    /* EVERY CORNER, ACROSS (2026-11-10). A leg is judged on its own, but
+     * she rounds each corner over the frames either side of it, and a
+     * corner pressed into a wall's angle clips it on the way round
+     * (interiors.test samples her a quarter second apart, and spine-m b0/b4
+     * and spine-l b0/b2 each did once). So a chord is cut across every
+     * corner, two and a half half-widths each side or half the leg,
+     * whichever is shorter, and judged like a leg. A piece whose corners
+     * do not all pass keeps the route it came in with, which was clear. */
+    var chord = half0.w * 2.5;
+    for (var ci = 1; ci < out.length - 1; ci++) {
+      var pA = out[ci - 1], pC = out[ci], pB = out[ci + 1];
+      var dA = [pC[0] - pA[0], pC[1] - pA[1], pC[2] - pA[2]], dB = [pB[0] - pC[0], pB[1] - pC[1], pB[2] - pC[2]];
+      var lA = Math.sqrt(dot3(dA, dA)), lB = Math.sqrt(dot3(dB, dB));
+      if (!(lA > 1e-12) || !(lB > 1e-12)) continue;
+      var sA = Math.min(chord, lA / 2) / lA, sB = Math.min(chord, lB / 2) / lB;
+      var P = [pC[0] - dA[0] * sA, pC[1] - dA[1] * sA, pC[2] - dA[2] * sA];
+      var Q = [pC[0] + dB[0] * sB, pC[1] + dB[1] * sB, pC[2] + dB[2] * sB];
+      yield 0;
+      if (!routeLegClearDense(role, P, Q, half0, doors)) {
+        var kept = pts.slice();
+        kept.offAxis = 0;
+        for (var ki = 1; ki < kept.length; ki++) if (!legAxial(kept[ki - 1], kept[ki], frames)) kept.offAxis++;
+        kept.cornerKept = true;
+        return kept;
+      }
+    }
+    out.offAxis = off;
     return out;
   }
 
@@ -14152,8 +14582,29 @@
       var cid = crawlerLibId(ship);
       return crawlerLoaded(cid, libHull(cid) || libHull(HULL_ASSIGN.crawler) || shipMeshes().courier, ship);
     }
-    var base = libHull(HULL_ASSIGN[kind] || HULL_ASSIGN.courier) || shipMeshes().courier;
+    var modelId = HULL_ASSIGN[kind] || HULL_ASSIGN.courier;
+    /* A real ship wears the guns it has fitted, one per hardpoint, and an
+     * empty acceptor where it has none (armedMesh). The showroom - no ship
+     * yet - shows the hull with its stock guns, as NPCs fly it. */
+    if (ship && ship.fit) {
+      var bare = libHullBare(modelId);
+      if (bare) return armedMesh(bare, hardpointGuns(ship));
+    }
+    var base = libHull(modelId) || shipMeshes().courier;
     return base;
+  }
+
+  /* Where THIS ship's shots leave from, per hardpoint, in its own axes in
+   * km (the shape combat.js's muzzleOf wants): the barrel tips of the gun
+   * on each one, off the same mesh she is drawn with. Each entry is a list,
+   * one per barrel; null where the hull has nowhere to hang a gun. */
+  function shipMuzzlesFor(ship) {
+    if (!ship || !ship.hullId) return null;
+    var mesh = hullPreviewMesh(ship.hullId, ship);
+    if (!mesh || !mesh._muzzles) return null;
+    return mesh._muzzles.map(function (list) {
+      return list ? list.map(function (p) { return { r: p[0] * SHIP_LEN, u: p[1] * SHIP_LEN, f: p[2] * SHIP_LEN }; }) : null;
+    });
   }
 
   function crawlerLibId(ship) {
@@ -14315,6 +14766,106 @@
     try { paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8'); }
     finally { PAINT_NOW = null; }
     ctx.restore();
+    return true;
+  }
+
+  /* ---- ITEM MODELS (2026-11-09) -------------------------------------------
+   * Astra's 3D icon for every item on sale (src/itemmodels.js, generated by
+   * tools/item-models.cjs from ref/icons/). Stored flat and palette-coded;
+   * unpacked here into the renderer's one mesh shape, ONCE per model and
+   * kept, because gl.js caches its buffers on the mesh object.
+   *
+   * Keyed by file stem: eq_<equipment id>, con_<consumable id>,
+   * good_<commodity>, mod_<station module>. `hull` asks for a gun's lighter
+   * copy, the one hung on ships. */
+  var ITEM_MESH = {};
+  var ITEM_FILL = 2.8;               // camera distance, in model reaches
+  function itemKey(id) {
+    var M = global.ItemModels;
+    if (!M || !id) return null;
+    if (M[id]) return id;
+    var pre = ['eq_', 'con_', 'good_', 'mod_'];
+    for (var i = 0; i < pre.length; i++) if (M[pre[i] + id]) return pre[i] + id;
+    return null;
+  }
+  function itemMesh(id, hull) {
+    var key = itemKey(id);
+    if (!key) return null;
+    var ck = key + (hull ? ':hull' : '');
+    if (ITEM_MESH[ck]) return ITEM_MESH[ck];
+    var src = global.ItemModels[key];
+    var d = hull && src.hull ? src.hull : src;
+    var m = { v: [], f: [], c: [], key: key };
+    for (var i = 0; i + 2 < d.v.length; i += 3) m.v.push([d.v[i], d.v[i + 1], d.v[i + 2]]);
+    for (var j = 0; j + 2 < d.f.length; j += 3) {
+      m.f.push([d.f[j], d.f[j + 1], d.f[j + 2]]);
+      m.c.push(d.pal[d.ci[j / 3]]);
+    }
+    m.size = src.size; m.muzzles = src.muzzles || null; m.foot = src.foot || null;
+    ITEM_MESH[ck] = m;
+    return m;
+  }
+
+  /* The yard card's portrait: the item turning in a square, looked at a
+   * little from above, lit from over the viewer's shoulder - the showroom's
+   * camera and light (drawHullPortrait), so a gun on the card and a ship in
+   * the showroom read as the same kind of picture. False when there is no
+   * model, and the card draws its wireframe stand-in. */
+  function drawItemPortrait(ctx, x, y, size, id, spin) {
+    if (!(size > 8)) return false;
+    var mesh = itemMesh(id, false);
+    if (!mesh || !mesh.f.length) return false;
+    var cam = new Camera();
+    cam.target = V.zero();
+    cam.yaw = spin || 0;
+    cam.pitch = 0.42;
+    /* Further back than a hull: a ship is long and flat and fills a square
+     * edge to edge, but a gun or a crate is chunky, and at the hull's
+     * distance its corners swung out of the frame as it turned. */
+    cam.dist = meshReach(mesh) * ITEM_FILL;
+    cam.near = cam.dist * 1e-3;
+    cam.build(size, size);
+    var sunDir = V.norm({ x: Math.cos(cam.yaw + 0.9), y: Math.sin(cam.yaw + 0.9), z: 0.65 });
+    var frame = {
+      pos: V.zero(),
+      right: { x: 1, y: 0, z: 0 },
+      up: { x: 0, y: 0, z: 1 },
+      fwd: { x: 0, y: 1, z: 0 }
+    };
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(x, y, size, size);
+    ctx.clip();
+    ctx.translate(x, y);
+    paintMesh(ctx, cam, frame, mesh, 1, sunDir, '#9aa6b4');
+    ctx.restore();
+    return true;
+  }
+
+  /* A small still of an item, for a list row: drawn once per item and size
+   * into a canvas of its own and copied from then on, because a market of
+   * twenty-four rows repainting twenty-four models every frame would cost
+   * more than the rest of the screen. Three-quarters on, from a little
+   * above, the portrait's light. Without a DOM (the tests) it paints
+   * straight into the context. */
+  var ICON_CACHE = {};
+  var ICON_YAW = 2.35;
+  function drawItemIcon(ctx, x, y, size, id) {
+    var key = itemKey(id);
+    if (!key || !(size > 4)) return false;
+    var doc = global.document;
+    if (!doc || !doc.createElement || !ctx.drawImage) return drawItemPortrait(ctx, x, y, size, key, ICON_YAW);
+    var dpr = Math.min(3, global.devicePixelRatio || 1), px = Math.round(size * dpr);
+    var ck = key + '@' + px;
+    var cv = ICON_CACHE[ck];
+    if (!cv) {
+      cv = doc.createElement('canvas');
+      cv.width = cv.height = px;
+      var c2 = cv.getContext('2d');
+      if (!c2 || !drawItemPortrait(c2, 0, 0, px, key, ICON_YAW)) return false;
+      ICON_CACHE[ck] = cv;
+    }
+    ctx.drawImage(cv, x, y, size, size);
     return true;
   }
 
@@ -17372,7 +17923,10 @@
     if (d.meshes.fittings) parts.push({ mesh: d.meshes.fittings });
     /* From outside her (2026-10-26) there is no glass to see the world
      * through, only her own skin, so the panes are not drawn. */
+    /* Her rooms and cockpit, in her surface at their own metres. */
+    var prevS = pushShipSurface(ship, 0, true);
     var ok = global.GLWorld.queueCockpit(cam, frame, opts.noPortals ? null : d.meshes.portals, d.meshes.room, parts, M);
+    popSurface(prevS);
     if (ok) { ROOM_QUEUED.ship = ship; ROOM_QUEUED.cam = cam; }
     return ok;
   }
@@ -17796,6 +18350,7 @@
     barColour: barColour,
     crawlerPortKey: crawlerPortKey, crawlerPortLib: crawlerPortLib, CRAWLER_PORT_RADIUS_KM: CRAWLER_PORT_RADIUS_KM,
     drawHullPortrait: drawHullPortrait, hullPreviewMesh: hullPreviewMesh,
+    drawItemPortrait: drawItemPortrait, drawItemIcon: drawItemIcon, itemMesh: itemMesh, itemKey: itemKey,
     faceMaterial: faceMaterial,
     shipMeshes: shipMeshes,
     libHull: libHull,
@@ -17808,7 +18363,7 @@
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
     portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,
     prefetchPorts: prefetchPorts, portGeometryArrived: portGeometryArrived,
-    setMoverRiders: setMoverRiders, moverPose: moverPose, splitMovers: splitMovers,
+    setMoverRiders: setMoverRiders, setMoverStates: setMoverStates, moverPose: moverPose, splitMovers: splitMovers,
     drawPortCity: drawPortCity, citySpot: citySpot, cityFrame: cityFrame, splitCity: splitCity,
     citySite: citySite, cityBlocks: cityBlocks, cityParts: cityParts, cityLayout: cityLayout,
     cityDrawList: cityDrawList, cityPlace: cityPlace, citySizes: citySizes,
@@ -17822,7 +18377,7 @@
     drawStationInterior: drawStationInterior,
     interiorBounds: interiorBounds,
     insideInterior: insideInterior,
-    setIndoors: setIndoors,
+    setIndoors: setIndoors, setSurface: setSurface, surfaceSeed: surfaceSeed,
     setCutaway: setCutaway,
     standTopKm: standTopKm,
     drawCutGreebles: drawCutGreebles,
@@ -17852,6 +18407,7 @@
     portSegmentHit: portSegmentHit,
     clearRoute: clearRoute,
     routeLegClear: routeLegClear,
+    axialRouteJob: axialRouteJob, legAxial: legAxial,
     berthDeck: berthDeck,
     carriageFor: carriageFor,
     berthBoom: berthBoom,
@@ -17891,7 +18447,8 @@
     shieldTint: shieldTint, shellFlare: shellFlare,
     drawReentryPlasma: drawReentryPlasma, plasmaRGB: plasmaRGB, plasmaVis: plasmaVis,
     SHIELD_STANDOFF: SHIELD_STANDOFF, SHIELD_FLASH_LIFE: SHIELD_FLASH_LIFE,
-    hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles,
+    hullMuzzles: hullMuzzles, shipMuzzles: shipMuzzles, shipMuzzlesFor: shipMuzzlesFor,
+    armedMesh: armedMesh, libHullBare: libHullBare, hardpointGuns: hardpointGuns, GUN_REF_LEN: GUN_REF_LEN,
     seatMuzzle: seatMuzzle,
     /* Exported for the same reason seatMuzzle is: the beam renderer lives in
      * main.js but the geometry of a tracer belongs with the rest of the

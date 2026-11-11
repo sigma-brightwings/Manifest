@@ -337,9 +337,19 @@ console.log('--- inland ---');
    * pad radii, against INLAND_FOOT - and the shed's own corner and the deep
    * bay's tunnel. A wider model added later fails here, not in the sea. */
   var dir = path.join(__dirname, '..', 'src', 'ports'), widest = 0, widestOf = '';
+  /* The repo holds each model as <id>.js.gz; the plain .js is only a working
+   * copy (gitignored), so a fresh checkout - CI - has none. Read the packed
+   * one, which is what ships, and the plain one only where there's no .gz. */
   if (fs.existsSync(dir)) {
-    fs.readdirSync(dir).filter(function (f) { return /site.*\.js$/.test(f); }).forEach(function (f) {
-      var src = fs.readFileSync(path.join(dir, f), 'utf8');
+    var names = {};
+    fs.readdirSync(dir).forEach(function (f) {
+      var m = /^(.*site.*\.js)(\.gz)?$/.exec(f);
+      if (m && (m[2] || !names[m[1]])) names[m[1]] = f;
+    });
+    Object.keys(names).forEach(function (f) {
+      var file = path.join(dir, names[f]);
+      var src = /\.gz$/.test(file) ? require('zlib').gunzipSync(fs.readFileSync(file)).toString('utf8')
+                                    : fs.readFileSync(file, 'utf8');
       var at = src.indexOf('var d = '), end = src.indexOf(';\n', at);
       if (at < 0 || end < 0) return;
       var d = JSON.parse(src.slice(at + 8, end));

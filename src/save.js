@@ -270,7 +270,7 @@
         /* Standing on open ground (rung 2): the spot on the world, which
          * turns with it, not the position, which was only true at save. */
         landedAt: (s.landed && !s.crashed && s.landedAt) ? s.landedAt : null,
-        fuel: s.fuel, thrusterFuel: s.thrusterFuel,
+        fuel: s.fuel, thrusterFuel: s.thrusterFuel, milFuel: s.milFuel || 0,
         /* Whether the military drive is armed. Additive and undefined-safe:
          * Slipspace.milRunning treats anything but an explicit false as
          * armed, so a career that predates the drive loads with no drive to
@@ -724,6 +724,12 @@
        * absent entry reads as group A. */
       s.groups = (d.groups && typeof d.groups === 'object') ? d.groups : {};
     }
+    /* THE MILFUEL TANK (2026-11-09, Slip.milFuelCap). A save from before it
+     * kept its milfuel in the hold, where the drive used to burn it from;
+     * that career is not left stranded with a dry drive - its hold tops the
+     * new tank up once, as far as the tank holds, and the rest stays cargo. */
+    s.milFuel = d.milFuel || 0;
+    if (d.milFuel == null && global.Slipspace && global.Slipspace.milFuelFromHold) global.Slipspace.milFuelFromHold(s, 0);
     Sim.refreshShip(s);
 
     G.standing = data.standing || {};

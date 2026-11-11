@@ -1,0 +1,129 @@
+﻿category,group,id,name,slot,size,price,powerMW,massT,specs,flavour
+Equipment,gun,phpulse,Photon pulse laser,hardpoint,,900,1.8,1.5,5 dmg · 22 km · 0.4 s cycle · 2 heat/s · pulse,Every hull leaves the yard with one. There is a reason.
+Equipment,gun,phint,Photon intermittent laser,hardpoint,,1700,2.4,2,13 dmg · 26 km · 1 s cycle · 4 heat/s · intermittent,"Hits harder, waits longer. Patience in a housing."
+Equipment,gun,phbeam,Photon beam laser,hardpoint,,3100,3,2.5,2 dmg · 30 km · 0.12 s cycle · 12 heat/s · beam,Reaches as far as you can aim it. Light does not get tired.
+Equipment,gun,pipulse,Pion pulse accelerator,hardpoint,,3400,4.2,3.5,20 dmg · 11 km · 0.4 s cycle · 5 heat/s · pulse,Devastating in a knife fight. Bring a knife.
+Equipment,gun,piint,Pion intermittent accelerator,hardpoint,,6200,5.2,4,52 dmg · 13 km · 1 s cycle · 9 heat/s · intermittent,"Fifty-two points, if you are close enough to regret it."
+Equipment,gun,pibeam,Kaon beam accelerator,hardpoint,,9800,6.5,5,8 dmg · 15 km · 0.12 s cycle · 26 heat/s · beam,Strips a shield like old paint. You will have to get close.
+Equipment,gun,mupulse,Muon pulse accelerator,hardpoint,,14000,9,7,24 dmg · 34 km · 0.4 s cycle · 11 heat/s · pulse,Reach without apology. Bring a reactor and a firm opinion.
+Equipment,gun,mininglaser,Mining laser,hardpoint,,4800,2.6,2.5,1 dmg · 3 km · 0.12 s cycle · 8 heat/s · beam,"Cuts rock, not ships. Hold it steady and bring a scoop."
+Equipment,gun,miningcannon,Mining laser cannon,hardpoint,,6200,3.2,3,12 dmg · 5 km · 3 s cycle · 10 heat/s · pulse,Knocks a piece off the face from five kilometres. Give the capacitors their three seconds.
+Equipment,gun,muint,Muon intermittent accelerator,hardpoint,,24000,11,8,62 dmg · 40 km · 1 s cycle · 18 heat/s · intermittent,"Sixty-two points, once a second, from further than they can answer."
+Equipment,gun,mubeam,Muon beam accelerator,hardpoint,,38000,13,9,9 dmg · 46 km · 0.16 s cycle · 45 heat/s · beam,"If it is still there after four seconds, check your aim — not the gun."
+Equipment,gun,massdriver,Mass driver,hardpoint,,7400,2.2,6,30 dmg · 25 km · 1.6 s cycle · 3 heat/s · kinetic,"Half of it the shield never sees. Lead them, mind the kick, and buy slugs by the tonne."
+Equipment,gun,greyphint,Bootleg intermittent laser,hardpoint,,1105,2.4,2.4,13 dmg · 24 km · 1 s cycle · 8 heat/s · intermittent,Same thirteen points as the certified one. Runs twice as hot and sometimes just does not.
+Equipment,gun,greypipulse,Salvaged pion accelerator,hardpoint,,1870,4.2,4,20 dmg · 10 km · 0.4 s cycle · 11 heat/s · pulse,"Twenty points off a wreck, at a bit over half list. It will cook you and it will let you down, and it is still twenty points."
+Equipment,gun,syndbeam,Syndicate-issue beam accelerator,hardpoint,,44000,13,9,9 dmg · 46 km · 0.16 s cycle · 45 heat/s · beam,The same gun the enforcement wing flies. Nobody asks where the serial numbers went.
+Equipment,turret,turret,Auto-turret,utility,,5600,2.6,3,4 dmg · 9 km · 0.7 s cycle · 3 heat/s,Buyable disinterest. Point the ship anywhere you like.
+Equipment,shroud,shroud,Shroud suite,internal,,0,1.5,2,,"Not on any list. Neither are you, while it runs."
+Equipment,ecm,ecm,ECM jammer,internal,,6800,2.5,2,,Makes a seeker doubt itself. Runs hot doing it.
+Equipment,shield,shield,Shield generator,internal,,4800,2,4,capacity 40 · regen 1.2/s,Forty points of somebody else’s problem. Refills itself if you let it.
+Equipment,transponder,transponder,Restricted-space transponder,internal,,24000,0.2,1,,Answers the challenge nobody civilian is supposed to hear. Where it lets you go is not a reward.
+Equipment,hab,habunit,Habitation unit,internal,,14500,0.9,4,,"Four berths, a galley and a scrubber. Eight tonnes of hold becomes four people who expect to arrive."
+Equipment,transponder,forgedtransponder,Forged transponder,internal,,0,0.2,1,,Answers the challenge in somebody else's name. Not every challenger is satisfied.
+Equipment,heatshield,heatshield,Ablative heat shield,internal,,3600,0.8,3,,Rated for atmospheric entry. Increasingly popular with beam crews.
+Equipment,sinkrack,sinklauncher,Heat sink launcher,utility,,4800,1.2,2,,Three chances to fire for longer than your hull agrees with.
+Equipment,decoyrack,decoylauncher,Decoy launcher,utility,,2600,0.4,1,,"Twelve hot little lies, fired aft. Best told at the last second."
+Equipment,scanner,hullscan,Hull scanner,utility,,2200,0.6,1,,Tells you how badly they are hurt. Not how much they can take.
+Equipment,scanner,combatscan,Combat scanner,utility,,9500,1.8,2,,"Hull and shields, in numbers. Knowing is most of winning."
+Equipment,scanner,combatanalyser,Combat analyser,utility,,21000,2.6,3,,"Hull, shields, and what they would point at you. Looking is not shooting."
+Equipment,analyser,tradescan,Market survey array,utility,,7800,0.9,1,,"Every warehouse in the system, sorted by who is desperate."
+Equipment,portanalyser,portanalyser,Trade analyser,utility,,1000,0.3,0.5,,"One port, its month on a graph, and what a run costs you in fuel."
+Equipment,survey,surveyscan,Survey scanner,utility,,6400,0.8,1,,"Grade 1. Ore, ice and hydrogen, poor or rich. Blind to anything rarer."
+Equipment,survey,gammasurvey,Gamma survey spectrometer,utility,,13800,1.4,2,,Grade 2. Adds the fissiles - they give themselves away.
+Equipment,survey,deepsurvey,Deep survey array,utility,,23500,2,3,,"Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers."
+Equipment,skimmer,skimmer,Gas skimmer intake,utility,,7800,1.5,2,,A ram scoop. Point the nose into the top of a giant and the hold fills. Fly it lower and so does the coroner.
+Equipment,scoop,cargoscoop,Cargo scoop,utility,,1400,0,1,,Catches whatever you can fly gently enough to catch.
+Equipment,reactor,reactor1,Auxiliary reactor Mk I,internal,,6000,0,5,+2.5 MW,Two and a half more megawatts. Five tonnes. Your call.
+Equipment,reactor,reactor2,Auxiliary reactor Mk II,internal,,18000,0,9,+5 MW,"The upgrade most pilots make twice: once too late, once correctly."
+Equipment,reactor,reactor3,Auxiliary reactor Mk III,internal,,46000,0,14,+9 MW,Fourteen tonnes of yes. Check your fit tonnage before you sign.
+Equipment,slipbaffle,baffleI,Wake Baffle I,internal,,6000,0.8,2,,"What you leave at the mouth of a jump, smeared until it is not worth reading."
+Equipment,slipbaffle,baffleII,Wake Baffle II,internal,,11000,1.1,3,,"What you leave at the mouth of a jump, smeared until it is not worth reading."
+Equipment,slipbaffle,baffleIII,Wake Baffle III,internal,,19000,1.5,4,,"What you leave at the mouth of a jump, smeared until it is not worth reading."
+Equipment,slipbaffle,baffleIV,Wake Baffle IV,internal,,28000,2,6,,"What you leave at the mouth of a jump, smeared until it is not worth reading."
+Equipment,slipanchor,anchorI,Harmonic Transit Anchor I,internal,,28000,3.2,4,,The cheap opportunist stops being able to touch you. The serious one still can.
+Equipment,slipanchor,anchorII,Harmonic Transit Anchor II,internal,,55000,4.2,6,,The cheap opportunist stops being able to touch you. The serious one still can.
+Equipment,slipanchor,anchorIII,Harmonic Transit Anchor III,internal,,95000,5.4,8,,The cheap opportunist stops being able to touch you. The serious one still can.
+Equipment,slipanchor,anchorIV,Harmonic Transit Anchor IV,internal,,140000,7,11,,The cheap opportunist stops being able to touch you. The serious one still can.
+Equipment,slipmildrive,mildriveI,Military Slipspace Drive I,internal,,44000,4,6,,"Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody's idea of clean."
+Equipment,slipmildrive,mildriveII,Military Slipspace Drive II,internal,,78000,5.5,9,,"Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody's idea of clean."
+Equipment,slipmildrive,mildriveIII,Military Slipspace Drive III,internal,,130000,7.2,12,,"Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody's idea of clean."
+Equipment,slipmildrive,mildriveIV,Military Slipspace Drive IV,internal,,195000,9,16,,"Half the corridor. It will not take hydrogen, and what it leaves in your hold is nobody's idea of clean."
+Equipment,cruisedrive,cruise1,Cruise Drive Class 1,drive,,4000,0,0,,What every hull leaves the yard with.
+Equipment,cruisedrive,milcruise1,Military Cruise Drive Class 1,drive,,10000,0,0,,"Five times the speed of its class while it has milfuel to burn, and waste in the hold for every slug. Without slugs it runs as an ordinary drive."
+Equipment,cruisedrive,cruise2,Cruise Drive Class 2,drive,,40000,0,0,,"Twice the speed of the class below it, between the planets."
+Equipment,cruisedrive,milcruise2,Military Cruise Drive Class 2,drive,,100000,0,0,,"Five times the speed of its class while it has milfuel to burn, and waste in the hold for every slug. Without slugs it runs as an ordinary drive."
+Equipment,cruisedrive,cruise3,Cruise Drive Class 3,drive,,400000,0,0,,"Twice the speed of the class below it, between the planets."
+Equipment,cruisedrive,milcruise3,Military Cruise Drive Class 3,drive,,1000000,0,0,,"Five times the speed of its class while it has milfuel to burn, and waste in the hold for every slug. Without slugs it runs as an ordinary drive."
+Consumable,missile,hawk,Hawk seeker,rack,,420,,,42 dmg,Fire and forget. Mostly forget.
+Consumable,missile,bootleg,Bootleg seeker,rack,,200,,,28 dmg,"Sold by the crate, no questions, no paperwork and no guarantee it leaves the rail."
+Consumable,missile,rocktorp,Guild rock torpedo,rack,,2500,,,,"Serial-numbered. Take it out, set it off, bring back the log - not the torpedo."
+Consumable,missile,syndtorp,Unregistered rock charge,rack,,1600,,,,"Same yield, no serial. Nobody refunds what nobody logged."
+Consumable,decoy,decoy,Decoy charge,rack,,60,,,,"Hot, bright, and not you."
+Consumable,heat sink,sink,Heat sink charge,rack,,320,,,,"Ablative mass, one use. Comes back out glowing and stays that way."
+Consumable,ammunition,slugs,Driver slugs (1 t),cargo,,480,,1,40 rounds,Twenty-five kilos each. You will feel every one leave.
+Hull,S,talon,Talon Courier,,S,32000,9,42,64 t hold · 100 hull · 2700 kN,"the ship you started with, and honestly not bad"
+Hull,M,dart,Dart Interceptor,,M,61000,7,30,22 t hold · 80 hull · 3300 kN,outruns everything; carries nothing
+Hull,L,kestrel,Kestrel Multirole,,L,150000,14,60,96 t hold · 130 hull · 4050 kN,"the compromise, made well"
+Hull,M,mule,Mule Freighter,,M,135000,18,80,160 t hold · 160 hull · 5550 kN,"slow, vast, and worth robbing"
+Hull,S,wren,Wren Shuttle,,S,18000,4,24,30 t hold · 60 hull · 960 kN,the cheapest way off a planet
+Hull,S,bollard,Bollard Tug,,S,44000,10,50,20 t hold · 140 hull · 1300 kN,all engine and fenders
+Hull,M,samaritan,Samaritan Tender,,M,88000,15,55,50 t hold · 150 hull · 1750 kN,built to survive somebody else's fight
+Hull,M,sump,Sump Waste Hauler,,M,70000,14,70,180 t hold · 150 hull · 3800 kN,"cheap hold, because of what usually goes in it"
+Hull,L,longhaul,Longhaul Freighter,,L,250000,26,140,320 t hold · 260 hull · 6800 kN,the freighter on every lane
+Hull,L,tanker,Coldwater Tanker,,L,220000,24,150,280 t hold · 240 hull · 6800 kN,goes further than anything else on the list
+Hull,L,cutter,Naval Cutter,,L,380000,34,110,40 t hold · 320 hull · 2800 kN,"the navy's own, sold to the navy's friends"
+Hull,XL,meridian,Meridian Liner,,XL,500000,32,260,120 t hold · 300 hull · 4600 kN,a passenger city with a drive
+Hull,XL,leviathan,Leviathan Bulk Carrier,,XL,780000,40,420,900 t hold · 420 hull · 9000 kN,the biggest thing at the dock
+Hull,XL,capital,Capital Ship,,XL,4500000,120,900,200 t hold · 1500 hull · 14000 kN,the thing everybody else runs from
+Hull,XL,crawler,Crawler,,XL,560000,40,640,600 t hold · 520 hull · 9500 kN,carries a station to where it will stand
+Hull,M,heavytug,Hawser Heavy Tug,,M,66000,14,75,30 t hold · 220 hull · 2300 kN,two arms and the shoulders to use them
+Hull,M,heavyshuttle,Heron Heavy Shuttle,,M,60000,6,40,80 t hold · 90 hull · 1900 kN,a shuttle with a freighter's hold
+Hull,M,trader,Tallyman Trader,,M,110000,14,60,110 t hold · 120 hull · 4200 kN,the merchant on every short run
+Hull,M,runner,Corsair Runner,,M,68000,10,34,40 t hold · 85 hull · 3600 kN,fast enough to choose her fights
+Hull,M,enforcer,Syndicate Enforcer,,M,110000,14,45,30 t hold · 140 hull · 3900 kN,the mob's patrol ship
+Hull,M,enforcerheavy,Syndicate Heavy,,M,175000,18,70,30 t hold · 240 hull · 4600 kN,bolted-on armour and four guns
+Hull,S,fighter,Lance Fighter,,S,48000,6,18,4 t hold · 60 hull · 2200 kN,"a carrier's strike wing, one seat at a time"
+Hull,XL,carrier,Fleet Carrier,,XL,18000000,200,3000,2000 t hold · 4000 hull · 12000 kN,a city that can leave
+Trade good,,water,Water,cargo,,18,,,,
+Trade good,,grain,Grain,cargo,,64,,,,
+Trade good,,livestock,Livestock,cargo,,128,,,,
+Trade good,,timber,Timber,cargo,,44,,,,
+Trade good,,fish,Aquaculture,cargo,,96,,,,
+Trade good,1,ores,Metal ores,cargo,,82,,,,
+Trade good,1,rare,Rare metals,cargo,,640,,,,
+Trade good,1,hydrogen,Hydrogen fuel,cargo,,55,,,,
+Trade good,1,fissile,Fissiles,cargo,,980,,,,
+Trade good,2,chemicals,Chemicals,cargo,,210,,,,
+Trade good,2,alloys,Structural alloys,cargo,,265,,,,
+Trade good,2,textiles,Textiles,cargo,,190,,,,
+Trade good,2,farmmach,Farm machinery,cargo,,480,,,,
+Trade good,3,computers,Computers,cargo,,1150,,,,
+Trade good,3,robotics,Robotics,cargo,,1620,,,,
+Trade good,3,medical,Medical supplies,cargo,,890,,,,
+Trade good,3,fusion,Fusion cells,cargo,,1980,,,,
+Trade good,4,aicores,AI cores,cargo,,4200,,,,
+Trade good,4,genetech,Gene therapies,cargo,,3600,,,,
+Trade good,4,luxuries,Luxury goods,cargo,,2450,,,,
+Trade good,2,wine,Wine,cargo,,340,,,,
+Trade good,1,waste,Radioactive waste,cargo,,-310,,,,
+Trade good,3,milfuel,Military drive fuel,cargo,,10780,,,,
+Trade good,,fruit,Fruit,cargo,,85,,,,
+Station module,crate,slipway,Slipway,Crawler hold,XL,200000,,,,where hulls are built — the heart of a shipyard
+Station module,crate,skimrig,Skimmer rig,Crawler hold,L,150000,,,,scoops and tanks for a gas giant's upper air
+Station module,crate,refinery,Refinery line,Crawler hold,L,165000,,,,turns ore and hydrogen into something worth more
+Station module,crate,oreworks,Ore works,Crawler hold,L,140000,,,,crushers and a receiving bay for mining traffic
+Station module,crate,market,Market hall,Crawler hold,L,130000,,,,a trade floor: the station buys and sells
+Station module,crate,habring,Hab ring,Crawler hold,L,120000,,,,quarters and a concourse: passengers come and go
+Station module,crate,warehouse,Warehouse,Crawler hold,M,80000,,,,deep storage behind the market
+Station module,crate,repair,Repair dock,Crawler hold,M,95000,,,,hull repairs for whoever docks
+Station module,crate,reactor,Reactor pile,Crawler hold,M,110000,,,,more power for a bigger station
+Station module,crate,quarters,Crew quarters,Crawler hold,M,85000,,,,bunks for the people who run the place
+Station module,crate,berth,Berth clamp,Crawler hold,S,60000,,,,one more clamp for traffic
+Station module,crate,battery,Defence battery,Crawler hold,S,75000,,,,guns that answer when somebody shoots at the station
+Station module,crate,relay,Comms relay,Crawler hold,S,62000,,,,prices and news arrive sooner
+Station module,crate,fuelcell,Fuel cell,Crawler hold,S,65000,,,,a reactor that can go longer between deliveries
+Bay craft,,tug,Bollard tug,craft bay,S,44000,,,,
+Bay craft,,shuttle,Wren shuttle,craft bay,S,18000,,,,
+Bay craft,,shuttleM,Heavy shuttle,craft bay,M,60000,,,,
+Bay craft,,tugM,Heavy tug,craft bay,M,66000,,,,

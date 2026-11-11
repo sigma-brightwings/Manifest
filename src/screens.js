@@ -23,7 +23,7 @@
 
   /* Wired by main.js at boot. Unpacked to bare names so the moved code is
    * byte-for-byte the code that was tested in its old home. */
-  var refuelFromHold;
+  var refuelFromHold, milFuelFromHold;
   var G, say, selectPanel, hot, navList, navTargetState, navMark, jettison,
       heldCargo, openMarket, plottedCourse, jumpCandidates, doJump, complyWithDemand,
       hailAuthority, payOutstanding, hailSelected, exitTransfer, shipDealTrade,
@@ -39,6 +39,7 @@
     navList = api.navList; navTargetState = api.navTargetState;
     navMark = api.navMark; jettison = api.jettison; heldCargo = api.heldCargo;
     refuelFromHold = api.refuelFromHold;
+    milFuelFromHold = api.milFuelFromHold;
     openMarket = api.openMarket;
     plottedCourse = api.plottedCourse; jumpCandidates = api.jumpCandidates;
     doJump = api.doJump; complyWithDemand = api.complyWithDemand;
@@ -3310,13 +3311,23 @@
       /* HYDROGEN IS FUEL (2026-10-24): skimmed into the hold, and into the
        * jump tank when the pilot says so - this button, or Enter on this row. */
       var canTank = it.cid === 'hydrogen' && refuelFromHold && G.ship.fuel < G.ship.fuelCap - 0.01;
+      /* MILFUEL IS DRIVE FUEL TOO (2026-11-09): into the milfuel drive's
+       * own tank, sized to the ship, when a drive aboard burns it. */
+      var Sl = global.Slipspace;
+      var canDrive = it.cid === 'milfuel' && milFuelFromHold && Sl && Sl.milFuelCap(G.ship) > 0 &&
+                     Sl.milFuelOf(G.ship) < Sl.milFuelCap(G.ship) - 0.01;
       var btnX0 = btnX1 - btnW - 8;
-      hot(rx + 8, yy, Math.max(40, (canTank ? btnX0 : btnX1) - rx - 12), rowH - 4, (function (n) {
+      hot(rx + 8, yy, Math.max(40, (canTank || canDrive ? btnX0 : btnX1) - rx - 12), rowH - 4, (function (n) {
         return function () { G.invSel = n; };
       })(i));
       if (canTank) {
         btn(ctx, btnX0, yy + 2, btnW, rowH - 8, 'TO TANKS',
             (function (n) { return function () { G.invSel = n; refuelFromHold(); }; })(i),
+            { font: 11 });
+      }
+      if (canDrive) {
+        btn(ctx, btnX0, yy + 2, btnW, rowH - 8, 'TO DRIVE',
+            (function (n) { return function () { G.invSel = n; milFuelFromHold(); }; })(i),
             { font: 11 });
       }
 
@@ -3443,7 +3454,7 @@
     var rows = [];
     function row(label, sub, fn, disabled, opts) {
       rows.push({ label: label, sub: sub, fn: fn, disabled: !!disabled,
-                  hot: !!(opts && opts.hot) });
+                  hot: !!(opts && opts.hot), icon: (opts && opts.icon) || null });
     }
 
     // Repairs and the law come first on every tab: they are what you limp
@@ -3565,10 +3576,22 @@
       var r = rows[G.yardScroll + ri];
       if (!r) break;
       var ry = listY + ri * (bh + gap);
-      btn(ctx, x + 12, ry, rowW, bh,
+      /* A row for a thing you can buy carries its model's still at its
+       * head (2026-11-09: equipment, station crates), and gives up that
+       * width to it rather than printing under it. */
+      var iw = r.icon && Render.drawItemIcon && Render.itemKey(r.icon) ? bh + 2 : 0;
+      btn(ctx, x + 12 + iw, ry, rowW - iw, bh,
           clipText(r.sub ? r.label + '   ·   ' + r.sub : r.label,
-                   Math.floor(rowW / 7.04)),
+                   Math.floor((rowW - iw) / 7.04)),
           r.fn, { disabled: r.disabled, font: 11, hot: r.hot });
+      if (iw) {
+        ctx.save();
+        ctx.fillStyle = '#030a0f';
+        ctx.fillRect(x + 12, ry, bh, bh);
+        ctx.restore();
+        Render.drawItemIcon(ctx, x + 12, ry, bh, r.icon);
+        if (!r.disabled) hot(x + 12, ry, bh, bh, r.fn, null);
+      }
     }
 
     if (cardH) drawHullCard(ctx, x, listY + listH + foot + 4, w, cardH - 4);
@@ -3594,6 +3617,14 @@
       else { ctx.textAlign = 'right'; ctx.fillText(ctr, x + w - 12, listY + listH + 11); }
       ctx.restore();
     }
+
+    /* The item card goes on LAST so its hotspots sit above the rows' -
+     * hitHot walks the list from the end - and so it is drawn over them.
+     * Leaving the BUY tab puts the card away. */
+    if (G.yardTab !== 'buy') G.yardItem = null;
+    else if (G.yardItem) drawItemCard(ctx, x, y, w, h, port);
+    if (G.yardTab !== 'modules') G.yardModule = null;
+    else if (G.yardModule) drawModuleCard(ctx, x, y, w, h);
   }
 
   /* --- CREW: the people aboard, and what they are for --------------------
@@ -3918,7 +3949,7 @@
             function () {
               var r = Cn.unload(G, a.id);
               say(r.ok ? c.name + ' crate lifted off — it waits here' : 'Not here: ' + r.why, 5);
-            }, !yard);
+            }, !yard, { icon: 'mod_' + a.crateId });
       });
     }
 
@@ -3985,7 +4016,7 @@
             function () {
               var res = Cn.load(G, r.id);
               say(res.ok ? c.name + ' crate craned aboard' : 'Not yet: ' + res.why, 5);
-            }, onSlip || !!why, { hot: !onSlip && !why });
+            }, onSlip || !!why, { hot: !onSlip && !why, icon: 'mod_' + r.crateId });
       });
     }
 
@@ -3995,7 +4026,7 @@
       row(c.name.toUpperCase() + ' CRATE  [' + c.size + ']  ·  AT ' + (r.portName || 'another yard').toUpperCase(),
           (r.starName ? r.starName + '  ·  ' : '') +
           (Cn.ready(r, G.t) ? 'ready' : 'ready in ' + fmtLogAge(r.due - G.t)),
-          function () {}, true);
+          function () {}, true, { icon: 'mod_' + r.crateId });
     });
 
     if (!yard) {
@@ -4011,18 +4042,96 @@
         Cn.hasCrawler(G) ? 'paid now, built here, waits here for a Crawler'
                          : 'a station starts as a Crawler — commission one on HULLS first',
         function () {}, true);
+    /* A crate opens its card, as equipment does on BUY (2026-11-09): its
+     * model turning, what it is for, and ORDER on the card. */
     Cn.CRATES.forEach(function (c) {
       var why = Cn.orderRefusal(G, c.id);
       row('  ' + c.name.toUpperCase() + '  [' + c.size + ']  —  ' + c.price + ' cr  ·  ' +
           c.days + (c.days === 1 ? ' day' : ' days'),
           why || (c.blurb + '  ·  ' + Cn.PER_CUBE[c.size] + ' to a cube'),
-          function () {
-            var r = Cn.order(G, c.id);
-            say(r.ok ? c.name + ' crate ordered — ready here in ' + r.days + (r.days === 1 ? ' day' : ' days')
-                     : 'No: ' + r.why, 6);
-          }, !!why);
+          function () { G.yardModule = c.id; }, false,
+          { hot: G.yardModule === c.id, icon: 'mod_' + c.id });
     });
     return 0;
+  }
+
+  /* ---- THE CRATE CARD (2026-11-09) ----------------------------------------
+   * The MODULES tab's own sub-window, the item card's twin: the module's
+   * model turning (Astra's mod_<id>), its size and price, how long it takes
+   * on the slip and how many go to a cube, what it does, and ORDER with the
+   * reason beside it when the yard will not take the order. */
+  function drawModuleCard(ctx, x, y, w, h) {
+    var Cn = global.Construction, c = Cn && Cn.BY_ID[G.yardModule];
+    if (!c) { G.yardModule = null; return; }
+    var sw = global.innerWidth || (x + w);
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,6,9,0.72)';
+    ctx.fillRect(0, 0, sw, y + h);
+    ctx.restore();
+    hot(0, 0, sw, y + h, function () { G.yardModule = null; }, 'close');
+    var cw = Math.min(640, sw - 32), ch = Math.min(300, h - 24);
+    var cx = Math.round(Math.max(16, Math.min(sw - 16 - cw, x + (w - cw) / 2)));
+    var cy = Math.round(y + (h - ch) / 2);
+    ctx.save();
+    ctx.fillStyle = '#06121a';
+    ctx.fillRect(cx, cy, cw, ch);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx + 1, cy + 1, cw - 2, ch - 2);
+    ctx.restore();
+    hot(cx, cy, cw, ch, function () {}, null);
+
+    var pic = Math.min(ch - 60, Math.round(cw * 0.36)), px = cx + 14, py = cy + 14;
+    ctx.save();
+    ctx.fillStyle = '#030a0f';
+    ctx.fillRect(px, py, pic, pic);
+    ctx.strokeStyle = 'rgba(74,151,176,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pic - 1, pic - 1);
+    ctx.restore();
+    var spin = ((typeof performance !== 'undefined' ? performance.now() : 0) / 1000 / ITEM_TURN) * Math.PI * 2;
+    if (!(Render.drawItemPortrait && Render.drawItemPortrait(ctx, px, py, pic, 'mod_' + c.id, spin))) {
+      drawItemStandIn(ctx, px, py, pic, { kind: 'module' }, spin);
+    }
+
+    var tx = px + pic + 16, tw = cx + cw - 14 - tx;
+    ctx.save();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(clipText(c.name + ' crate', Math.floor(tw / 8.5)), tx, cy + 30);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(fmtCredits(c.price), tx, cy + 48);
+    var specs = [['Size', c.size + '  ·  ' + Cn.PER_CUBE[c.size] + ' to a Crawler cube'],
+                 ['On the slip', c.days + (c.days === 1 ? ' day' : ' days')]];
+    ctx.font = '11px ui-monospace, monospace';
+    for (var i = 0, ly = cy + 70; i < specs.length; i++, ly += 15) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(specs[i][0], tx, ly);
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText(specs[i][1], Math.floor((tw - 100) / 6.6)), tx + 100, ly);
+    }
+    ctx.font = 'italic 11px ui-monospace, monospace';
+    ctx.fillStyle = '#c9d8e6';
+    var lines = wrapText(c.blurb || '', Math.floor((tw) / 6.6));
+    for (var li = 0; li < lines.length && cy + 112 + li * 14 < cy + ch - 40; li++) ctx.fillText(lines[li], tx, cy + 112 + li * 14);
+    ctx.restore();
+
+    var why = Cn.orderRefusal(G, c.id), by = cy + ch - 32;
+    btn(ctx, cx + 14, by, 190, 22, 'ORDER  —  ' + fmtCredits(c.price), function () {
+      var r = Cn.order(G, c.id);
+      say(r.ok ? c.name + ' crate ordered — ready here in ' + r.days + (r.days === 1 ? ' day' : ' days')
+               : 'No: ' + r.why, 6);
+      if (r.ok) G.yardModule = null;
+    }, { disabled: !!why, hot: !why, font: 11 });
+    if (why) {
+      ctx.save();
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText(clipText(why, Math.floor((cw - 330) / 6.6)), cx + 214, by + 15);
+      ctx.restore();
+    }
+    btn(ctx, cx + cw - 104, by, 90, 22, 'CLOSE  Esc', function () { G.yardModule = null; }, { font: 10 });
   }
 
   /* --- FLEET: the ships you own and are not sitting in --------------------
@@ -4403,6 +4512,18 @@
       var label = (Combat.SLOT_LABEL[type] || type).toUpperCase() + ' ' +
                   (parseInt(key.replace(/\D+/g, ''), 10) + 1);
       var id = map[key], item = id && Combat.EQUIPMENT[id];
+      /* The slipspace drive is replaced, never sold off - without one she
+       * cannot leave the system (combat.js THE SLIPSPACE BAY). Its row
+       * says so and opens BUY, where a better one is a trade-in. */
+      if (item && item.slot === 'core') {
+        var stdCls = Combat.stockCoreClass ? Combat.stockCoreClass(s.hullId) : null;
+        row(label + ':  ' + item.name.toUpperCase(),
+            (item.slipKind === 'slipdrive' && item.slipClass === stdCls ? 'standard with her frame' : 'trade-in ' + Math.round(item.price * Combat.RESALE) + ' cr') +
+            ' · replace it from BUY, it cannot be sold off',
+            function () { G.yardTab = 'buy'; }, false);
+        shown++;
+        continue;
+      }
       if (item) {
         var refund = Math.round(item.price * Combat.RESALE);
         var detail = item.power > 0 ? item.power.toFixed(1) + ' MW' :
@@ -4490,7 +4611,7 @@
               var r = Combat.buyOutfit(G, 'missile', m.id);
               say(r > 0 ? m.name + ' racked — ' + s.missiles + ' armed'
                         : 'Not enough credits, or no rack free', 4);
-            }, full);
+            }, full, { icon: 'con_' + m.id });
         /* And the rack you are carrying can be ARMED from here, which is
          * the whole point of carrying two: the choice between a certified
          * round and a cheap one is made at the trigger, not at the till. */
@@ -4513,7 +4634,7 @@
           function () {
             var r = Combat.buyOutfit(G, 'decoy', null);
             say(r > 0 ? 'Decoy loaded - ' + s.decoys + ' aboard' : 'Not enough credits', 4);
-          }, dFull);
+          }, dFull, { icon: 'con_decoy' });
     }
 
     /* Slugs for a mass driver (massdriver.js, 2026-11-02): cargo, a tonne
@@ -4525,7 +4646,7 @@
           function () {
             var r = MD.buySlugs(G, 1);
             say(r.ok ? 'Slugs aboard — ' + r.rounds + ' rounds' : 'No: ' + r.why, 4);
-          }, false);
+          }, false, { icon: 'con_slugs' });
     }
     var rack = Combat.sinkRackSize(s);
     if (rack) {
@@ -4536,7 +4657,7 @@
           function () {
             var r = Combat.buyOutfit(G, 'sink', null);
             say(r > 0 ? 'Sink loaded — ' + s.sinks + ' aboard' : 'Not enough credits', 4);
-          }, sFull);
+          }, sFull, { icon: 'con_sink' });
     }
 
     /* THE LIEN TAKES THE TOP OF THE SHELF. Every capital fitting below is
@@ -4571,9 +4692,11 @@
       var sub;
       /* A cruise drive into a full bay is a trade-in, not a refusal: say
        * what it replaces, what it costs after, and how fast you will be. */
-      var dp = it.kind === 'cruisedrive' && Combat.drivePreview ? Combat.drivePreview(G, it.id) : null;
+      /* So is a slipspace drive: the bay is never empty (2026-11-09). */
+      var dp = (it.kind === 'cruisedrive' || it.slot === 'core') && Combat.drivePreview ? Combat.drivePreview(G, it.id) : null;
       if (dp) {
-        fitCheck = dp.ok ? { ok: true } : { ok: false, why: dp.why };
+        /* The budget still decides, judged on the swap. */
+        fitCheck = dp.ok ? (dp.core ? fitCheck : { ok: true }) : { ok: false, why: dp.why };
         afford = s.credits >= (dp.ok ? dp.net : it.price);
       }
       var yardWhy = Combat.yardRefusal ? Combat.yardRefusal(G) : null;
@@ -4581,11 +4704,15 @@
       if (lienWhy) sub = 'not while the lien stands — see above';
       else if (!fitCheck.ok) sub = fitCheck.why;
       else if (!afford) sub = 'short ' + ((dp && dp.ok ? dp.net : it.price) - s.credits) + ' cr';
+      else if (dp && dp.ok && dp.core) {
+        sub = 'reach ×' + dp.reachNow.toFixed(2) + ' → ×' + dp.reachAfter.toFixed(2) +
+              (dp.replaces ? '  ·  trades in ' + dp.replaces.name + ' (' + dp.tradeIn + ' cr)  ·  ' + dp.net + ' cr net' : '');
+      }
       else if (dp && dp.ok) {
         var fc = function (c) { return c >= 100 ? Math.round(c) + 'c' : c.toFixed(1) + 'c'; };
-        var dry = it.mil && !((s.cargo && s.cargo.milfuel) > 1e-6);
+        var dry = it.mil && !((s.milFuel || 0) > 1e-6);
         sub = 'top speed ' + fc(dp.nowC) + ' → ' + fc(dp.topC) +
-              (dry ? ' (' + fc(dp.topC * 5) + ' with milfuel aboard)' : '') +
+              (dry ? ' (' + fc(dp.topC * 5) + ' with milfuel in its tank)' : '') +
               (dp.replaces ? '  ·  trades in ' + dp.replaces.name + ' (' + dp.tradeIn + ' cr)  ·  ' + dp.net + ' cr net'
                            : '  ·  second drive');
       }
@@ -4593,18 +4720,234 @@
                                        it.power.toFixed(1) + ' MW · ' + it.heat + ' heat/s';
       else if (it.kind === 'reactor') sub = '+' + it.powerBonus.toFixed(1) + ' MW · ' + it.mass + ' t';
       else sub = it.power.toFixed(1) + ' MW · ' + it.mass + ' t';
-      /* The yard's own copy, after the numbers. The numbers are what you
-       * decide on; the pitch is what makes the shelf feel like a shelf. */
-      if (fitCheck.ok && afford && it.pitch) sub += '  “' + it.pitch + '”';
-
+      /* CLICK TO LOOK, NOT TO BUY (2026-11-09). Astra: "descriptions are
+       * abridged. Change this so that we click on it to select and view
+       * properties, and then a separate 'buy' icon in the description; this
+       * will open a sub-window that describes the item." A row clipped its
+       * pitch at the panel's edge, and a click on it spent the money. So a
+       * row is now the name, the price and the one line that decides it
+       * (why not, or the headline numbers), and a click opens the item's
+       * card (drawItemCard): the turning portrait, every number, the whole
+       * of the yard's copy, and BUY on the card itself. A row you cannot
+       * buy from still opens - reading about a thing you cannot afford yet
+       * is how you decide to save for it. */
       row(it.name.toUpperCase() + ' — ' + it.price + ' cr', sub,
-          (function (eq) {
-            return function () {
-              var r = Combat.buyEquipment(G, eq.id);
-              say(r.ok ? eq.name + ' fitted' : 'No: ' + r.why, 5);
-            };
-          })(it), !fitCheck.ok || !afford || !!lienWhy);
+          (function (eq) { return function () { G.yardItem = eq.id; }; })(it),
+          false, { hot: G.yardItem === it.id, icon: 'eq_' + it.id });
     }
+  }
+
+  /* ---- THE ITEM CARD (2026-11-09) ----------------------------------------
+   * A sub-window over the yard: a square portrait of the item turning, its
+   * name, price and slot, what it draws and weighs, the numbers that matter
+   * for its kind, the yard's whole copy, and a BUY button with the price on
+   * it. Click outside it or press Esc to close.
+   *
+   * THE PORTRAIT is the 3D icon Astra is having made for every purchasable
+   * item. Until one exists for an item, Render.drawItemPortrait answers
+   * false and a turning wireframe stands in, shaped by the item's kind. */
+  var ITEM_TURN = 9;                  // seconds for a full revolution
+
+  function itemSpecs(it) {
+    var L = [];
+    if (it.kind === 'reactor') L.push(['Power', '+' + it.powerBonus.toFixed(1) + ' MW generated']);
+    else if (typeof it.power === 'number') L.push(['Power draw', it.power.toFixed(1) + ' MW']);
+    if (typeof it.mass === 'number') L.push(['Mass', it.mass + ' t']);
+    if (it.slot) L.push(['Slot', ((Combat.SLOT_LABEL && Combat.SLOT_LABEL[it.slot]) || it.slot).toLowerCase() + (it.size ? ' · class ' + it.size : '')]);
+    if (typeof it.dmg === 'number') L.push(['Damage', it.dmg + ' per hit' + (it.variety ? ' · ' + it.variety : '')]);
+    if (typeof it.range === 'number') L.push(['Range', it.range + ' km']);
+    if (typeof it.cooldown === 'number') L.push(['Cycle', it.cooldown + ' s' + (it.dmg && it.cooldown ? ' · ' + (it.dmg / it.cooldown).toFixed(1) + ' dmg/s' : '')]);
+    if (typeof it.heat === 'number') L.push(['Heat', it.heat + '/s firing']);
+    if (typeof it.cap === 'number') L.push(['Capacity', String(it.cap)]);
+    if (typeof it.regen === 'number') L.push(['Regeneration', it.regen + ' /s']);
+    if (it.misfire) L.push(['Misfire', Math.round(it.misfire * 100) + '% of shots']);
+    /* A slipspace drive core (2026-11-09): what the class buys in reach,
+     * what it takes off the corridor, and the milfuel tank it brings. */
+    var Sl = global.Slipspace;
+    if (Sl && (it.slipKind === 'slipdrive' || it.slipKind === 'mildrive')) {
+      L.push(['Reach', '×' + (Sl.RANGE_BY_CLASS[it.slipClass] || 1).toFixed(2) + ' a tank']);
+      L.push(['Transit', it.slipKind === 'mildrive' ? 'half the corridor' : 'the corridor\'s own']);
+      L.push(['Covers hulls', 'to ' + (it.slipClass === 'IV' ? 'any size' : Sl.hullClassById(it.slipClass).maxTonnes + ' t')]);
+      /* Which frames leave the yard with this one (combat.js THE SLIPSPACE BAY). */
+      if (it.slipKind === 'slipdrive' && Combat.STOCK_CORE) {
+        var std = Object.keys(Combat.STOCK_CORE).filter(function (z) { return Combat.STOCK_CORE[z] === it.slipClass; });
+        if (std.length) L.push(['Standard on', std.join(', ') + ' hulls']);
+      }
+      if (Combat.drivePreview && G.ship) {
+        var cp = Combat.drivePreview(G, it.id);
+        if (cp && cp.ok && cp.replaces) L.push(['Trade-in', cp.replaces.name + ' (' + cp.tradeIn + ' cr) · ' + cp.net + ' cr net']);
+        else if (cp && !cp.ok) L.push(['Fitted', 'in her slipspace bay now']);
+      }
+    }
+    if (Sl && (it.slipKind === 'mildrive' || it.mil) && G.ship) {
+      L.push(['Milfuel tank', Math.round((G.ship.fuelCap || 0) * Sl.MILFUEL_TANK_SHARE * 10) / 10 + ' t on this hull']);
+    }
+    if (it.kind === 'cruisedrive' && Combat.drivePreview) {
+      var dp = Combat.drivePreview(G, it.id);
+      if (dp && dp.ok) {
+        var fc = function (c) { return c >= 100 ? Math.round(c) + 'c' : c.toFixed(1) + 'c'; };
+        L.push(['Top speed', fc(dp.nowC) + ' → ' + fc(dp.topC)]);
+        if (dp.replaces) L.push(['Trade-in', dp.replaces.name + ' (' + dp.tradeIn + ' cr) · ' + dp.net + ' cr net']);
+      }
+    }
+    return L;
+  }
+
+  /* A turning stand-in, until the item's own model arrives: a box for
+   * modules, a barrel for guns, a dome for shields, a coil for drives. */
+  function drawItemStandIn(ctx, x, y, size, it, spin) {
+    var cx = x + size / 2, cy = y + size / 2, R = size * 0.32;
+    var cs = Math.cos(spin), sn = Math.sin(spin), tilt = 0.45, ct = Math.cos(tilt), st = Math.sin(tilt);
+    function P(px, py, pz) {
+      var rx = px * cs - pz * sn, rz = px * sn + pz * cs;
+      var ry = py * ct - rz * st;
+      return [cx + rx * R, cy - ry * R];
+    }
+    function line(a, b) { var p = P(a[0], a[1], a[2]), q = P(b[0], b[1], b[2]); ctx.moveTo(p[0], p[1]); ctx.lineTo(q[0], q[1]); }
+    ctx.save();
+    ctx.strokeStyle = 'rgba(127,214,255,0.85)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    var k = it.kind || '', i, N = 12;
+    if (k === 'gun' || k === 'turret') {
+      for (i = 0; i < N; i++) {
+        var a0 = i / N * Math.PI * 2, a1 = (i + 1) / N * Math.PI * 2, r0 = 0.28;
+        line([Math.cos(a0) * r0, Math.sin(a0) * r0, -1], [Math.cos(a1) * r0, Math.sin(a1) * r0, -1]);
+        line([Math.cos(a0) * r0, Math.sin(a0) * r0, 1], [Math.cos(a1) * r0, Math.sin(a1) * r0, 1]);
+        if (i % 3 === 0) line([Math.cos(a0) * r0, Math.sin(a0) * r0, -1], [Math.cos(a0) * r0, Math.sin(a0) * r0, 1]);
+      }
+      line([-0.55, -0.45, -1], [0.55, -0.45, -1]); line([0.55, -0.45, -1], [0.55, -0.45, -0.3]);
+      line([0.55, -0.45, -0.3], [-0.55, -0.45, -0.3]); line([-0.55, -0.45, -0.3], [-0.55, -0.45, -1]);
+    } else if (k === 'shield' || k === 'shroud' || k === 'ecm') {
+      for (i = 0; i < N; i++) {
+        var b0 = i / N * Math.PI * 2, b1 = (i + 1) / N * Math.PI * 2;
+        line([Math.cos(b0), -0.4, Math.sin(b0)], [Math.cos(b1), -0.4, Math.sin(b1)]);
+        line([Math.cos(b0) * 0.7, 0.35, Math.sin(b0) * 0.7], [Math.cos(b1) * 0.7, 0.35, Math.sin(b1) * 0.7]);
+        if (i % 2 === 0) { line([Math.cos(b0), -0.4, Math.sin(b0)], [Math.cos(b0) * 0.7, 0.35, Math.sin(b0) * 0.7]);
+                           line([Math.cos(b0) * 0.7, 0.35, Math.sin(b0) * 0.7], [0, 0.8, 0]); }
+      }
+    } else if (/drive|slip/.test(k)) {
+      for (i = 0; i < 36; i++) {
+        var c0 = i / 36 * Math.PI * 8, c1 = (i + 1) / 36 * Math.PI * 8;
+        line([Math.cos(c0) * 0.6, -1 + i / 18, Math.sin(c0) * 0.6], [Math.cos(c1) * 0.6, -1 + (i + 1) / 18, Math.sin(c1) * 0.6]);
+      }
+      line([0, -1.1, 0], [0, 1.1, 0]);
+    } else {
+      var v = [[-1, -0.7, -0.8], [1, -0.7, -0.8], [1, 0.7, -0.8], [-1, 0.7, -0.8], [-1, -0.7, 0.8], [1, -0.7, 0.8], [1, 0.7, 0.8], [-1, 0.7, 0.8]];
+      [[0, 1], [1, 2], [2, 3], [3, 0], [4, 5], [5, 6], [6, 7], [7, 4], [0, 4], [1, 5], [2, 6], [3, 7]].forEach(function (e) { line(v[e[0]], v[e[1]]); });
+      line([-0.6, 0.7, -0.4], [0.6, 0.7, -0.4]); line([-0.6, 0.7, 0], [0.6, 0.7, 0]); line([-0.6, 0.7, 0.4], [0.6, 0.7, 0.4]);
+    }
+    ctx.stroke();
+    ctx.font = 'bold 9px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(127,214,255,0.45)';
+    ctx.textAlign = 'center';
+    ctx.fillText('ICON TO COME', cx, y + size - 8);
+    ctx.restore();
+  }
+
+  function drawItemCard(ctx, x, y, w, h, port) {
+    var it = Combat.EQUIPMENT[G.yardItem];
+    if (!it) { G.yardItem = null; return; }
+    var s = G.ship;
+    /* The card is a window of its own, so it is centred on the SCREEN and
+     * may spill over the cargo and equipment panels: inside the yard's
+     * column alone, on a laptop-width window, every number on it was cut
+     * short ("12 per h…"). So the whole screen behind it is dimmed, down to
+     * the yard's foot, and a click anywhere on that closes the card rather
+     * than reaching whatever is underneath. */
+    var sw = global.innerWidth || (x + w);
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,6,9,0.72)';
+    ctx.fillRect(0, 0, sw, y + h);
+    ctx.restore();
+    hot(0, 0, sw, y + h, function () { G.yardItem = null; }, 'close');
+
+    var cw = Math.min(640, sw - 32), ch = Math.min(340, h - 24);
+    var cx = Math.round(Math.max(16, Math.min(sw - 16 - cw, x + (w - cw) / 2)));
+    var cy = Math.round(y + (h - ch) / 2);
+    ctx.save();
+    ctx.fillStyle = '#06121a';
+    ctx.fillRect(cx, cy, cw, ch);
+    ctx.strokeStyle = MFD_EDGE;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(cx + 1, cy + 1, cw - 2, ch - 2);
+    ctx.restore();
+    /* The card itself swallows clicks, so a click on its prose does not
+     * close it; its buttons are registered after and win. */
+    hot(cx, cy, cw, ch, function () {}, null);
+
+    /* THE PORTRAIT, square, turning. */
+    var pic = Math.min(ch - 70, Math.round(cw * 0.36));
+    var px = cx + 14, py = cy + 14;
+    ctx.save();
+    ctx.fillStyle = '#030a0f';
+    ctx.fillRect(px, py, pic, pic);
+    ctx.strokeStyle = 'rgba(74,151,176,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pic - 1, pic - 1);
+    ctx.restore();
+    var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+    var spin = (now / ITEM_TURN) * Math.PI * 2;
+    var drew = Render.drawItemPortrait ? Render.drawItemPortrait(ctx, px, py, pic, it.id, spin) : false;
+    if (!drew) drawItemStandIn(ctx, px, py, pic, it, spin);
+
+    /* NAME, price, the specs as a table, then the copy. */
+    var tx = px + pic + 16, tw = cx + cw - 14 - tx;
+    ctx.save();
+    ctx.font = 'bold 14px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(clipText(it.name, Math.floor(tw / 8.5)), tx, cy + 30);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(fmtCredits(it.price) + (it.grey ? '  ·  grey market' : ''), tx, cy + 48);
+    var specs = itemSpecs(it), ly = cy + 70;
+    ctx.font = '11px ui-monospace, monospace';
+    for (var i = 0; i < specs.length && ly < cy + ch - 120; i++, ly += 15) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(specs[i][0], tx, ly);
+      ctx.fillStyle = MFD_INK;
+      /* Measured, not counted: the values mix digits, dots and arrows. */
+      var val = specs[i][1], room = tw - 100;
+      while (val.length > 2 && ctx.measureText && ctx.measureText(val).width > room) val = val.slice(0, -2) + '…';
+      ctx.fillText(val, tx + 100, ly);
+    }
+    ctx.restore();
+
+    /* The copy, all of it, under the portrait and the table, full width. */
+    var prose = [it.pitch, it.blurb && it.blurb !== it.pitch ? it.blurb : null].filter(Boolean).join('  ');
+    var qy = Math.max(py + pic + 18, ly + 8);
+    ctx.save();
+    ctx.font = 'italic 11px ui-monospace, monospace';
+    ctx.fillStyle = '#c9d8e6';
+    var lines = wrapText(prose ? '“' + prose + '”' : '', Math.floor((cw - 28) / 6.6));
+    for (var li = 0; li < lines.length && qy + li * 14 < cy + ch - 40; li++) ctx.fillText(lines[li], cx + 14, qy + li * 14);
+    ctx.restore();
+
+    /* WHETHER IT CAN BE BOUGHT, and why not, beside the button. */
+    var fitCheck = Combat.canFit(s, it.id), afford = s.credits >= it.price, why = null;
+    var dp = it.kind === 'cruisedrive' && Combat.drivePreview ? Combat.drivePreview(G, it.id) : null;
+    if (dp) { fitCheck = dp.ok ? { ok: true } : { ok: false, why: dp.why }; afford = s.credits >= (dp.ok ? dp.net : it.price); }
+    var yardWhy = Combat.yardRefusal ? Combat.yardRefusal(G) : null;
+    var lienWhy = Combat.lienRefusal ? Combat.lienRefusal(G) : null;
+    if (lienWhy) why = 'not while the lien stands';
+    else if (yardWhy) why = yardWhy;
+    else if (!fitCheck.ok) why = fitCheck.why;
+    else if (!afford) why = 'short ' + ((dp && dp.ok ? dp.net : it.price) - s.credits) + ' cr';
+    var by = cy + ch - 32;
+    btn(ctx, cx + 14, by, 190, 22, 'BUY  —  ' + fmtCredits(dp && dp.ok ? dp.net : it.price),
+        function () {
+          var r = Combat.buyEquipment(G, it.id);
+          say(r.ok ? it.name + ' fitted' : 'No: ' + r.why, 5);
+          if (r.ok) G.yardItem = null;
+        }, { disabled: !!why, hot: !why, font: 11 });
+    if (why) {
+      ctx.save();
+      ctx.font = '11px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText(clipText(why, Math.floor((cw - 330) / 6.6)), cx + 214, by + 15);
+      ctx.restore();
+    }
+    btn(ctx, cx + cw - 104, by, 90, 22, 'CLOSE  Esc', function () { G.yardItem = null; }, { font: 10 });
   }
 
   /* --- HULLS -------------------------------------------------------------- */
@@ -4777,7 +5120,12 @@
       var type = Combat.slotType(key);
       var label = (Combat.SLOT_LABEL[type] || type).toUpperCase() + ' ' +
                   (parseInt(key.replace(/\D+/g, ''), 10) + 1);
-      row('  ' + label + ':  ' + optionName(s, o.fit[key]) + '  ▶', null, function () {
+      /* An empty slipspace bay on the sheet is her standard drive, which
+       * the yard fits whatever else is ordered (THE SLIPSPACE BAY). */
+      var shownName = (type === 'core' && !o.fit[key] && Combat.stockCore)
+        ? (Combat.EQUIPMENT[Combat.stockCore(hullId)] || {}).name + ' (standard)'
+        : optionName(s, o.fit[key]);
+      row('  ' + label + ':  ' + shownName + '  ▶', null, function () {
         var list = slotOptions(s, port, key, o);
         var at = list.indexOf(o.fit[key] || null);
         var next = list[(at + 1) % list.length];
@@ -5086,6 +5434,12 @@
         continue;
       }
       if (it.kind === 'turret') val = 'automatic';
+      /* The slipspace drive by its class, and what it asks of the budget:
+       * nothing for her frame's own (combat.js THE SLIPSPACE BAY). */
+      else if (it.slot === 'core') {
+        var extraP = Combat.budgetPower ? Combat.budgetPower(s, it) : it.power;
+        val = 'Class ' + it.slipClass + (extraP > 0 ? ' · ' + extraP.toFixed(1) + ' MW' : ' · standard');
+      }
       else if (it.kind === 'shield') val = Math.round(s.shieldHp) + ' / ' + it.cap;
       else if (it.kind === 'heatshield') val = it.shed + ' units/s';
       else if (it.kind === 'reactor') val = '+' + it.powerBonus.toFixed(1) + ' MW';
@@ -5625,6 +5979,8 @@
       if (course.barred) {
         ctx.fillText('RESTRICTED SPACE — ' + course.restricted.label.toLowerCase() +
                      '; no transponder aboard', px + 30, by + 20);
+      } else if (course.noDrive) {
+        ctx.fillText('NO SLIPSPACE DRIVE — a yard will fit one', px + 30, by + 20);
       } else {
         ctx.fillText('SHORT BY ' + course.shortfall.toFixed(2) + ' t — refuel, or lighten the hold',
                      px + 30, by + 20);
@@ -8024,6 +8380,9 @@
         ctx.fillText('RESTRICTED — ' + plan.restricted.label.toUpperCase(), dx, iy);
         ctx.fillStyle = 'rgba(200,220,245,0.7)';
         ctx.fillText('the checkpoint wants a transponder you are not carrying', dx, iy + 16);
+      } else if (plan.noDrive) {
+        ctx.fillStyle = '#ff7a7a';
+        ctx.fillText('NO SLIPSPACE DRIVE — a yard will fit one', dx, iy);
       } else if (!plan.possible) {
         ctx.fillStyle = '#ff7a7a';
         ctx.fillText('SHORT BY ' + plan.shortfall.toFixed(2) + ' t — refuel, or sell cargo',
