@@ -1082,7 +1082,7 @@
       var shut = global.Intel ? global.Intel.signRefusal(G, offer) : null;
       if (shut) return { ok: false, why: shut };
     } else if (offer.type === 'survey' || offer.type === 'sweep' ||
-               offer.type === 'recovery') {
+               offer.type === 'recovery' || offer.type === 'found') {
       /* Nothing goes aboard at signing. The deliverable is a file, or a
        * pod that is still sitting on a world. A prospect contract is NOT
        * here: its tonnage is cargo you go and dig, and the hold check
@@ -1128,6 +1128,7 @@
        * is why they are spelled out rather than copied wholesale: a
        * contract is a record, not a view of the offer it came from. */
       hop: offer.hop || false, hours: offer.hours || 0,
+      dark: offer.dark || false, foundFrom: offer.foundFrom,
       claimKey: offer.claimKey || null,
       fixKey: offer.fixKey || null, siteId: offer.siteId || null,
       siteName: offer.siteName || null, ownerFac: offer.ownerFac || null,
@@ -1201,7 +1202,7 @@
   /* The contracts fieldwork.js settles on its own terms. Listed rather
    * than guessed at, so adding one there without saying so here fails
    * loudly in a test rather than quietly on a dock. */
-  var FIELDWORK_TYPES = { survey: 1, sweep: 1, prospect: 1, recovery: 1 };
+  var FIELDWORK_TYPES = { survey: 1, sweep: 1, prospect: 1, recovery: 1, found: 1 };
   /* The three routes out of a classified find (intel.js). Settled there,
    * for the same reason: none of them is freight. */
   var INTEL_TYPES = { watch: 1, walkin: 1 };

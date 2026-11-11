@@ -663,6 +663,21 @@
                   uniqueGroup: 'survey',
                   minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers.' },
+    /* THE SHIELDED DEEP ARRAY (2026-11-11). The Guild's chain reward, and
+     * the only grade-4 instrument in the game. Two things the civilian
+     * array cannot do: it reads a quarter deeper, and its own housing is
+     * quiet, so mapping somebody's ground does not announce that
+     * somebody is mapping it.
+     *
+     * NOT FOR SALE AT ANY PRICE, by the same unlisted flag the forged
+     * transponder uses: a shelf that listed it with a reason would be
+     * advertising the Guild's chain to somebody who has not run it. The
+     * price is kept for the trade-in and the insurance line. */
+    shieldsurvey: { id: 'shieldsurvey', name: 'Shielded deep array', slot: 'utility',
+                    kind: 'survey', survey: 4, quiet: true, price: 96000, power: 2.4, mass: 4,
+                    uniqueGroup: 'survey', unlisted: true,
+                    minDev: 0, minStanding: -100, minCrime: 0, grey: false,
+                    pitch: 'Grade 4, in a housing that does not answer a coil. Guild issue; not sold.' },
     /* THE MAGNETOMETER (2026-11-10, Astra: "a magnetic field mapping
      * function on the planetary scanner"; separate instrument, her answer).
      * Reads a world's magnetic field - the planet's own dipole and the

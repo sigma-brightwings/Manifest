@@ -78,11 +78,32 @@
     if (offer.type === 'smuggle') return offer.tonnes * 140;
     if (offer.type === 'sabotage') return 5000;
     if (offer.infiltrate) return 3200;
+    /* The surveyor's rungs (POWER_ARCS.guild). Priced on what the work
+     * costs you rather than what it weighs: a world read the whole way
+     * round is days of orbits, and a port is a crawler. */
+    if (offer.type === 'survey') return Math.round(4200 + 9000 * (offer.covWant || 0.5));
+    if (offer.type === 'found') return 26000;
+    if (offer.type === 'sweep') return 5200;
+    if (offer.supply) return Math.round(3600 + offer.tonnes * 520);
+    if (offer.type === 'prospect') return Math.round(3200 + offer.tonnes * 420);
+    if (offer.type === 'recovery') return 5600;
     return offer.tonnes * 40;
   }
 
+  var FIELD_DEADLINE = 18 * 86400;        // a world read, a claim filed, a port built
+  /* A degraded supply chapter is still a supply chapter. */
+  function supplyMark(offer) {
+    if (offer) offer.supply = true;
+    return offer;
+  }
+
   function deadlineFor(offer, t) {
-    return t - (t % WINDOW) + (offer.type === 'courier' ? COURIER_DEADLINE : HAUL_DEADLINE);
+    var span = offer.type === 'courier' ? COURIER_DEADLINE
+             : (offer.type === 'survey' || offer.type === 'prospect' ||
+                offer.type === 'found' || offer.type === 'sweep' ||
+                offer.type === 'recovery') ? FIELD_DEADLINE
+             : HAUL_DEADLINE;
+    return t - (t % WINDOW) + span;
   }
 
   /* One concrete offer for an abstract step type, cast against whatever is
@@ -91,7 +112,110 @@
    * system cannot support the requested flavour (no black market, no
    * neighbouring star to courier to) rather than breaking the chain. */
   function castStep(type, port, sys, galaxy, here, rng, t, opts) {
+    /* The career, for the one chapter that has to look at it. Optional
+     * everywhere else, which is why it rides in opts rather than the
+     * signature every other caller would have to learn. */
+    var G0 = (opts && opts.G) || null;
     var Eco = global.Economy;
+
+    /* ---- THE SURVEYOR'S CHAPTERS (2026-11-11) ---------------------------
+     * Five rungs of the mining ladder, cast as contracts the rest of the
+     * game already knows how to settle: the first two are fieldwork.js's
+     * survey and prospect objectives, the third is a new one it settles
+     * too, the fourth is an ordinary haul to a port you own, and the last
+     * is a survey of ground that happens to have somebody's secret
+     * sitting on it.
+     *
+     * Every one degrades, like the sequels' chapters do: a story that
+     * cannot be cast here must not stop, so each falls back to a haul and
+     * the words carry it. */
+    if (type === 'gsurvey' || type === 'gdark') {
+      var Sv = global.Survey;
+      if (!Sv || !Sv.TABLE) return null;
+      var worldsG = (sys.bodies || []).filter(function (b) {
+        return (b.kind === 'planet' || b.kind === 'moon') && Sv.TABLE[b.type];
+      });
+      if (!worldsG.length) return null;
+      var bodyG = null;
+      if (type === 'gdark') {
+        /* The ground under something nobody lists. If this system has no
+         * such thing, the chapter is still the chapter - the Guild wants
+         * a world read that nobody has read, and the furthest one out
+         * will do. */
+        var hidden = (sys.ports || []).filter(function (p) { return p.classified; });
+        for (var hi = 0; hi < hidden.length && !bodyG; hi++) {
+          var hostH = hidden[hi].orbit && sys.byId ? sys.byId[hidden[hi].orbit.parent] : null;
+          if (hostH && Sv.TABLE[hostH.type]) bodyG = hostH;
+        }
+        if (!bodyG) bodyG = worldsG[worldsG.length - 1];
+      } else {
+        bodyG = rng.pick(worldsG);
+      }
+      var wantG = type === 'gdark' ? 0.8 : 0.65;
+      return {
+        type: 'survey', cid: null, tonnes: 0,
+        from: port.id, fromName: port.name, toPortId: port.id, toName: port.name,
+        surveyKey: null, bodyId: bodyG.id, bodyName: bodyG.name,
+        covFrom: 0, covWant: wantG, dark: type === 'gdark',
+        text: Math.round(wantG * 100) + ' per cent of ' + bodyG.name +
+              (type === 'gdark' ? ', whoever else is standing on it' : ', the whole way round')
+      };
+    }
+    if (type === 'gprospect') {
+      var SvP = global.Survey;
+      if (!SvP || !SvP.deposits) return null;
+      var picksG = [];
+      (sys.bodies || []).forEach(function (b) {
+        if (b.kind !== 'planet' && b.kind !== 'moon') return;
+        var rowsG;
+        try { rowsG = SvP.deposits(b, sys) || []; } catch (e) { rowsG = []; }
+        rowsG.forEach(function (r) {
+          if (r.cid !== 'hydrogen' && r.grade > 0.18) picksG.push({ body: b, cid: r.cid });
+        });
+      });
+      if (!picksG.length) return null;
+      var pg = rng.pick(picksG), tg = rng.int(10, 20);
+      return {
+        type: 'prospect', cid: pg.cid, tonnes: tg,
+        from: port.id, fromName: port.name, toPortId: port.id, toName: port.name,
+        claimKey: null, bodyId: pg.body.id, bodyName: pg.body.name,
+        text: tg + ' t of ' + ((SvP.NAMES && SvP.NAMES[pg.cid]) || pg.cid) +
+              ' out of ' + pg.body.name + ' itself'
+      };
+    }
+    if (type === 'gfound') {
+      return {
+        type: 'found', cid: null, tonnes: 0,
+        from: port.id, fromName: port.name, toPortId: port.id, toName: port.name,
+        starId: here ? here.id : null,
+        text: 'a port of your own, anywhere in this system'
+      };
+    }
+    if (type === 'gsupply') {
+      /* To the port the player founded, if there is one here; otherwise an
+       * ordinary run, because the chapter must not stall. */
+      var St = global.Stations;
+      var mine = null;
+      if (St && St.list && St.portId) {
+        var own = St.list(G0).filter(function (x) { return !x.seized; });
+        for (var oi = 0; oi < own.length && !mine; oi++) {
+          var pp = sys.byId && sys.byId[St.portId(own[oi])];
+          if (pp) mine = pp;
+        }
+      }
+      if (!mine) return supplyMark(castStep('haul', port, sys, galaxy, here, rng, t));
+      var goodsG = Object.keys(port.market.rows || {}).filter(function (cid) {
+        return cid !== 'waste' && cid !== Eco.FUEL_ID && Eco.BY_ID[cid] &&
+               !Eco.BY_ID[cid].contraband && port.market.rows[cid].exporter;
+      });
+      if (!goodsG.length) return supplyMark(castStep('haul', port, sys, galaxy, here, rng, t));
+      var cidG = rng.pick(goodsG), tnG = rng.int(10, 22);
+      return {
+        type: 'haul', supply: true, cid: cidG, tonnes: tnG,
+        from: port.id, fromName: port.name, toPortId: mine.id, toName: mine.name,
+        text: tnG + 't ' + Eco.BY_ID[cidG].name + ' to ' + mine.name + ', which is yours'
+      };
+    }
 
     /* THE SEQUELS' CHAPTER KINDS (see POWER_ARCS.navy2). Each degrades to an
      * ordinary courier or haul where this system cannot support it, so the
@@ -393,6 +517,74 @@
   var POWER_ARCS = {
 
     /* ===================================================================
+     * THE SURVEYOR'S CHAIN (2026-11-11). The third power chain, and the
+     * only one that is not a side.
+     *
+     * Astra chose this: the Guild "locks nothing" - it is a trade body,
+     * not a faction. It buys surveys from everybody at every desk, it
+     * holds no space, and it does not care whose roll your name is on. So
+     * it sets no allegiance and is barred by none: you can run it beside
+     * the navy's chain or the Syndicate's, and the chapter-three fork
+     * that shuts those two does not exist here.
+     *
+     * WHAT IT IS ABOUT. The other two chains are about a leak. This one
+     * is about the mining ladder the game already has - survey, claim,
+     * extract, found, supply - run end to end by somebody who is being
+     * watched while they do it, and then asked for one thing more than
+     * the ladder covers. Every chapter is a rung you could already
+     * climb; what the chain adds is a reason and a witness.
+     *
+     *   survey   - read a world properly, not for ore but for the file
+     *   prospect - and then prove the file by bringing the rock back
+     *   found    - put a port where your own numbers say it should go
+     *   supply   - and keep it alive, which is the part nobody films
+     *   dark     - and now map the one somebody else is standing on
+     *
+     * THE GATE IS SURVEY STANDING, which did not exist until today: the
+     * Guild now keeps a ledger, one point per fifteen thousand credits
+     * of data (Survey.guildCredit). You cannot talk your way into this
+     * chain, and you cannot shoot your way in. You have to have done the
+     * work. */
+    guild: {
+      id: 'the-long-read', power: 'guild', key: 'guild', neutral: true,
+      name: 'The Long Read', gate: 20,
+      hook: 'A Guild assayer has been reading your files and would like a word',
+      reward: { id: 'shieldsurvey', credits: 40000, standing: 25 },
+      rewardText: 'A shielded deep array, Guild issue, in a housing that does not answer a coil. ' +
+                  'Grade four: a third more ground per pass than anything sold, and quiet while it works.',
+      steps: [
+        { type: 'gsurvey', payMul: 1.2,
+          title: 'A Proper Reading',
+          text: 'Everyone sells the Guild scraps. The assayer wants one world read the ' +
+                'whole way round - not the half you could be bothered with on the way ' +
+                'past. Map it, and bring the file in yourself.' },
+        { type: 'gprospect', payMul: 1.5,
+          title: 'The Rock Itself',
+          text: 'A file is a claim about a world. The Guild has been burned by files. ' +
+                'Hold the ground, put a pod on it, and bring back what it actually ' +
+                'brings up - bought tonnage will not do, and they will know.' },
+        { type: 'gfound', payMul: 1.9,
+          title: 'Where You Said It Should Be',
+          text: 'Now put something there. Anywhere in this system, orbital or on the ' +
+                'ground - the Guild is not choosing the spot, that is the entire test. ' +
+                'They want to see whether a surveyor backs their own numbers with money.' },
+        { type: 'gsupply', payMul: 2.2,
+          title: 'The Part Nobody Films',
+          text: 'Founding one is a photograph. Keeping it is a job. Run it the cargo ' +
+                'it cannot make for itself and do it before the crews start asking ' +
+                'whether anybody meant this.' },
+        { type: 'gdark', payMul: 2.8,
+          title: 'Somebody Else\'s Ground',
+          text: 'Last thing, and it is not a Guild thing. There is an installation ' +
+                'nobody lists, sitting on ground the Guild has never been allowed to ' +
+                'read. Read it. They are not asking what the installation is - they ' +
+                'are asking what is underneath it, and they would like that on file ' +
+                'before anyone else thinks to want it.' }
+      ]
+    },
+
+
+    /* ===================================================================
      * THE SEQUELS, AND WHAT THEY ARE FOR (Astra, 2026-10-19): the quiet
      * jammer is "hard to come by, probably at the end of [its] own quest
      * line - if you want to do a sabotage mission, you got to be able to
@@ -557,6 +749,11 @@
     if (C && C.systemCorruption && sys) {
       if (C.systemCorruption(G, sys) >= 62) return 'syndicate';
     }
+    /* AND OTHERWISE THE GUILD, which is at every desk because it buys
+     * from every desk. It is the fallback rather than a competitor: a
+     * fleet carrier is the navy's dock and a corrupt system is the
+     * Syndicate's, and the Guild is simply everywhere those are not. */
+    if (port && port.market) return 'guild';
     return null;
   }
 
@@ -576,6 +773,9 @@
    * costs standing with the local flag, the Syndicate's with the outlaws,
    * because those are the two ledgers the rest of the game already keeps. */
   function powerFaction(power, port) {
+    /* The Guild keeps its own books and no flag's. That is the whole
+     * difference between a trade body and a side. */
+    if (power === 'guild') return 'guild';
     return power === 'syndicate' ? 'outlaw' : (port && port.faction) || 'navy';
   }
 
@@ -583,6 +783,11 @@
    * one? `allegiance` is set exactly once, when a third chapter is taken,
    * and nothing clears it. */
   function powerBarred(G, power) {
+    /* Astra, 2026-11-11: the Guild "locks nothing". It will work with a
+     * fleet pilot and it will work with somebody on a slate, because it
+     * is buying numbers rather than loyalty - so an allegiance neither
+     * opens nor shuts this door. */
+    if (power === 'guild') return false;
     return !!(G && G.allegiance && G.allegiance !== power);
   }
 
@@ -603,7 +808,7 @@
     var win = windowIndex(t);
     var rng = new RNG('power|' + arc.id + '|' + port.id + '|' + win);
     var step = arc.steps[0];
-    var offer = castStep(step.type, port, sys, galaxy, here, rng, t, { target: step.target });
+    var offer = castStep(step.type, port, sys, galaxy, here, rng, t, { target: step.target, G: G });
     if (!offer) offer = castStep('haul', port, sys, galaxy, here, rng, t);
     if (!offer) return [];
 
@@ -623,7 +828,15 @@
       text: arc.name + ' — ' + step.title + ': ' + offer.text,
       desc: step.text,
       campaign: true, power: arc.power, powerKey: arc.key || arc.power, arcId: arc.id, factionId: powerFaction(arc.power, port),
-      step: idx, infiltrate: !!offer.infiltrate
+      step: idx, infiltrate: !!offer.infiltrate,
+      /* THE SURVEYOR'S CHAPTERS are settled on coverage, on provenance or
+       * on a port existing, not on a hold (fieldwork.js). The fields
+       * those settlements read have to survive the cast. */
+      surveyKey: offer.surveyKey || null, claimKey: offer.claimKey || null,
+      bodyId: offer.bodyId || null, bodyName: offer.bodyName || null,
+      covFrom: offer.covFrom, covWant: offer.covWant, dark: !!offer.dark,
+      supply: !!offer.supply,
+      starId: offer.starId || null
     };
   }
 
@@ -670,7 +883,7 @@
     /* THE POINT OF NO RETURN, and it is the ACT of taking the chapter
      * rather than delivering it — you are choosing when you sign, not when
      * you arrive. Nothing clears it afterwards. */
-    if (nextIdx === POINT_OF_NO_RETURN && !G.allegiance && !arc.sequel) {
+    if (nextIdx === POINT_OF_NO_RETURN && !G.allegiance && !arc.sequel && !arc.neutral) {
       G.allegiance = arc.power;
       var other = arc.power === 'navy' ? POWER_ARCS.syndicate : POWER_ARCS.navy;
       G.powers[other.power] = { arcId: other.id, step: 0, status: 'barred' };
@@ -686,7 +899,7 @@
     var rng = new RNG('power|' + arc.id + '|' + nextIdx + '|' + win + '|' + port.id);
     var nstep = arc.steps[nextIdx];
     if (nstep.type === 'contact') return castContact(G, arc, nextIdx, port, sys, t, rng, progress, hooks);
-    var offer = castStep(nstep.type, port, sys, G.galaxy, G.here, rng, t, { target: nstep.target });
+    var offer = castStep(nstep.type, port, sys, G.galaxy, G.here, rng, t, { target: nstep.target, G: G });
     /* AN AUTHORED CHAIN MUST NOT STALL. The generic arcs above can afford
      * to — they are a shape, and a shape that cannot be cast here can be
      * picked up at the next port of the same flag. A story cannot: it
@@ -708,13 +921,14 @@
     }
     var entry = dress(powerEntry(arc, nextIdx, offer, port, t), port, sys, G.here, offer.toStar);
     (G.missions = G.missions || []).push(entry);
+    if (global.Fieldwork && global.Fieldwork.onAccept) global.Fieldwork.onAccept(G, entry);
     progress.step = nextIdx;
     progress.status = 'active';
 
     if (hooks && hooks.say) {
       /* THE WARNING, one chapter early. A point of no return the player did
        * not see coming is a bug rather than a decision. */
-      if (nextIdx === POINT_OF_NO_RETURN - 1) {
+      if (nextIdx === POINT_OF_NO_RETURN - 1 && !arc.neutral && !arc.sequel) {
         hooks.say(arc.steps[nextIdx].title + ' — and the one after it decides ' +
                   'which side of this you are on.', 8);
       } else {

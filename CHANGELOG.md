@@ -40,6 +40,31 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-11, the surveyor's chain, and a Guild that keeps books)
+
+The third power chain, and the only one that is not a side. Astra chose its shape: the Guild **locks nothing** — it is a trade body, not a faction. It buys surveys from everybody at every desk, it holds no space, and it does not care whose roll your name is on.
+
+**The Guild keeps a ledger now.** Until today it bought survey data from anybody and remembered nothing, which made "survey standing" a phrase rather than a number. One point per 15,000 cr of data sold, capped at six per sale so one enormous world does not buy the whole relationship: the Guild's good opinion is made of exactly one thing, numbers it did not have before, and it is built rather than bought. It shows on the F7 standing list under the local flags, where it belongs — it flies no flag and is in nobody's faction list.
+
+**The Long Read**, five chapters, gated at +20 with the Guild (`src/arcs.js`). The other two chains are about a leak; this one is the mining ladder the game already has — survey, claim, extract, found, supply — run end to end by somebody who is being watched while they do it, and then asked for one thing more than the ladder covers.
+
+1. **A Proper Reading** — map one world the whole way round, 65%, and bring the file in yourself. *"Everyone sells the Guild scraps."*
+2. **The Rock Itself** — hold the ground, put a pod on it, bring back what it actually brings up. Checked against a live claim as well as the hold: *"the Guild has been burned by files."*
+3. **Where You Said It Should Be** — found a port, anywhere in the system, orbital or on the ground. The Guild is not choosing the spot; that is the entire test.
+4. **The Part Nobody Films** — supply it. *"Founding one is a photograph. Keeping it is a job."*
+5. **Somebody Else's Ground** — read the world a classified installation is sitting on. *"They are not asking what the installation is — they are asking what is underneath it."*
+
+- **It commits you to nothing.** No allegiance is set at chapter three and none bars it, so a pilot already on a fleet roll or a slate can run it start to finish, and the warning the other two give at chapter two is correctly silent here.
+- **The reward is the only grade-4 instrument in the game**: a **shielded deep array**, Guild issue, on no shelf at any price (the same `unlisted` flag the forged transponder uses — a listing with a reason would advertise the chain to somebody who has not run it). What the extra grade buys is the thing a surveyor actually wants: **a third more ground per pass**, which over a world is the difference between three orbits and two. Plus 40,000 cr and +25.
+- **Every chapter is cast against the real system and degrades rather than stalling**, like the sequels' chapters: no readable world, no own port to supply, and the chapter still happens — the words are the story.
+- **A chapter that carries nothing still pays.** `basePay` was tonnage times forty with a handful of freight-shaped exceptions, so the surveyor's chapters came out at a fee of **zero**; and the supply run, once it degraded to an ordinary haul, came out at **792 cr** sitting between a founding at 49,400 and a last chapter at 71,920. Both found by the suite walking the chain end to end, which is the only way a number like that shows itself. The five now pay about 12,000 / 17,000 / 49,000 / 18,000 / 72,000 — not monotonic, deliberately: founding a port is the expensive chapter and supplying it is not.
+- **Saves:** additive, **no version bump**.
+- **Tests:** `test/guild.test.js` (40 checks, `story` group): the chain exists and is flagged neutral, the Guild bars nobody while the other two still bar each other, the ledger's rate and cap, the reward is the only grade 4 and is on no shelf and reads measurably wider, the chain refuses a stranger and opens to somebody who has done the work, and all five chapters run in order against a real kawartha system and pay.
+
+### Changed (2026-11-11)
+
+- **Walking into a classified installation pays about 2× the position's value rather than 3.4×**, and watching one about 1.5× rather than 2.1× (Astra, after reading the numbers: at the top end the old multiplier was a Kestrel for one job). Walking in still pays more than watching — the prize is that you *can* do it, not that it makes the rest of the game irrelevant.
+
 ### Added (2026-11-10, what a secret is worth, and the three ways to spend it)
 
 Astra, on what finding a black site should be good for: *"Sell the location. You can go there and trade. Missions key off it."* And later, on the shape of the work: *"to spy for a rival empire on a secret installation for which you have already obtained clearance, like being recruited on a station while doing some other skullduggery shit..."* This is all of that (`src/intel.js`, new).

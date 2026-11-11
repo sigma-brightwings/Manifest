@@ -509,6 +509,16 @@
   function onAccept(G, m) {
     if (!G || !m) return;
     var Sv = global.Survey;
+    var star = (G.here && G.here.id) || 'sys';
+    if (!m.surveyKey && m.bodyId && m.type === 'survey') m.surveyKey = star + ':' + m.bodyId;
+    if (!m.claimKey && m.bodyId && m.type === 'prospect') m.claimKey = star + ':' + m.bodyId;
+    /* A PORT OF YOUR OWN, counted from however many you had when you
+     * agreed to put up another. Otherwise a surveyor who already owned
+     * three could settle this one by docking. */
+    if (m.type === 'found') {
+      m.foundFrom = countOf(G.stations);
+      if (!m.starId) m.starId = (G.here && G.here.id) || null;
+    }
     if (m.type === 'survey' && m.surveyKey) {
       var rec = (G.surveys || {})[m.surveyKey];
       var cov = rec ? (Sv && Sv.covClass ? Sv.covClass(rec, 1) : rec.cov || 0) : 0;
@@ -544,6 +554,10 @@
       if (m.aboard) return 'take ' + poss(m.owner) + ' pod to ' + m.toName;
       return 'the pod is on ' + m.bodyName;
     }
+    if (m.type === 'found') {
+      if (countOf(G.stations) > (m.foundFrom || 0)) return 'founded - tell them at ' + m.toName;
+      return 'found a port of your own, anywhere in this system';
+    }
     if (m.type === 'sweep') {
       if (countOf(G.found) > (m.sweepFrom || 0)) return 'contact logged - take it to ' + m.toName;
       if (m.sweptAt != null) return 'clean sweep on file - take it to ' + m.toName;
@@ -574,7 +588,22 @@
     if (m.type === 'sweep') return settleSweep(G, port, t, m, hooks);
     if (m.type === 'prospect') return settleProspect(G, port, t, m, hooks);
     if (m.type === 'recovery') return settleRecovery(G, port, t, m, hooks);
+    if (m.type === 'found') return settleFound(G, port, t, m, hooks);
     return false;
+  }
+
+  /* A PORT THAT EXISTS. Not a licence, not a plan, not a crawler parked
+   * somewhere promising: Stations.found has to have returned one since
+   * you agreed to put it up. */
+  function settleFound(G, port, t, m, hooks) {
+    if (!(countOf(G.stations) > (m.foundFrom || 0))) {
+      if (hooks && hooks.say) {
+        hooks.say('They want to see a port with your name on it before they pay for one', 5);
+      }
+      return false;
+    }
+    pay(G, m, m.pay, hooks, 'A port of your own, signed off at ' + port.name + ': ' + m.pay + ' cr');
+    return true;
   }
 
   /* A live claim on the world the contract names. The provenance IS the
@@ -673,8 +702,8 @@
     if (J && J.add && G) J.add(G, 'mission', line);
   }
 
-  var STANDING_WIN = { survey: 4, sweep: 5, prospect: 5, recovery: 4 };
-  var OURS = { survey: 1, sweep: 1, prospect: 1, recovery: 1 };
+  var STANDING_WIN = { survey: 4, sweep: 5, prospect: 5, recovery: 4, found: 6 };
+  var OURS = { survey: 1, sweep: 1, prospect: 1, recovery: 1, found: 1 };
 
   /* WHAT THE ROW SHOULD SAY IT COSTS YOU. The board's third column has
    * always been hold space, because every contract on it was freight.
@@ -684,6 +713,7 @@
     if (o.type === 'sweep') return 'magnetometer';
     if (o.type === 'recovery') return 'a free drone rack';
     if (o.type === 'prospect') return o.tonnes + 't to dig and carry';
+    if (o.type === 'found') return 'a crawler and a licence';
     return null;
   }
 

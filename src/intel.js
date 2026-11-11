@@ -286,8 +286,12 @@
 
   var WATCH_HOURS = 60;                 // ship-hours on station to call it a watch
   var WATCH_KM = 90000;                 // how close is "sitting off it"
-  var WATCH_MULT = 2.1;                 // of what the fix would have sold for
-  var WALKIN_MULT = 3.4;
+  /* Tuned by Astra, 2026-11-11: walking in used to pay 3.4x a sale, which
+   * at the top end was a Kestrel for one job. It should pay a bit more
+   * than watching, not a lot more - the prize is that you CAN do it, not
+   * that it makes the rest of the game irrelevant. */
+  var WATCH_MULT = 1.5;                 // of what the fix would have sold for
+  var WALKIN_MULT = 2.0;
   var WALKIN_CLEARANCE = 25;            // standing with the owner that opens the door
   var INTEL_DEADLINE = 20 * 86400;
 

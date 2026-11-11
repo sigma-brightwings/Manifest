@@ -715,9 +715,16 @@
    * for surveying. The swath is half the angle to the horizon - wide from
    * high up, narrow down low - and never more than about 35 degrees. */
   var RANGE_R = 3.0;
-  function swathAt(R, rad) {
+  /* GRADE 4 READS WIDER (2026-11-11). The Guild's shielded array is the
+   * only instrument above the civilian three, and what the extra buys is
+   * the one thing a surveyor actually wants: a pass that covers more
+   * ground. A third again, which over a whole world is the difference
+   * between three orbits and two. */
+  var WIDE_GRADE = 4, WIDE_MUL = 1.33;
+  function swathAt(R, rad, lvl) {
     var horizon = Math.acos(Math.max(-1, Math.min(1, R / Math.max(rad, R * 1.0001))));
-    return Math.max(0.035, Math.min(0.6, horizon * 0.5));
+    var w = horizon * 0.5 * ((lvl >= WIDE_GRADE) ? WIDE_MUL : 1);
+    return Math.max(0.035, Math.min(0.6, w));
   }
 
   function recordFor(G, sys, key, name, kind) {
@@ -771,7 +778,7 @@
       var r = len(rel), h = cross(rel, vrel), hl = len(h);
       var fr = spinFrame(body, t); fr.t = t;
       var period = body.rotation && body.rotation.period;
-      var w = swathAt(body.radius, r);
+      var w = swathAt(body.radius, r, lvl);
       var dir = scale(rel, 1 / r);
       var gained = cells ? markAt(cells, fr, dir, t, period, w) : 0;
       if (cellsM) gainedM += markAt(cellsM, fr, dir, t, period, w);
@@ -1199,6 +1206,21 @@
       return { rec: rec, price: value(rec, sys, now) };
     }).filter(function (s) { return s.price > 0; });
   }
+  /* WHAT THE GUILD THINKS OF YOU (2026-11-11). One point per fifteen
+   * thousand credits of survey data, because the Guild's good opinion is
+   * made of exactly one thing: numbers it did not have before. Capped per
+   * sale so that one enormous world does not buy the whole relationship. */
+  var GUILD_PER = 15000;
+  var GUILD_MAX_PER_SALE = 6;
+
+  function guildCredit(G, total) {
+    var M = global.Missions;
+    if (!M || !M.bumpStanding || !(total > 0)) return 0;
+    var up = Math.min(GUILD_MAX_PER_SALE, Math.floor(total / GUILD_PER));
+    if (up > 0) M.bumpStanding(G, 'guild', up);
+    return up;
+  }
+
   function sell(G, sys, now) {
     var list = saleable(G, sys, now), total = 0;
     list.forEach(function (s) {
@@ -1210,7 +1232,8 @@
       delete s.rec.tMean;
     });
     if (G.ship) G.ship.credits += total;
-    return { total: total, count: list.length };
+    var up = guildCredit(G, total);
+    return { total: total, count: list.length, guild: up };
   }
 
   /* Grade words, for the scanner that does not do numbers. */
@@ -1229,7 +1252,7 @@
     hash01: hash01, deposits: deposits, remaining: remaining,
     step: step, level: level, keyOf: keyOf, targetFor: targetFor,
     cellsOf: cellsOf, coverageOf: coverageOf, packCells: packCells, markAt: markAt, spinFrame: spinFrame,
-    swathAt: swathAt,
+    swathAt: swathAt, WIDE_GRADE: WIDE_GRADE, WIDE_MUL: WIDE_MUL,
     value: value, saleable: saleable, sell: sell, ageFactor: ageFactor,
     arrayCov: arrayCov, meanT: meanT, migrateRec: migrateRec, CELL_PAD: CELL_PAD,
     CLASS: CLASS, TOP: TOP, classOf: classOf, covClass: covClass, soldClass: soldClass,
@@ -1239,6 +1262,7 @@
     cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL,
     magMap: magMap, fieldAt: fieldAt, magRead: magRead, fieldLines: fieldLines, magLevel: magLevel,
     sourceField: sourceField, sweepContacts: sweepContacts, runSweep: runSweep, foundPort: foundPort,
+    guildCredit: guildCredit, GUILD_PER: GUILD_PER, GUILD_MAX_PER_SALE: GUILD_MAX_PER_SALE,
     SWEEP_SECONDS: SWEEP_SECONDS, SWEEP_POWER: SWEEP_POWER, SWEEP_FLOOR: SWEEP_FLOOR,
     FIX_GOOD: FIX_GOOD, FIX_SPAN: FIX_SPAN, REF_KM: REF_KM
   };

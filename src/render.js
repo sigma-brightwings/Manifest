@@ -14780,10 +14780,16 @@
    * copy, the one hung on ships. */
   var ITEM_MESH = {};
   var ITEM_FILL = 2.8;               // camera distance, in model reaches
+  var ICON_STAND_IN = {
+    magnetometer: 'surveyscan',     // TODO: ref/icons/eq_magnetometer.glb
+    shieldsurvey: 'deepsurvey'      // TODO: ref/icons/eq_shieldsurvey.glb
+  };
+
   function itemKey(id) {
     var M = global.ItemModels;
     if (!M || !id) return null;
     if (M[id]) return id;
+    if (ICON_STAND_IN[id] && !M['eq_' + id]) id = ICON_STAND_IN[id];
     var pre = ['eq_', 'con_', 'good_', 'mod_'];
     for (var i = 0; i < pre.length; i++) if (M[pre[i] + id]) return pre[i] + id;
     return null;

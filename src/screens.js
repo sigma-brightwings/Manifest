@@ -5791,6 +5791,24 @@
       ctx.restore();
     }
 
+    /* THE GUILD'S OWN BOOKS (2026-11-11). It flies no flag and holds no
+     * space, so it is in nobody's faction list - and the surveyor's
+     * chain is gated on exactly this number. Shown only once you have
+     * sold them something, because before that there is nothing to say. */
+    var guildSt = (G.standing || {}).guild || 0;
+    if (guildSt) {
+      var gy = sy + 20 + facs.length * 17;
+      if (gy <= top + pad + colH - 12) {
+        ctx.save();
+        ctx.font = 'bold 12px ui-monospace, monospace';
+        ctx.fillStyle = '#9ce89c';
+        ctx.fillText('Mining Guild', pad + 14, gy);
+        ctx.fillStyle = guildSt > 9 ? '#7dffb0' : MFD_DIM;
+        ctx.fillText(Missions.standingLabel(guildSt) + ' (' + guildSt + ')', pad + leftW * 0.55, gy);
+        ctx.restore();
+      }
+    }
+
     /* --- the board, right --- */
     var rx = pad * 2 + leftW, rw = w - rx - pad;
     ctx.save();
