@@ -38,6 +38,37 @@ before they update.
 
 ---
 
+## Unreleased
+
+### Added (2026-11-10, business brought to a desk, and work for a ship with instruments)
+
+Astra, on two things the board was missing: *"I also want there to be a larger variety of missions that are available to the player at a lower notoriety. You should also gain faction level by bringing good trade to that faction, say an increase of 2 for every 100,000 cr in berth fees and fuel and stuff (equipment, ships and modules) you've bought from faction stations?"* Her answers on the design: **services only** (not cargo trade), **capped around +25**, and *"short hop missions need to pay at least twice as much or they aren't worth the time it takes to do them."*
+
+**Patronage: the money you spend at a desk buys some of its goodwill** (`Missions.patronage`, `src/missions.js`).
+
+- **+2 standing per 100,000 cr of services**, booked to whoever flies the flag over the port that took it: berth fees (your own arrears and your laid-up fleet's weekly bill), fuel, repairs, outfitting, ordnance, a repaint, a hull, and a yard build to order. **Not cargo trade** — what a market pays you for grain is not money you gave anybody.
+- **Capped at +25 from spending alone.** The cap is on what money bought, not on standing: work you fly for them still carries you well past it.
+- **Kept as a ledger, not a per-purchase bonus**: two numbers per faction, what you have spent and what it has already paid out. So ten small top-ups are worth one big one, the cap is exact, and no reload, refund or rounding can be paid for twice. A trade-in that pays *you* out is not business brought to the yard and counts for nothing. The books are kept in whole credits so a long career cannot drift on fuel priced per fraction of a tonne.
+- **A marked career buys nothing.** The `G.marks` guard still forces −100: a desk that has you marked takes your fuel money and still wants you dead.
+- **It shows on F7**, beside the standing it bought: `trade +6`, or `trade +25 max`.
+- **Saves:** additive, **no version bump**. A career from before the ledger starts at nothing, which is honest — it was never counted.
+
+**Five new kinds of board work, all open at zero standing** (`src/fieldwork.js`, new).
+
+The board is dealt per port and per window rather than per career — a deliberate property, and the reason `missions.js` has written down three separate times that *"what you are cleared for is not in scope here."* These contracts do depend on the career: on what is bolted to the hull and what you have already mapped. So rather than make the whole board career-dependent and re-deal every port in every seed, each new pass runs **last, in its own stream**, and adds rows. **An existing board is byte-identical with this file loaded and no instruments fitted**, and the suite checks exactly that.
+
+- **Short hops** — in-system runs **priced by the clock, not the tonne**. The old board paid 250 cr plus 28–55 a tonne for any haul, which for a four-tonne run to the next moon is a fee you would decline on principle: *"Run 5t Textiles to Low Vault — 374 cr."* A hop estimates the round trip, pays for the hours at **2.2× the hourly rate** with a 900 cr floor, and is due **tomorrow** rather than in three days: *"A pallet of spares, 2 t, over to Coldwater Post by tomorrow — 2,979 cr."* The multiplier is on the hour rate rather than bolted on at the end, so a genuinely quick hop stays a small fee and one across a system you misjudged still pays for the day it ate.
+- **Survey contracts** (needs a survey scanner) — map a stated fraction of a named world and bring the file back. Measured against **where your own survey stood when you signed**, so a world you had already mapped is not a contract you complete by docking, and a world you are halfway through is credit you keep. Paid per point of new coverage. The data stays yours and still sells to the Guild; what the client bought is a copy.
+- **Sweep contracts** (needs the magnetometer) — take the coil out past the charted bodies and report what answered. **A confirmed nothing is paid**, at 45% — because a contract that only pays on a hit is paying you to invent one, and *"we swept it and there is nothing there"* is the answer a shipping line actually needed.
+- **Prospect contracts** — tonnage **off a named world**, checked against a live claim as well as the hold. Buying the same ore on the market and docking with it does not satisfy it: the provenance is what the client is paying for, and they pay about 2.4× market for it. Signing hands you nothing — this is the one freight contract you go and dig.
+- **Recovery contracts** — an outfit winding up in the system wants its mining pod back off a rock rather than written off (the NPC prospectors in `claims.js`, who have been sitting out there filling hoppers since October). **The mechanical content of the contract is that prying it loose is lawful**: same hands, same rock, same pod, and the only difference is whether the owner asked. `claims.js` now asks `Fieldwork.lawfulPry` before it logs a theft, so a contracted pod comes aboard cold and an uninvited one is still HOT. Whatever is in the hopper when you get there is yours.
+- **The capability ledger** (`Fieldwork.capsOf`): one pass over a career — instrument grades, free hold, worlds mapped and how much of each, claims held, ports founded, installations found — read once per board rather than guessed at per branch. Everything in it is a primitive or a count; nothing live can reach a signed contract or a save.
+- **The contract rows say what is actually left.** A fieldwork contract is not short of freight, so the F7 list no longer reads `FREIGHT MISSING (0/0t)` at one: it says `0% of Mirven I, need 28%`, or `no live claim on Mirven I — file one at any desk`, or `the pod is on Mirven V`. The board's third column stops saying "0t of hold" and says what the work actually costs you: a survey scanner, a magnetometer, a free drone rack, or tonnes to dig and carry.
+- **Saves:** additive, **no version bump**. The new contract fields ride on `G.missions`, which was already saved whole.
+- **Tests:** `test/patronage.test.js` (33 checks) and `test/fieldwork.test.js` (69 checks), both in the `story` group; `tools/probe-fieldwork.js` fits the instruments, docks and reads the board in the running game.
+
+---
+
 ## 1.3.1 "Clementine" (2026-11-10)
 
 ### Added (2026-11-10, the installations nobody lists, and the coil that finds them)

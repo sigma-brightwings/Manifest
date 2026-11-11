@@ -87,8 +87,23 @@
 
   /* Park the ship the player is currently flying, as a record, at a port.
    * Used when they buy a new hull and keep the old one. */
+  /* Whose clamp this is. Read at the moment she is parked or arrives,
+   * because settle() is handed no system and a hull can be laid up four
+   * systems from where you are standing (Missions.patronage, 2026-11-10). */
+  function flagOf(sys, portId) {
+    var p = sys && sys.byId ? sys.byId[portId] : null;
+    return (p && p.faction) || null;
+  }
+
+  function berthPatron(G, rec, cr) {
+    var M = global.Missions;
+    if (!M || !M.patronage || !(cr > 0) || !rec.portFaction) return;
+    M.patronage(G, rec.portFaction, cr, 'berth');
+  }
+
   function park(G, ship, portId, name) {
     var rec = record(ship, portId, name);
+    rec.portFaction = flagOf(G.sys, portId);
     rec.berthTo = rec.wagesTo = G.t || 0;
     return add(G, rec);
   }
@@ -298,7 +313,7 @@
         var preB = berthDue(rec, upto);
         rec.berthTo = Math.max(rec.berthTo, upto);
         if (preB.cr > 0) {
-          if (s.credits >= preB.cr) { s.credits -= preB.cr; lines.push('Berth ' + preB.cr + ' cr  ·  ' + rec.name); }
+          if (s.credits >= preB.cr) { s.credits -= preB.cr; berthPatron(G, rec, preB.cr); lines.push('Berth ' + preB.cr + ' cr  ·  ' + rec.name); }
           else rec.arrears = (rec.arrears || 0) + preB.cr;
         }
         continue;
@@ -332,6 +347,7 @@
       if (owe <= 0) continue;
       if (s.credits >= owe) {
         s.credits -= owe;
+        berthPatron(G, rec, owe);
         rec.arrears = 0;
         lines.push('Berth ' + owe + ' cr  ·  ' + rec.name + ' at ' +
                    (rec.portName || 'her clamp'));
@@ -1110,6 +1126,7 @@
       if (t < o.t0 + o.cruise) continue;
       rec.port = o.to;
       rec.portName = o.toName;
+      rec.portFaction = flagOf(sys, o.to);
       /* A PORT CHARGES FOR STORAGE. The days under way were not on a
        * clamp, so the berth clock restarts at the new one; the part-week
        * she left behind at the old port was never a whole week and is
@@ -1236,7 +1253,7 @@
   var Fleet = {
     record: record, list: list, add: add, park: park, at: at,
     byId: byId, remove: remove, resale: resale, describe: describe,
-    berthFee: berthFee, berthDue: berthDue, settle: settle,
+    berthFee: berthFee, berthDue: berthDue, settle: settle, flagOf: flagOf,
     BERTH_WEEK: BERTH_WEEK, BERTH_CAP: BERTH_CAP,
     RESALE: RESALE,
     /* standing orders */

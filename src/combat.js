@@ -9011,6 +9011,15 @@
     return role === 'shipyard' || role === 'highport';
   }
 
+  /* The yard's cut of what you just spent, booked to whoever flies a flag
+   * over it (Missions.patronage, 2026-11-10). A trade-in nets off first,
+   * because what the yard took is what it took. */
+  function patronFor(G, amount, what) {
+    var M = global.Missions;
+    if (!M || !M.patronage || !(amount > 0)) return;
+    M.patronage(G, dockedPort(G), amount, what);
+  }
+
   function dockedPort(G) {
     var s = G && G.ship;
     return (s && s.docked && G.sys && G.sys.byId) ? G.sys.byId[s.docked] || null : null;
@@ -9113,6 +9122,7 @@
     if (why) return { ok: false, why: why };
     if ((s.credits || 0) < REPAINT_PRICE) return { ok: false, why: 'a repaint is ' + REPAINT_PRICE + ' cr' };
     s.credits -= REPAINT_PRICE;
+    patronFor(G, REPAINT_PRICE, 'paint');
     s.livery = want;
     /* Faction colours are the faction's: a navy livery remembers whose. */
     s.liveryFaction = want === 'navy' ? port.faction : (want === 'syn' ? 'outlaw' : null);
@@ -9385,6 +9395,7 @@
     if (!cost) return 0;
     if (G.ship.credits < cost) return -cost;
     G.ship.credits -= cost;
+    patronFor(G, cost, 'repairs');
     G.ship.hullHp = G.ship.hullMax;
     G.deadPanels = {};                 // the screens come back with the hull
     G.hullWarned = false;
@@ -9437,6 +9448,7 @@
     var v = fitItem(s, id, key);
     if (!v.ok) return v;
     s.credits -= net;
+    patronFor(G, net, 'outfitting');
     return { ok: true, key: v.key, cost: net, item: item, tradeIn: tradeIn, replaced: oldKey ? true : false };
   }
 
@@ -9526,6 +9538,7 @@
 
     if (kind === 'missile') {
       s.credits -= item.price;
+      patronFor(G, item.price, 'ordnance');
       var racks2 = racksOf(s), r2 = racks2[item.id];
       /* A NEW CRATE GETS A NEW QUALITY, and the quality belongs to the
        * crate rather than to the round — buying the first of a batch is
@@ -9549,8 +9562,8 @@
       syncRacks(s);
       return item.price;
     }
-    if (kind === 'sink') { s.credits -= item.price; s.sinks++; return item.price; }
-    if (kind === 'decoy') { s.credits -= item.price; s.decoys = (s.decoys || 0) + 1; return item.price; }
+    if (kind === 'sink') { s.credits -= item.price; patronFor(G, item.price, 'ordnance'); s.sinks++; return item.price; }
+    if (kind === 'decoy') { s.credits -= item.price; patronFor(G, item.price, 'ordnance'); s.decoys = (s.decoys || 0) + 1; return item.price; }
 
     /* A gun replaces whatever is in the first hardpoint, which is what the
      * old one-gun-at-a-time shop meant by "buying a gun". Anything else
@@ -9699,6 +9712,9 @@
       parked.starName = G.here ? G.here.name : null;
     }
     s.credits -= cost;             // negative cost = they pay you the difference
+    /* A trade-in that pays YOU out is no business brought to the yard,
+     * which is why patronage only counts a positive bill. */
+    patronFor(G, cost, 'hull');
     /* THE HULL'S BIRTH MARK. Stamped when the ship is bought and never
      * touched again — it is what the cockpit's flair is seeded from, so the
      * bridge you learned stays the bridge you have. Deliberately NOT the
@@ -9840,6 +9856,7 @@
     if (!q.ok) return { ok: false, why: q.why };
     var port = q.port, s = G.ship, t = G.t || 0;
     s.credits -= q.cost;
+    patronFor(G, q.cost, 'build');
     var o = {
       id: 'yo' + Math.round(t) + '-' + hullId + '-' + orders(G).length,
       hullId: hullId,
@@ -9955,7 +9972,11 @@
     if (why) return { ok: false, why: why };
     var s = G.ship, h = HULLS[rec.hullId];
     var port = dockedPort(G);
-    if (rec.arrears > 0) { s.credits -= rec.arrears; rec.arrears = 0; }
+    if (rec.arrears > 0) {
+      s.credits -= rec.arrears;
+      patronFor(G, rec.arrears, 'berth');
+      rec.arrears = 0;
+    }
     var ml = G.missions || [], mi;
     var parked = null, credit = 0;
     if (mode === 'keep') {

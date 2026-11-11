@@ -510,7 +510,7 @@
   /* The board. Deterministic in (port, window); the accepted/done sets are
    * the only thing that makes two lookups differ, and they are the
    * player's doing. */
-  function boardAt(port, sys, galaxy, here, t) {
+  function boardAt(port, sys, galaxy, here, t, G) {
     if (!port || !port.market) return [];
     var Eco = global.Economy;
     var win = windowIndex(t);
@@ -612,6 +612,10 @@
      * is the same discipline the feeders and the heavies are built with. */
     passageOffers(port, sys, galaxy, here, t, offers, ctxs);
     navyOffers(port, sys, t, offers, ctxs);
+    /* And the work that depends on what is bolted to the hull: surveys,
+     * sweeps, and the short local runs this board never priced properly
+     * (fieldwork.js). Last, in its own streams, so nothing above moves. */
+    if (global.Fieldwork) global.Fieldwork.offersAt(port, sys, galaxy, here, t, G, offers, ctxs);
 
     /* Every offer gets its headline generated and capped and its long form
      * written, in one place — so a mission type added later cannot ship
@@ -1069,12 +1073,24 @@
       var no = passageRefusal(G, offer);
       if (no) return { ok: false, why: no };
       G.ship.passengers = (G.ship.passengers || 0) + offer.souls;
+    } else if (offer.type === 'survey' || offer.type === 'sweep' ||
+               offer.type === 'recovery') {
+      /* Nothing goes aboard at signing. The deliverable is a file, or a
+       * pod that is still sitting on a world. A prospect contract is NOT
+       * here: its tonnage is cargo you go and dig, and the hold check
+       * below is the honest one for it - except that nothing is handed
+       * over at the desk, so it must not be credited either. */
     } else {
       var free = G.ship.cargoCap - Sim.cargoMass(G.ship);
       if (offer.tonnes > free) {
         return { ok: false, why: 'need ' + offer.tonnes + 't of hold space' };
       }
-      G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
+      /* A prospect contract hands you nothing: you are being paid to go
+       * and get it off a world. Every other freight contract is loaded at
+       * the desk. */
+      if (offer.type !== 'prospect') {
+        G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
+      }
     }
     Sim.refreshShip(G.ship);
     (G.missions = G.missions || []).push({
@@ -1099,8 +1115,20 @@
        * somebody else's word. Absent on contracts signed before 2026-11-01
        * and on campaign chapters, which read as clean and unknown. */
       contents: offer.contents || null,
-      sealed: offer.type === 'courier' ? true : undefined
+      sealed: offer.type === 'courier' ? true : undefined,
+      /* FIELDWORK (fieldwork.js). Absent on every other contract, which
+       * is why they are spelled out rather than copied wholesale: a
+       * contract is a record, not a view of the offer it came from. */
+      hop: offer.hop || false, hours: offer.hours || 0,
+      claimKey: offer.claimKey || null,
+      droneId: offer.droneId || null, owner: offer.owner || null,
+      surveyKey: offer.surveyKey || null, bodyId: offer.bodyId || null,
+      bodyName: offer.bodyName || null,
+      covFrom: offer.covFrom, covWant: offer.covWant,
+      starId: offer.starId || null, sweepFrom: offer.sweepFrom,
+      nothingPay: offer.nothingPay
     });
+    if (global.Fieldwork) global.Fieldwork.onAccept(G, G.missions[G.missions.length - 1]);
     /* A campaign hook (chapter zero of a faction's chain) also opens the
      * chain's own progress record — everything after this rides on it. */
     if (offer.campaign) {
@@ -1158,6 +1186,11 @@
     if (J && G) J.add(G, kind, text);
   }
 
+  /* The contracts fieldwork.js settles on its own terms. Listed rather
+   * than guessed at, so adding one there without saying so here fails
+   * loudly in a test rather than quietly on a dock. */
+  var FIELDWORK_TYPES = { survey: 1, sweep: 1, prospect: 1, recovery: 1 };
+
   function completeAtDock(G, port, sys, t, hooks) {
     var Sim = global.Sim;
     passengersWalkOff(G, port, hooks);
@@ -1205,6 +1238,18 @@
         if (hooks && hooks.say) hooks.say(cut.text, 6);
         if (hooks && hooks.sound) hooks.sound(cut.pay > 0 ? 'pay' : 'warn');
         if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
+        continue;
+      }
+
+      /* FIELDWORK settles on data, not tonnes (fieldwork.js). It returns
+       * false when the work is not done, which leaves the contract on the
+       * books exactly as an underfilled hold does. */
+      if (global.Fieldwork && FIELDWORK_TYPES[m.type]) {
+        if (global.Fieldwork.settle(G, port, sys, t, m, hooks)) {
+          (G.doneMissions = G.doneMissions || {})[m.id] = true;
+          list.splice(i, 1);
+          if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
+        }
         continue;
       }
 
@@ -1361,6 +1406,64 @@
 
   /* With G and a faction, a pinned mark reads as what it is: MARKED, and
    * how far along the road back you are. */
+  /* ---- PATRONAGE: the standing you buy with business (2026-11-10) -------
+   *
+   * Astra: "You should also gain faction level by bringing good trade to
+   * that faction, say an increase of 2 for every 100,000 cr in berth fees
+   * and fuel and stuff (equipment, ships and modules) you've bought from
+   * faction stations?"
+   *
+   * SERVICES, NOT TRADE, and she chose that: berth fees, fuel, repairs,
+   * outfitting, hulls. Money that lands in the power's pocket for something
+   * it provided. Buying and selling CARGO at their markets is already its
+   * own economy with its own feedback, and folding it in here would make
+   * standing a second score for the thing the market is already scoring.
+   *
+   * AND IT IS CAPPED, which she also chose: twenty-five. Spending opens the
+   * first doors - ordinary work, the first chain at either power - and
+   * stops short of the sequels. A rich trader gets taken seriously; a rich
+   * trader does not get handed fleet intelligence's own business because
+   * they bought a lot of fuel. The cap is on what SPENDING is worth, not on
+   * standing: flying the work still takes you to a hundred.
+   *
+   * TWO NUMBERS PER POWER, and the second is what makes the cap exact.
+   * `spent` is the running total; `given` is how much standing that total
+   * has already been worth. Granting the difference means a reload, a
+   * refund or a re-entry cannot pay twice, and the cap is a clamp on
+   * `given` rather than a thing we have to remember having applied. */
+  var PATRON_PER = 100000;          // cr of services per step
+  var PATRON_STEP = 2;              // standing per step
+  var PATRON_CAP = 25;              // the most that spending alone is ever worth
+
+  /* What a power is owed for: everything that is not cargo. The caller
+   * names it so the log can say what the money went on. */
+  function patronage(G, port, amount, what) {
+    if (!G || !port || !(amount > 0)) return 0;
+    amount = Math.round(amount);
+    var fac = typeof port === 'string' ? port : port.faction;
+    if (!fac) return 0;                       // nobody's berth, nobody's gratitude
+    G.patron = G.patron || {};
+    var rec = G.patron[fac] || (G.patron[fac] = { spent: 0, given: 0 });
+    rec.spent += amount;
+    var want = Math.min(PATRON_CAP, Math.floor(rec.spent / PATRON_PER) * PATRON_STEP);
+    if (!(want > rec.given)) return 0;
+    var gain = want - rec.given;
+    rec.given = want;
+    /* Through the ordinary gate, so a marked pilot cannot buy their way
+     * back and every other rule about standing still applies. */
+    bumpStanding(G, fac, gain);
+    return gain;
+  }
+
+  /* What a power's books say your custom has been worth, for the UI. */
+  function patronageOf(G, fac) {
+    var rec = G && G.patron && G.patron[fac];
+    return rec ? { spent: rec.spent, given: rec.given,
+                   toNext: rec.given >= PATRON_CAP ? 0
+                         : PATRON_PER - (rec.spent % PATRON_PER),
+                   capped: rec.given >= PATRON_CAP } : null;
+  }
+
   function standingLabel(v, G, fac) {
     var mk = G && fac && G.marks && G.marks[fac];
     if (mk) return 'MARKED ' + (mk.kills || 0) + '/' + ((global.Combat && global.Combat.MARK_KILLS) || 12);
@@ -1457,7 +1560,9 @@
     licenceRefusal: licenceRefusal,
     passengersUnderFire: passengersUnderFire, passengersWalkOff: passengersWalkOff,
     completeAtDock: completeAtDock, update: update,
-    standing: standing, bumpStanding: bumpStanding, standingLabel: standingLabel,
+    standing: standing,
+    patronage: patronage, patronageOf: patronageOf,
+    PATRON_PER: PATRON_PER, PATRON_STEP: PATRON_STEP, PATRON_CAP: PATRON_CAP, bumpStanding: bumpStanding, standingLabel: standingLabel,
     alreadyHave: alreadyHave,
     bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes, onSabotage: onSabotage,
     bondHolder: bondHolder,

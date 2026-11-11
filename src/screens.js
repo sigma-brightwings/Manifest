@@ -5642,7 +5642,12 @@
       }
       var leftT = m.deadline - G.t;
       var held = G.ship.cargo[m.cid] || 0;
-      var short = held + 1e-9 < m.tonnes;
+      /* A FIELDWORK CONTRACT IS NOT SHORT OF FREIGHT. It is short of
+       * coverage, or of a sweep, or of a pod still on a rock - and
+       * fieldwork.js is the only thing that can say which, so it does
+       * (Fieldwork.progress). "FREIGHT MISSING (0/0t)" was the old line. */
+      var fwLine = (global.Fieldwork && Fieldwork.progress) ? Fieldwork.progress(G, m) : null;
+      var short = !fwLine && held + 1e-9 < m.tonnes;
       var headCols = Math.max(20, Math.floor((leftW - 120) / 7.7));
       var subCols = Math.max(24, Math.floor((leftW - 40) / 6.16));
       ctx.save();
@@ -5658,7 +5663,7 @@
        * accept() copies toPortId/toStarId/toName — and until now the only
        * way to see it was to hope the generated headline mentioned it. */
       ctx.fillStyle = '#7fd6c0';
-      ctx.fillText(clipText(destinationLine(m), subCols), pad + 14, y + 27);
+      ctx.fillText(clipText(fwLine || destinationLine(m), subCols), pad + 14, y + 27);
       /* THE PARCEL (2026-11-01): what you know about what you carry. Only
        * for a parcel actually aboard; "sealed" with no scanner, the
        * contents once a combat scanner or better reads through the seal,
@@ -5742,6 +5747,15 @@
       ctx.fillText(clipText(facs[f].name, 26), pad + 14, yy);
       ctx.fillStyle = st < -9 ? '#ff8a76' : st > 9 ? '#7dffb0' : MFD_DIM;
       ctx.fillText(Missions.standingLabel(st, G, facs[f].id) + ' (' + st + ')', pad + leftW * 0.55, yy);
+      /* HOW MUCH OF THAT YOU BOUGHT. A desk that has taken your berth fees
+       * and your fuel money owes you some of its goodwill, and this is the
+       * part of the number you paid for rather than earned flying
+       * (Missions.patronage). */
+      var pat = Missions.patronageOf ? Missions.patronageOf(G, facs[f].id) : null;
+      if (pat && pat.given > 0 && !(owed > 0)) {
+        ctx.fillStyle = '#4f7d8e';
+        ctx.fillText('trade +' + pat.given + (pat.capped ? ' max' : ''), pad + leftW * 0.80, yy);
+      }
       if (owed > 0) {
         ctx.fillStyle = '#ff5a5a';
         ctx.textAlign = 'right';
@@ -5784,7 +5798,7 @@
       return;
     }
 
-    var offers = Missions.boardAt(docked, G.sys, G.galaxy, G.here, G.t)
+    var offers = Missions.boardAt(docked, G.sys, G.galaxy, G.here, G.t, G)
       .concat(Arcs ? Arcs.campaignBoardAt(G, docked, G.sys, G.galaxy, G.here, G.t) : [])
       /* The two authored chains, ahead of everything else on the board:
        * they are the only offers here that are a STORY rather than a job,
@@ -5847,7 +5861,12 @@
                     : off.campaign ? '#ffe07a'
                     : off.type === 'passage' ? '#c7b4ff'
                     : off.type === 'courier' ? '#b4f0ff'
-                    : off.type === 'disposal' ? '#ffb86b' : MFD_INK;
+                    : off.type === 'disposal' ? '#ffb86b'
+                    /* Fieldwork, in its own colour: this is the work that
+                     * does not come out of a hold (fieldwork.js). */
+                    : (off.type === 'survey' || off.type === 'prospect') ? '#9ce89c'
+                    : (off.type === 'sweep' || off.type === 'recovery') ? '#9cd8e8'
+                    : off.hop ? '#e8d89c' : MFD_INK;
       ctx.fillText((off.campaign ? '★ ' : '') +
                    clipText(off.text, Math.floor((rw - 130) / 7.7)), rx + 16, oy + 14);
       ctx.font = 'bold 11px ui-monospace, monospace';
@@ -5857,6 +5876,8 @@
                             fmtTime(off.deadline - G.t) + '   ·   ' +
                             (noPass ? noPass
                                : off.type === 'passage' ? (off.souls + ' berths')
+                               : (global.Fieldwork && Fieldwork.demand && Fieldwork.demand(off))
+                                 ? Fieldwork.demand(off)
                                : off.tonnes + 't of hold'),
                             Math.floor((rw - 130) / 6.16)), rx + 16, oy + 28);
       ctx.restore();

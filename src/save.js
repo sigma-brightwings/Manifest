@@ -261,6 +261,7 @@
        * the when survives too - a find is worth less the older it is when
        * you come to sell it. Additive: an older career has none, which
        * reads as "found nothing yet", and that is exactly true. */
+      patron: G.patron || {},
       found: G.found || {},
       /* And which latent installations a career has been pointed at, so a
        * reload does not quietly take one back out of the world again. */
@@ -636,6 +637,13 @@
     G.revealed = {};
     if (data.revealed) for (var rk in data.revealed) {
       if (Object.prototype.hasOwnProperty.call(data.revealed, rk)) G.revealed[rk] = data.revealed[rk];
+    }
+    /* Business brought to a faction (Missions.patronage). A career from
+     * before the ledger starts at nothing, which is honest: it was never
+     * counted. */
+    G.patron = {};
+    if (data.patron) for (var pk in data.patron) {
+      if (Object.prototype.hasOwnProperty.call(data.patron, pk)) G.patron[pk] = data.patron[pk];
     }
     G.found = {};
     if (data.found) for (var fk in data.found) {

@@ -513,6 +513,15 @@
     var st = G.npcDrones[d.id] = G.npcDrones[d.id] || {};
     st.gone = t;
     G.ship.drones = (G.ship.drones || 0) + 1;
+    /* SIGNED PAPER MAKES IT A RECOVERY, not a theft (fieldwork.js). Same
+     * hands, same rock, same pod - the difference is whether the owner
+     * asked, and the owner asking is a contract on your books. */
+    var FW = global.Fieldwork;
+    var lawful = FW && FW.lawfulPry ? FW.lawfulPry(G, d.id) : null;
+    if (lawful) {
+      return { ok: true, lawful: true,
+               text: poss(d.owner) + ' pod recovered and racked - take it to ' + lawful.toName };
+    }
     G.ship.hotDrones = (G.ship.hotDrones || 0) + 1;
     logTheft(G, sys, d, t, 'drone', DRONE_PRICE);
     return { ok: true, text: poss(d.owner) + " drone pried loose and racked - HOT until it is set down or fenced" };

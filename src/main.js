@@ -5973,6 +5973,8 @@
     }
     got = Math.round(got * 100) / 100;
     G.ship.credits -= got * p.buy;
+    /* Business brought to whoever's berth this is (Missions.patronage). */
+    if (global.Missions && Missions.patronage) Missions.patronage(G, port, got * p.buy, 'fuel');
     G.ship.fuel += got;
     Eco.applyTrade(port, Eco.FUEL_ID, got, G.t);
     Sim.refreshShip(G.ship);
