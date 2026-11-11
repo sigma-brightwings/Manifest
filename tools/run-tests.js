@@ -48,7 +48,7 @@ var GROUPS = {
     'tools/lint-globals.js', 'test/packed.test.js', 'test/packed-browser.test.js',
     'test/self.test.js', 'test/release.test.js', 'test/physics.test.js',
     'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/precip.test.js',
-    'test/blacksites.test.js',
+    'test/blacksites.test.js', 'test/intel.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
     'test/magnetosphere.test.js', 'test/magnetometer.test.js',

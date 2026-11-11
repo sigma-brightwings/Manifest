@@ -262,6 +262,9 @@
        * you come to sell it. Additive: an older career has none, which
        * reads as "found nothing yet", and that is exactly true. */
       patron: G.patron || {},
+      /* WHAT YOU HAVE SOLD, AND TO WHOM (intel.js). The risk model is
+       * entirely a function of this, so a reload must not launder it. */
+      intel: G.intel || {},
       found: G.found || {},
       /* And which latent installations a career has been pointed at, so a
        * reload does not quietly take one back out of the world again. */
@@ -641,6 +644,10 @@
     /* Business brought to a faction (Missions.patronage). A career from
      * before the ledger starts at nothing, which is honest: it was never
      * counted. */
+    G.intel = {};
+    if (data.intel) for (var ik in data.intel) {
+      if (Object.prototype.hasOwnProperty.call(data.intel, ik)) G.intel[ik] = data.intel[ik];
+    }
     G.patron = {};
     if (data.patron) for (var pk in data.patron) {
       if (Object.prototype.hasOwnProperty.call(data.patron, pk)) G.patron[pk] = data.patron[pk];

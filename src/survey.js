@@ -1096,7 +1096,23 @@
        * its first second stored a falsy 0 and re-found it on every sweep
        * forever. Caught by the suite rather than in play. */
       if (Object.prototype.hasOwnProperty.call(G.found, key)) continue;
-      G.found[key] = t;
+      /* WHOSE IT IS, WRITTEN DOWN AT THE FIX (intel.js, 2026-11-10). The
+       * record used to be the epoch alone, which is all "have I found
+       * this" needs - but a fix you want to SELL has to say who it
+       * belongs to and what sort of place it is, and the only moment
+       * that is in hand is this one: a system four jumps away is not
+       * regenerated to answer a question at a desk. A bare epoch from
+       * an older career still reads as a find; it just has nobody to
+       * sell it to, and the desk says so. */
+      G.found[key] = {
+        t: t,
+        fac: (c.port && c.port.faction) || null,
+        kind: (c.port && c.port.classified && c.port.classified.kind) || null,
+        liv: (c.port && c.port.livery) || null,
+        name: (c.port && c.port.name) || null,
+        star: (G.here && G.here.id) || null,
+        starName: (G.here && G.here.name) || null
+      };
       found.push(c);
       news.push(c);
     }

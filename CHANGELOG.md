@@ -40,6 +40,27 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-10, what a secret is worth, and the three ways to spend it)
+
+Astra, on what finding a black site should be good for: *"Sell the location. You can go there and trade. Missions key off it."* And later, on the shape of the work: *"to spy for a rival empire on a secret installation for which you have already obtained clearance, like being recruited on a station while doing some other skullduggery shit..."* This is all of that (`src/intel.js`, new).
+
+**A fix is a commodity with a shelf life.** The coil already wrote a find into `G.found`; it now writes down **whose it is**, what sort of place it is, and what colours it flies, because a position you want to *sell* has to say who it belongs to, and the only moment that is in hand is the moment of the fix — a system four jumps away is not regenerated to answer a question at a desk. An older career's bare epoch still reads as a find; it simply has nobody to sell it to, and the desk says so.
+
+- **Only somebody who wants it pays.** A rival of the people who built it pays full; the Syndicate pays three quarters, because it will buy anybody's; a neutral pays a third and is doing you a favour. The people who built it will not hear it at all — *"this is theirs — telling them where it is only tells them you were out there."* The Syndicate will not buy a cache from you either: one organization across the whole map, however many bands fly their own colours.
+- **A Syndicate berth inside an empire is worth 30% more** to that empire's rivals than a quiet works of their own, because it is evidence as well as a position.
+- **It goes off.** Half-life of 150 days, floored at a quarter — the rotations change, the orbit does not. A fresh fix on a naval listening post runs about 41,000 cr to a rival; a two-year-old one is about a tenth of a hull.
+- **The quote cannot be shopped.** Walk out of the office and back in and it is the same number: the desk's margin is seeded on the fix, the desk and the fortnight. A month later it is a different margin and a staler fix.
+- **Selling it twice is how you get caught.** The first sale is a rumour with no source. A resale pays a third *and* is certain to come back on you; selling to both sides of a rivalry costs you with the first buyer too, who paid for something nobody else was supposed to have. Every sale after the first raises the odds, which makes *"how much do I squeeze out of this"* an actual decision rather than a button.
+- It is sold at any desk, on the F4 deck list, between the survey data and the mining claim — the same ladder, one rung further along.
+
+**And then the approach, which is the better idea somebody has instead of buying it.** Hold a fix nobody has bought yet, dock in a rival's space, and the board carries two rows it has never carried before. They are **mutually exclusive with each other and with the sale**: committing to one takes the position off the market entirely, including to a third party.
+
+- **Sit off it and count the traffic** — about 2.1× what the position alone would fetch. Hold station within 90,000 km of it for sixty hours of **ship time**, counted as it passes, so the warp pays for it honestly: the clock *is* the job. Docking at it does not count — a watch is what you see from outside, which is also what keeps it a different job from the next one.
+- **Walk into it and come back out** — about 3.4×, and **gated on the owner's good opinion of you**: you need +25 standing with the people whose secret it is, because they will let you in on exactly that. The row is on the board whether or not you qualify, greyed, saying *"they would not let you through the door — you need 25 with them, you have 0."* Seeing the job you cannot take is what makes their good opinion worth having. The act is docking at the installation itself.
+- **Both are louder than a sale.** A watch comes back on you a little under half the time; walking in, seven times in ten. The people who trusted you enough to open the door are the people who find out — which is the whole joke of the thing, and the reason it pays what it pays.
+- **Saves:** additive, **no version bump**. `intel` (what you have sold and to whom) joins the store; the risk model is entirely a function of it, so a reload cannot launder it. A find written before today keeps its bare epoch and is simply unsaleable.
+- **Tests:** `test/intel.test.js` (67 checks, `core` group); `tools/probe-intel.js` plants a find in the running game, prices it against every flag in the galaxy, reads the approach off the board and sells the position at a real desk.
+
 ### Added (2026-11-10, business brought to a desk, and work for a ship with instruments)
 
 Astra, on two things the board was missing: *"I also want there to be a larger variety of missions that are available to the player at a lower notoriety. You should also gain faction level by bringing good trade to that faction, say an increase of 2 for every 100,000 cr in berth fees and fuel and stuff (equipment, ships and modules) you've bought from faction stations?"* Her answers on the design: **services only** (not cargo trade), **capped around +25**, and *"short hop missions need to pay at least twice as much or they aren't worth the time it takes to do them."*

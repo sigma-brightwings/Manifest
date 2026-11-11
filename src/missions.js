@@ -616,6 +616,9 @@
      * sweeps, and the short local runs this board never priced properly
      * (fieldwork.js). Last, in its own streams, so nothing above moves. */
     if (global.Fieldwork) global.Fieldwork.offersAt(port, sys, galaxy, here, t, G, offers, ctxs);
+    /* And the approach, for a career carrying somebody's position in its
+     * log (intel.js). Last again, same reason. */
+    if (global.Intel) global.Intel.boardAt(G, galaxy, port, sys, t, offers, ctxs);
 
     /* Every offer gets its headline generated and capped and its long form
      * written, in one place — so a mission type added later cannot ship
@@ -1073,6 +1076,11 @@
       var no = passageRefusal(G, offer);
       if (no) return { ok: false, why: no };
       G.ship.passengers = (G.ship.passengers || 0) + offer.souls;
+    } else if (offer.type === 'watch' || offer.type === 'walkin') {
+      /* The door is the only hard gate, and it is a door you opened by
+       * being well thought of (intel.js signRefusal). */
+      var shut = global.Intel ? global.Intel.signRefusal(G, offer) : null;
+      if (shut) return { ok: false, why: shut };
     } else if (offer.type === 'survey' || offer.type === 'sweep' ||
                offer.type === 'recovery') {
       /* Nothing goes aboard at signing. The deliverable is a file, or a
@@ -1121,6 +1129,9 @@
        * contract is a record, not a view of the offer it came from. */
       hop: offer.hop || false, hours: offer.hours || 0,
       claimKey: offer.claimKey || null,
+      fixKey: offer.fixKey || null, siteId: offer.siteId || null,
+      siteName: offer.siteName || null, ownerFac: offer.ownerFac || null,
+      needStanding: offer.needStanding,
       droneId: offer.droneId || null, owner: offer.owner || null,
       surveyKey: offer.surveyKey || null, bodyId: offer.bodyId || null,
       bodyName: offer.bodyName || null,
@@ -1129,6 +1140,7 @@
       nothingPay: offer.nothingPay
     });
     if (global.Fieldwork) global.Fieldwork.onAccept(G, G.missions[G.missions.length - 1]);
+    if (global.Intel) global.Intel.onAccept(G, G.missions[G.missions.length - 1]);
     /* A campaign hook (chapter zero of a faction's chain) also opens the
      * chain's own progress record — everything after this rides on it. */
     if (offer.campaign) {
@@ -1190,6 +1202,9 @@
    * than guessed at, so adding one there without saying so here fails
    * loudly in a test rather than quietly on a dock. */
   var FIELDWORK_TYPES = { survey: 1, sweep: 1, prospect: 1, recovery: 1 };
+  /* The three routes out of a classified find (intel.js). Settled there,
+   * for the same reason: none of them is freight. */
+  var INTEL_TYPES = { watch: 1, walkin: 1 };
 
   function completeAtDock(G, port, sys, t, hooks) {
     var Sim = global.Sim;
@@ -1244,6 +1259,13 @@
       /* FIELDWORK settles on data, not tonnes (fieldwork.js). It returns
        * false when the work is not done, which leaves the contract on the
        * books exactly as an underfilled hold does. */
+      if (global.Intel && INTEL_TYPES[m.type]) {
+        if (global.Intel.settle(G, port, sys, t, m, hooks)) {
+          (G.doneMissions = G.doneMissions || {})[m.id] = true;
+          list.splice(i, 1);
+        }
+        continue;
+      }
       if (global.Fieldwork && FIELDWORK_TYPES[m.type]) {
         if (global.Fieldwork.settle(G, port, sys, t, m, hooks)) {
           (G.doneMissions = G.doneMissions || {})[m.id] = true;

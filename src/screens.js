@@ -1899,6 +1899,31 @@
               ' on file. ' + got.total + ' credits."', 6);
         }
       });
+      /* A LOCATION NOBODY IS SUPPOSED TO HAVE (intel.js, 2026-11-10).
+       * Astra: "you can sell the location". Only to somebody who wants
+       * it - a rival of whoever built it, or the Syndicate, who will buy
+       * anybody's - and the desk says plainly when this is not that
+       * somebody, because "no" with a reason is the house style. */
+      var In = global.Intel;
+      var deal = (In && docked) ? In.best(G, G.galaxy, c.obj, G.t) : null;
+      var anyFix = In ? In.fixes(G).length : 0;
+      if (anyFix) {
+        opts.push({
+          label: 'Sell a classified location',
+          enabled: !!(docked && deal),
+          note: !docked ? 'sold on the deck'
+              : !deal ? (In.offersAt(G, G.galaxy, c.obj, G.t)[0] || {}).why ||
+                        'nothing here they would pay for'
+              : (deal.fix.name || 'an unlisted installation') + ' - ' + deal.price + ' cr' +
+                (deal.resale ? ' (they know it has been shopped)' : ''),
+          fn: function () {
+            if (!deal) return;
+            var got = In.sell(G, G.galaxy, c.obj, deal.fix.key, G.t, hooksFor());
+            if (!got.ok) { say('They will not take it: ' + got.why, 5); return; }
+          }
+        });
+      }
+
       /* CLAIMS AND DRONES (mining rung 2). The claim is filed on the world
        * your nav is locked to; with no lock, on the best-mapped world here
        * you do not already hold. Renewal is the same line. */
@@ -5647,6 +5672,7 @@
        * fieldwork.js is the only thing that can say which, so it does
        * (Fieldwork.progress). "FREIGHT MISSING (0/0t)" was the old line. */
       var fwLine = (global.Fieldwork && Fieldwork.progress) ? Fieldwork.progress(G, m) : null;
+      if (!fwLine && global.Intel && Intel.progress) fwLine = Intel.progress(G, m);
       var short = !fwLine && held + 1e-9 < m.tonnes;
       var headCols = Math.max(20, Math.floor((leftW - 120) / 7.7));
       var subCols = Math.max(24, Math.floor((leftW - 40) / 6.16));
@@ -5857,6 +5883,13 @@
       if (!noPass && Missions.licenceRefusal) {
         noPass = Missions.licenceRefusal(G, off);
       }
+      /* The same idea once more, for the one contract whose gate is how
+       * well the people you would be informing on think of you
+       * (intel.js). Seeing it and not being able to take it is what makes
+       * their good opinion worth having. */
+      if (!noPass && global.Intel && Intel.signRefusal) {
+        noPass = Intel.signRefusal(G, off);
+      }
       ctx.fillStyle = noPass ? '#6a7d92'
                     : off.campaign ? '#ffe07a'
                     : off.type === 'passage' ? '#c7b4ff'
@@ -5866,6 +5899,7 @@
                      * does not come out of a hold (fieldwork.js). */
                     : (off.type === 'survey' || off.type === 'prospect') ? '#9ce89c'
                     : (off.type === 'sweep' || off.type === 'recovery') ? '#9cd8e8'
+                    : (off.type === 'watch' || off.type === 'walkin') ? '#e8a0c8'
                     : off.hop ? '#e8d89c' : MFD_INK;
       ctx.fillText((off.campaign ? '★ ' : '') +
                    clipText(off.text, Math.floor((rw - 130) / 7.7)), rx + 16, oy + 14);
@@ -5878,6 +5912,8 @@
                                : off.type === 'passage' ? (off.souls + ' berths')
                                : (global.Fieldwork && Fieldwork.demand && Fieldwork.demand(off))
                                  ? Fieldwork.demand(off)
+                               : (global.Intel && Intel.demand && Intel.demand(off))
+                                 ? Intel.demand(off)
                                : off.tonnes + 't of hold'),
                             Math.floor((rw - 130) / 6.16)), rx + 16, oy + 28);
       ctx.restore();

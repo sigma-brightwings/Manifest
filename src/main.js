@@ -322,6 +322,7 @@
      * than bought (survey.js runSweep). Keyed star:body, valued with the
      * epoch they were found at. */
     G.found = {};
+    G.intel = {};
     /* And the latent ones a career has been pointed at (generate.js
      * opts.reveal). Keyed by the site's id, as galaxy.js allocated it. */
     G.revealed = {};
@@ -7945,6 +7946,10 @@
     else if (global.Survey && !G.paused && G.lastDtSim > 0) {
       var surveyMsgs = global.Survey.step(G, G.sys, G.t, G.lastDtSim);
       for (var smi = 0; smi < surveyMsgs.length; smi++) say(surveyMsgs[smi], 4);
+      /* A watch is hours of SHIP time off somebody's installation
+       * (intel.js). Counted here so the warp pays for it honestly: the
+       * clock is the job. */
+      if (global.Intel) global.Intel.tickWatch(G, G.sys, G.t, G.lastDtSim);
     }
     /* The other half of the same instrument: the coil pointed outward.
      * Outside the paused gate above, because a sweep started in orbit
@@ -7990,6 +7995,10 @@
     if (G.dockEdge) {
       G.dockEdge = false;
       var dockedPort = G.ship.docked && G.sys.byId[G.ship.docked];
+      /* Walking in is the act, and the act is docking at it (intel.js).
+       * Noted BEFORE the contracts settle, so arriving and reporting can
+       * be the same stop when the desk happens to be the same place. */
+      if (dockedPort && global.Intel) global.Intel.onDock(G, dockedPort, G.t);
       if (dockedPort) Missions.completeAtDock(G, dockedPort, G.sys, G.t, HOOKS);
       /* Word on the dock: a freighter robbed on her way in (aggression.js). */
       if (dockedPort && global.Aggression && global.Aggression.raidNews) {
