@@ -40,6 +40,29 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-11, the open band: what is happening to somebody else)
+
+Astra: *"We're gonna need NPC ships to both trade with each other and fight one another, something that the player can come across in the local system chatter and attempt to render aid or even pirate their ship."*
+
+**The fighting was already built. What it had no way to do was reach you.** `aggression.js` has run NPC-on-NPC violence since October — pirates pick prey off the traffic timetable and run freighters down, Syndicate runners open fire without a word, customs cutters chase smugglers, rival empires' hulls shoot at each other — and the player's side of it has been wired the whole time: standing for driving a pirate off, for helping make a kill, for helping an arrest, and a penalty for interfering with one. But every line of it narrates through a `near()` check, so a robbery forty million kilometres away was completely silent. The only thing that ever told you it had happened was `raidNews`, on the dock, afterwards, as gossip. **You could not come across an event because you were never told there was one.**
+
+So: **an emergency band** (`src/band.js`, new). Not the comms list — that is ships inside the transmitter's three quarters of an AU, and this is a different kind of thing. A ship in trouble broadcasts wide and everybody hears it, which is the entire point of an emergency band and is true of every one that has ever existed.
+
+- **Five things go on it**: a freighter being run down (UNDER ATTACK), a civilian under a runner's guns (UNDER FIRE), customs running somebody down (PURSUIT), two empires' hulls finding each other (SHOTS FIRED), and — when it lands — a rendezvous. The first two ask for help; the others are simply things happening that you can fly at.
+- **It tells you where she was, not where she is.** The position is the one in the last broadcast, and the broadcasts are a minute apart, so a running fight is always behind its own mark. The row says how old it is.
+- **It goes quiet.** Thirty minutes without a rebroadcast and the entry drops: either it is over or nobody is left to send.
+- **It does not tell you who is winning.** "Under fire" is what a distress call says. What you find when you get there is what you find.
+- **A call that ends says what happened** — `robbed`, `withdrew` — and goes grey. "She got away" is news too.
+- **A band row is a nav row**, so hearing it and flying at it are one action: it appears in the F3 contact list sorted by range with the rest of the system, marked `!` in red when somebody is asking for help and `%` when it is over. The F4 comms screen carries the band in its own block under the channel list, behind a rule, because the two are different kinds of thing and should not read as one list.
+- **Answering one is noticed.** Arriving within 12,000 km of a call that asked for help earns a little standing with that ship's flag, once — the smaller thing of having come at all. The standing for actually driving somebody off is `aggression.js`'s and stays there.
+- **Saves:** additive, **no version bump**. The band is saved so that a reload halfway to somebody's distress call does not lose the call; it prunes itself on the next read.
+
+### Fixed (2026-11-11)
+
+- **A nav row that is not a body no longer crashes the nav screen.** `navMark` read `entry.obj.kind` for anything that was not a ship — a latent crash since the magnetometer's field contacts landed in 1.3.1, because those rows carry `obj: null` by design (a fix is a position, not a thing). It never showed in testing because an unfound classified contact is rare; the open band made it common and `tools/probe-band.js` caught it in the first frame. Field contacts now mark `~`, incidents `!` or `%`.
+
+- **Tests:** `test/band.test.js` (33 checks, `combat` group): a call goes out and the same ship in the same trouble does not go on twice; the mark moves only on a rebroadcast; it goes quiet on its own clock; a call from the system you left is kept but not shown; the rows are nav rows sorted by range with the finished ones grey; answering one is noticed once and not every frame; and the band holds a fixed number of calls, oldest off the end. `tools/probe-band.js` puts calls at real traffic positions in the running game and photographs both screens.
+
 ### Added (2026-11-11, the surveyor's chain, and a Guild that keeps books)
 
 The third power chain, and the only one that is not a side. Astra chose its shape: the Guild **locks nothing** — it is a trade body, not a faction. It buys surveys from everybody at every desk, it holds no space, and it does not care whose roll your name is on.

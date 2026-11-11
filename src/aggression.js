@@ -72,6 +72,29 @@
   function dist(a, b) { return V.dist(a.live.pos, b.live.pos); }
   function near(G, sp) { return !!(G && G.ship && G.ship.pos && sp && sp.live && V.dist(sp.live.pos, G.ship.pos) < SEE_KM); }
   function say(G, hooks, sp, m, s) { if (hooks && hooks.say && near(G, sp)) hooks.say(m, s || 5); }
+
+  /* Put it on the open band, and tell the player it is there if they are
+   * not already close enough to have been told the ordinary way. */
+  function band(G, sys, t, hooks, kind, sp, other) {
+    var B = global.Band;
+    if (!B || !G || !sp) return;
+    var before = (G.band || []).length;
+    var id = B.open(G, sys, t, kind, sp, other);
+    if (!id) return;
+    var all = G.band || [];
+    var e = null;
+    for (var i = 0; i < all.length; i++) if (all[i].id === id) e = all[i];
+    /* Only the FIRST broadcast is announced, and only when the player was
+     * not standing in it already - otherwise the band repeats what the
+     * hull just said. */
+    if (e && all.length > before && !near(G, sp) && hooks && hooks.say) {
+      hooks.say(B.hail(G, e), 6);
+    }
+  }
+
+  function bandOff(G, t, kind, sp, how) {
+    if (global.Band) global.Band.close(G, t, kind, sp, how);
+  }
   function nm(sp) { return (sp && sp.name) || 'ship'; }
   /* "the Slipstream Wain", but "The Salt" stays "The Salt". */
   function the(sp) { var n = nm(sp); return /^the /i.test(n) ? n : 'the ' + n; }
@@ -180,6 +203,7 @@
     v.threat = pirate;
     v.mode = 'breakoff';
     say(G, hooks, pirate, The(pirate) + ' is running down ' + the(v), 5);
+    band(G, sys, t, hooks, 'robbery', v, pirate);
     return v;
   }
 
@@ -206,6 +230,7 @@
     v.defendTarget = null;
     var Eco = global.Economy, what = took.length && Eco && Eco.BY_ID[took[0].cid] ? took[0].qty + 't of ' + Eco.BY_ID[took[0].cid].name : 'her hold';
     say(G, hooks, pirate, The(pirate) + ' took ' + what + ' off ' + the(v) + ' and is breaking away', 6);
+    bandOff(G, t, 'robbery', v, 'robbed');
     return took;
   }
 
@@ -362,6 +387,7 @@
       C().broadcastDistress(sys, G, t, v, 'assault', near(G, v) ? hooks : null);
     }
     say(G, hooks, r, 'Syndicate runner ' + nm(r) + ' opens fire on ' + the(v) + ' without a word', 6);
+    band(G, sys, t, hooks, 'runner', v, r);
     return r;
   }
   /* Her run, frame by frame: knock the drive out, come alongside, strip
@@ -423,6 +449,7 @@
     if (why === 'runner') f.hostileToPlayer = false;
     if (C().isArmedNpc && C().isArmedNpc(f)) f.defendTarget = cop;
     say(G, hooks, cop, line || (nm(cop) + ': "' + nm(f) + ', heave to and stand by to be boarded." She runs.'), 5);
+    band(G, sys, t, hooks, 'pursuit', f, cop);
   }
 
   function arrest(sys, G, cop, f, t, hooks) {
@@ -529,6 +556,7 @@
         a.mode = 'chase'; b.mode = 'chase'; a.standoffKm = b.standoffKm = RIVAL_STANDOFF;
         a.skirmish = b.skirmish = true;
         say(G, hooks, a, nm(a) + ' (' + facName(G, sys, ea) + ') and ' + nm(b) + ' (' + facName(G, sys, eb) + ') open fire on each other', 6);
+        band(G, sys, t, hooks, 'duel', a, b);
       }
     }
   }
@@ -539,6 +567,7 @@
     loser.mode = 'breakoff'; loser.threat = winner; loser.withdrawnAt = t;
     if (winner) { winner.target = null; winner.skirmish = false; winner.mode = 'shadow'; winner.withdrawnAt = t; }
     say(G, hooks, loser, nm(loser) + ' is hit hard and withdraws from ' + nm(winner), 5);
+    bandOff(G, t, 'duel', loser, 'withdrew');
   }
 
   /* ---- HOSTILE standing: shot on sight ---------------------------------- */
@@ -715,9 +744,26 @@
     });
   }
 
+  function rebroadcast(sys, G, t) {
+    var B = global.Band;
+    if (!B || !B.touch) return;
+    var all = (sys.patrols || []).concat(sys.traders || [], sys.npcs || []);
+    for (var i = 0; i < all.length; i++) {
+      var sp = all[i];
+      if (!alive(sp)) continue;
+      /* A ship with somebody on her is still in trouble, and says so. */
+      if (sp.threat && !sp.robbed) B.touch(G, t, 'robbery', sp);
+      if (sp.fleeing || sp.pursuedBy) B.touch(G, t, 'pursuit', sp);
+      if (sp.skirmish) B.touch(G, t, 'duel', sp);
+    }
+  }
+
   function update(sys, G, t, dtSim, hooks) {
     if (!sys || !sys.patrols || !sys.patrols.length || !G || !G.ship || !C() || !S()) return;
     tidy(sys, t);
+    rebroadcast(sys, G, t);
+    /* And arriving at a call that asked for one (band.js). */
+    if (global.Band && global.Band.answer) global.Band.answer(G, sys, t, hooks);
     hostileOnSight(sys, G, t, hooks);
     pirates(sys, G, t, hooks);
     runners(sys, G, t, hooks);
@@ -768,7 +814,8 @@
     smuggler: smuggler, startPursuit: startPursuit, arrest: arrest, lawful: lawful, empireOf: empireOf,
     gunOf: gunOf, aimOf: aimOf, withdraw: withdraw,
     onNpcHit: onNpcHit, onNpcKill: onNpcKill, onPlayerHit: onPlayerHit, onPlayerKill: onPlayerKill,
-    update: update, raidNews: raidNews, hash01: hash01
+    update: update, raidNews: raidNews, hash01: hash01, band: band, bandOff: bandOff,
+    rebroadcast: rebroadcast
   };
   global.Aggression = Aggression;
   if (typeof module !== 'undefined' && module.exports) module.exports = Aggression;

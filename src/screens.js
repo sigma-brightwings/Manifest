@@ -885,7 +885,12 @@
       ctx.restore();
     }
 
-    var rowH = 18, avail = Math.floor((colH - 40) / rowH);
+    var BandM = global.Band;
+    var bandRows = BandM ? BandM.rows(G, G.sys, G.t) : [];
+    var bandShown = Math.min(5, bandRows.length);
+    /* A header, the rows, and the one-line readout under them. */
+    var bandH = bandShown ? (bandShown * 16 + 26) : 0;
+    var rowH = 18, avail = Math.floor((colH - 40 - bandH) / rowH);
     var first = Math.max(0, Math.min(Math.max(0, contacts.length - avail),
                                      G.commsSel - Math.floor(avail / 2)));
     ctx.save();
@@ -933,6 +938,39 @@
       })(idx));
     }
     ctx.restore();
+
+    if (bandShown) {
+      var bandTop = top + pad + colH - bandH + 4;
+      ctx.save();
+      /* A rule, so the two lists do not read as one. */
+      ctx.strokeStyle = MFD_EDGE;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(pad + 8, bandTop - 14);
+      ctx.lineTo(pad + listW - 8, bandTop - 14);
+      ctx.stroke();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#ff9f7a';
+      ctx.fillText('OPEN BAND  -  ' + bandRows.length + ' in this system', pad + 10, bandTop - 2);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      for (var bi = 0; bi < bandShown; bi++) {
+        var br = bandRows[bi], by = bandTop + 14 + bi * 16;
+        ctx.fillStyle = br.color;
+        ctx.fillText(clipText(br.name, 18), pad + 12, by);
+        ctx.fillStyle = MFD_DIM;
+        ctx.textAlign = 'right';
+        ctx.fillText(fmtDist(br.range), pad + listW - 12, by);
+        ctx.textAlign = 'left';
+      }
+      /* One line of what the nearest one actually is, because a name and
+       * a range do not tell you whether to go. */
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = '#6a7d92';
+      ctx.fillText(clipText(bandRows[0].name + ': ' + bandRows[0].type +
+                            '  -  F3 to steer at it', 52),
+                   pad + 12, bandTop + 14 + bandShown * 16);
+      ctx.restore();
+    }
 
     /* The channel itself, and under it the LOG. The channel pane gives up its
        bottom 44% rather than the log going somewhere else on the HUD: what is

@@ -265,6 +265,11 @@
       /* WHAT YOU HAVE SOLD, AND TO WHOM (intel.js). The risk model is
        * entirely a function of this, so a reload must not launder it. */
       intel: G.intel || {},
+      /* THE OPEN BAND (band.js). Saved so that a reload in the middle of
+       * flying at somebody's distress call does not lose the call. It
+       * prunes itself on the next read: an entry whose incident is over
+       * drops off on its own clock. */
+      band: Array.isArray(G.band) ? G.band : [],
       found: G.found || {},
       /* And which latent installations a career has been pointed at, so a
        * reload does not quietly take one back out of the world again. */
@@ -644,6 +649,7 @@
     /* Business brought to a faction (Missions.patronage). A career from
      * before the ledger starts at nothing, which is honest: it was never
      * counted. */
+    G.band = Array.isArray(data.band) ? data.band : [];
     G.intel = {};
     if (data.intel) for (var ik in data.intel) {
       if (Object.prototype.hasOwnProperty.call(data.intel, ik)) G.intel[ik] = data.intel[ik];

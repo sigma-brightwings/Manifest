@@ -74,7 +74,8 @@ var GROUPS = {
   transfer: ['test/transfer.test.js', 'test/lanes.test.js'],
   combat: [
     'test/combat.test.js', 'test/gunnery.test.js', 'test/massdriver.test.js',
-    'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/hunters.test.js',
+    'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/band.test.js',
+    'test/hunters.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
     'test/wars.test.js'

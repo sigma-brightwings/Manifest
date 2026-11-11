@@ -323,6 +323,7 @@
      * epoch they were found at. */
     G.found = {};
     G.intel = {};
+    G.band = [];
     /* And the latent ones a career has been pointed at (generate.js
      * opts.reveal). Keyed by the site's id, as galaxy.js allocated it. */
     G.revealed = {};
@@ -2575,6 +2576,14 @@
       });
     }
     return out;
+  }
+
+  /* THE OPEN BAND (band.js, 2026-11-11). The same shape as a field
+   * contact above, for the same reason: something you have heard about
+   * and not seen is a position with a name on it, and the nav list is
+   * where a position with a name on it belongs. */
+  function bandRows() {
+    return global.Band ? global.Band.rows(G, G.sys, G.t) : [];
   }
 
   /* ---- WHAT IS ON YOUR LISTS (2026-11-10) -------------------------------
@@ -5399,6 +5408,10 @@
      * are certainly things you want to fly at (sweepContactRows). */
     var fsRows = sweepContactRows();
     for (i = 0; i < fsRows.length; i++) out.push(fsRows[i]);
+    /* And whatever is happening to somebody else (band.js): a call you
+     * have heard is a place you can steer at. */
+    var bdRows = bandRows();
+    for (i = 0; i < bdRows.length; i++) out.push(bdRows[i]);
     if (G.showTraffic) {
       var ships = Sim.shipsAll(G.sys, G.t);
       for (i = 0; i < ships.length; i++) {
@@ -15005,7 +15018,11 @@
 
   /* One-letter type marks, so a nav list scans without reading words. */
   function navMark(entry) {
+    if (!entry) return '?';
     if (entry.kind === 'ship') return entry.hostile ? '!' : '>';
+    if (entry.kind === 'incident') return entry.help ? '!' : '%';
+    if (entry.kind === 'contact') return '~';
+    if (!entry.obj) return '?';
     switch (entry.obj.kind) {
       case 'star': return '*';
       case 'planet': return 'O';
