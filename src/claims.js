@@ -189,6 +189,76 @@
              (best.grade < 0.1 ? ' - the survey map shows where it is richer' : '') };
   }
 
+  /* ---- a drone dropped on a cell you picked off the scanner map ---------
+   * Rung 2 used to put a drone only where the ship was standing, which made
+   * the survey map a thing you read and then flew to. From the scanner
+   * screen you can point at any cell your survey has READ and put a drone
+   * there: landed on that world it walks over, and from orbit it goes down
+   * in a pod, which costs a little reaction mass for the de-orbit burn. It
+   * still digs what is under IT, at that ground's grade, and you still have
+   * to land beside it to empty the hopper - this moves where a drone can be
+   * put, not what it is worth. */
+  var POD_FUEL = 0.3;              // t of reaction mass, for the de-orbit burn
+  function deployAt(G, sys, t, world, cell) {
+    var S = Sv(), V = global.V, Sim = global.Sim;
+    if (!S || !world || !(cell >= 0)) return { ok: false, why: 'no ground picked' };
+    var key = keyOf(G, world.id);
+    if (!claimFor(G, key, t)) return { ok: false, why: 'no live claim on ' + world.name + ' - file one at any desk' };
+    if (!(G.ship.drones > 0)) return { ok: false, why: 'no drones aboard - the desk sells them' };
+    var rec = G.surveys && G.surveys[key];
+    if (!rec || !S.cellsOf(rec)[cell]) return { ok: false, why: 'that ground is not mapped - fly over it first' };
+    /* Landed on this world, or in orbit about it. Anywhere else there is
+     * nothing to drop a pod from. */
+    var landed = landedWorld(G, sys) === world;
+    var pod = false;
+    if (!landed) {
+      if (!Sim || !V) return { ok: false, why: 'land on your claim, or orbit it' };
+      var d0 = V.dist(Sim.bodyPosition(world, sys, t), G.ship.pos);
+      if (!(d0 < world.radius * S.RANGE_R)) {
+        return { ok: false, why: 'too far from ' + world.name + ' - orbit within ' + S.RANGE_R + ' radii, or land' };
+      }
+      if (!(G.ship.thrusterFuel >= POD_FUEL)) {
+        return { ok: false, why: 'not enough reaction mass for the pod burn (' + POD_FUEL.toFixed(1) + ' t)' };
+      }
+      pod = true;
+    }
+    /* What is under THAT cell, out of what your instruments have read. */
+    var rows = S.remaining(G, key, S.deposits(world, sys)).filter(function (r) {
+      return r.cid !== 'hydrogen' && (r.tonnes > 0 || !isFinite(r.tonnes)) && S.readable(rec, r.cid);
+    });
+    if (!rows.length) return { ok: false, why: 'nothing your survey has read here that a drone can dig' };
+    if (S.groundMap && S.groundMap(world, sys)) {
+      rows = rows.map(function (r) {
+        return { cid: r.cid, name: r.name, tonnes: r.tonnes, grade: S.localGrade(world, sys, r.cid, cell) };
+      });
+    }
+    var Eco = global.Economy;
+    rows.sort(function (a, b) {
+      var va = a.grade * (Eco && Eco.BY_ID[a.cid] ? Eco.BY_ID[a.cid].base : 1);
+      var vb = b.grade * (Eco && Eco.BY_ID[b.cid] ? Eco.BY_ID[b.cid].base : 1);
+      return vb - va;
+    });
+    var best = rows[0];
+    if (!(best.grade > 0)) return { ok: false, why: 'bare rock there - pick ground the map has coloured' };
+    var la = Math.floor(cell / S.LON_BINS), lo = cell % S.LON_BINS;
+    var lat = -Math.PI / 2 + (la + 0.5) * Math.PI / S.LAT_BINS;
+    var lon = (lo + 0.5) * 2 * Math.PI / S.LON_BINS;
+    G.drones = G.drones || [];
+    var d = { id: 'drone-' + key + '-' + Math.round(t), key: key, star: (G.here && G.here.id) || 'sys',
+              body: world.id, name: world.name, at: { lat: lat, lon: lon, elevation: 0 },
+              cid: best.cid, grade: best.grade, t0: t, baseT: t, base: 0, stripRate: stripRate(sys) };
+    G.drones.push(d);
+    G.ship.drones -= 1;
+    if (G.ship.hotDrones > 0) G.ship.hotDrones -= 1;
+    if (pod) G.ship.thrusterFuel = Math.max(0, G.ship.thrusterFuel - POD_FUEL);
+    return { ok: true, drone: d, cell: cell,
+             text: (pod ? 'Pod away - drone down on ' : 'Drone down on ') + world.name +
+                   ' at X' + lo + ' Y' + (la - 90 >= 0 ? '+' : '') + Math.round(la - 89.5) +
+                   ' - digging ' + best.name.toLowerCase() +
+                   ' (' + S.gradeWord(best.grade).toLowerCase() + ' ground there)' +
+                   (pod ? ', ' + POD_FUEL.toFixed(1) + ' t of reaction mass spent' : '') };
+  }
+
   function collect(G, sys, t, d) {
     var h = hopper(G, d, t);
     var Sim = global.Sim;
@@ -463,7 +533,7 @@
     claimFor: claimFor, claimable: claimable, fileClaim: fileClaim,
     stripRate: stripRate, lastStripBefore: lastStripBefore, hopper: hopper,
     dronesNear: dronesNear, landedWorld: landedWorld,
-    act: act, deploy: deploy, collect: collect, recover: recover, buyDrone: buyDrone, keyOf: keyOf,
+    act: act, deploy: deploy, deployAt: deployAt, POD_FUEL: POD_FUEL, collect: collect, recover: recover, buyDrone: buyDrone, keyOf: keyOf,
     npcDrones: npcDrones, npcOn: npcOn, npcNear: npcNear, npcHopper: npcHopper, npcLive: npcLive,
     npcLastService: npcLastService, npcNextService: npcNextService, groundPos: groundPos,
     steal: steal, pry: pry, fenceDrone: fenceDrone, tickThefts: tickThefts,

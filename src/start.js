@@ -461,7 +461,7 @@
   /* `tradescan` is the market survey array since 2026-11-03 — the words
    * "trade analyser" went to the 1,000 cr single-port instrument Astra named
    * with them (combat.js EQUIPMENT). */
-  var KIT_SHORT = { shield: 'shield', tradescan: 'market survey', portanalyser: 'trade analyser', surveyscan: 'survey scanner' };
+  var KIT_SHORT = { shield: 'shield', tradescan: 'market survey', portanalyser: 'trade analyser', surveyscan: 'survey scanner', magnetometer: 'magnetometer' };
   function kitLine(p) {
     var out = [];
     for (var i = 0; i < p.fit.length; i++) if (KIT_SHORT[p.fit[i]]) out.push(KIT_SHORT[p.fit[i]]);

@@ -471,8 +471,19 @@
   }
 
   /* ---- coverage -------------------------------------------------------- */
-  var LAT_BINS = 12, LON_BINS = 24, NCELL = LAT_BINS * LON_BINS;
-  var CELL_PAD = 0.09;            // rad, ~5 degrees - see markAt
+  /* ONE-DEGREE CELLS (2026-11-10, Astra: "raise the grid to 1 degree
+   * cells"). It was 12 x 24 (15 degrees), too coarse to say WHERE on a map a
+   * deposit is. Records saved on the old grid are 72 hex digits; cellsOf
+   * reads them by upsampling, so no career loses ground and the save
+   * version does not move. */
+  var LAT_BINS = 180, LON_BINS = 360, NCELL = LAT_BINS * LON_BINS;
+  var OLD_LAT = 12, OLD_LON = 24;
+  var CELL_PAD = 0.3 * Math.PI / LAT_BINS;   // rad, a third of a cell - see markAt
+  var ROW_SIN = [], ROW_COS = [];
+  for (var rw = 0; rw < LAT_BINS; rw++) {
+    var rlat = -Math.PI / 2 + (rw + 0.5) * Math.PI / LAT_BINS;
+    ROW_SIN[rw] = Math.sin(rlat); ROW_COS[rw] = Math.cos(rlat);
+  }
   var LAT_W = [];
   (function () {
     var tot = 0;
@@ -499,9 +510,22 @@
     var cache = '_' + field;
     if (!rec[cache]) {
       var a = new Uint8Array(NCELL), s = rec[field] || '';
-      for (var i = 0; i < NCELL; i++) {
-        var nib = parseInt(s.charAt(i >> 2) || '0', 16);
-        a[i] = (nib >> (i & 3)) & 1;
+      if (s.length && s.length <= OLD_LAT * OLD_LON / 4) {
+        /* A record from the 15-degree grid: each old cell becomes the
+         * block of one-degree cells it covered. */
+        var ratLat = LAT_BINS / OLD_LAT, ratLon = LON_BINS / OLD_LON;
+        for (var la0 = 0; la0 < LAT_BINS; la0++) {
+          for (var lo0 = 0; lo0 < LON_BINS; lo0++) {
+            var oi = Math.floor(la0 / ratLat) * OLD_LON + Math.floor(lo0 / ratLon);
+            var onib = parseInt(s.charAt(oi >> 2) || '0', 16);
+            a[la0 * LON_BINS + lo0] = (onib >> (oi & 3)) & 1;
+          }
+        }
+      } else {
+        for (var i = 0; i < NCELL; i++) {
+          var nib = parseInt(s.charAt(i >> 2) || '0', 16);
+          a[i] = (nib >> (i & 3)) & 1;
+        }
       }
       rec[cache] = a;
     }
@@ -599,8 +623,8 @@
   function bandCoverage(a) {
     var c = 0, t = 0;
     for (var i = 0; i < NCELL; i++) {
-      var lat = (i / LON_BINS) | 0;
-      if (lat < LAT_BINS / 2 - 1 || lat > LAT_BINS / 2) continue;
+      var lat = (i / LON_BINS) | 0, band = LAT_BINS / 12;   // within 15 degrees of the equator
+      if (lat < LAT_BINS / 2 - band || lat > LAT_BINS / 2 + band - 1) continue;
       t++; if (a[i]) c++;
     }
     return t ? c / t : 0;
@@ -642,12 +666,41 @@
      * could run diagonally between centres 15 degrees apart and leave a
      * chequerboard of holes it had plainly flown over. */
     var cw = Math.cos(w + CELL_PAD), any = 0;
-    for (var i = 0; i < NCELL; i++) {
-      if (cells[i]) continue;
-      var cc = CELL_CENTRES[i];
-      if (cc[0] * bx + cc[1] * by + cc[2] * z >= cw) { cells[i] = 1; any++; }
+    /* Row by row: only the rows the cap reaches, and in each only the
+     * columns it can reach. At a degree a cell the whole-grid scan this
+     * used to be would be 225 times dearer; the test on each cell it does
+     * visit is still the exact one, so the cap is the same cap. */
+    var rad = w + CELL_PAD, rowH = Math.PI / LAT_BINS, colW = 2 * Math.PI / LON_BINS;
+    var sinS = Math.max(-1, Math.min(1, z)), latS = Math.asin(sinS);
+    var cosS = Math.sqrt(Math.max(0, 1 - sinS * sinS)), lonS = Math.atan2(by, bx);
+    var r0 = Math.max(0, Math.floor((latS - rad + Math.PI / 2) / rowH));
+    var r1 = Math.min(LAT_BINS - 1, Math.floor((latS + rad + Math.PI / 2) / rowH));
+    for (var la = r0; la <= r1; la++) {
+      var sinC = ROW_SIN[la], cosC = ROW_COS[la], full = false, half = 0;
+      if (cosS < 1e-6 || cosC < 1e-6) {
+        if (sinC * sinS < cw) continue;
+        full = true;
+      } else {
+        var q = (cw - sinC * sinS) / (cosC * cosS);
+        if (q > 1) continue;
+        if (q <= -1) full = true; else half = Math.acos(q) / colW + 1.5;
+      }
+      var c0 = Math.floor((((lonS % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)) / colW);
+      var nCol = full ? LON_BINS : Math.min(LON_BINS, Math.ceil(2 * half) + 1);
+      var start = full ? 0 : c0 - Math.ceil(half);
+      for (var k = 0; k < nCol; k++) {
+        var lo = ((start + k) % LON_BINS + LON_BINS) % LON_BINS, i = la * LON_BINS + lo;
+        if (cells[i]) continue;
+        var cc = CELL_CENTRES[i];
+        if (cc[0] * bx + cc[1] * by + cc[2] * z >= cw) { cells[i] = 1; any++; }
+      }
     }
     return any;
+  }
+
+  function magLevel(ship) {
+    var C = global.Combat;
+    return C && C.magLevel ? C.magLevel(ship) : 0;
   }
 
   /* The instrument's grade. 0: none. 1: survey scanner (ores, ice,
@@ -683,8 +736,8 @@
   /* One frame of surveying. Returns a list of messages (milestones). */
   function step(G, sys, t, dt) {
     var msgs = [];
-    var lvl = level(G.ship);
-    if (!lvl || !sys || !G.ship || G.ship.docked || G.ship.landed) { G._surveyPrev = null; return msgs; }
+    var lvl = level(G.ship), hasMag = magLevel(G.ship);
+    if ((!lvl && !hasMag) || !sys || !G.ship || G.ship.docked || G.ship.landed) { G._surveyPrev = null; return msgs; }
     var Sim = global.Sim, V = global.V;
     if (!Sim || !V) return msgs;
     var ship = G.ship;
@@ -703,7 +756,14 @@
       var body = best.b, rec = recordFor(G, sys, keyOf(G, body.id), body.name, 'world');
       G._surveyNow = rec.key;
       migrateRec(rec);
-      var cells = cellsOf(rec), before = rec.cov;
+      /* The ground track, for the scanner screen: the cell under the ship
+       * each time it changes. Transient (G._ names are not saved). */
+      var trk = G._track;
+      if (!trk || trk.key !== rec.key) trk = G._track = { key: rec.key, pts: [] };
+      var tcell = cellOfWorld(body, V.norm(V.sub(ship.pos, best.pos)), t);
+      if (trk.pts[trk.pts.length - 1] !== tcell) { trk.pts.push(tcell); if (trk.pts.length > 720) trk.pts.shift(); }
+      var cells = lvl ? cellsOf(rec) : null, before = rec.cov;
+      var cellsM = hasMag ? cellsOf(rec, 'cellsM') : null, gainedM = 0;
       var cellsF = lvl >= 2 ? cellsOf(rec, 'cellsF') : null, gainedF = 0;
       var cells2 = lvl >= 3 ? cellsOf(rec, 'cells2') : null, gained2 = 0;
       var bs = Sim.bodyState(body, sys, t);
@@ -713,7 +773,8 @@
       var period = body.rotation && body.rotation.period;
       var w = swathAt(body.radius, r);
       var dir = scale(rel, 1 / r);
-      var gained = markAt(cells, fr, dir, t, period, w);
+      var gained = cells ? markAt(cells, fr, dir, t, period, w) : 0;
+      if (cellsM) gainedM += markAt(cellsM, fr, dir, t, period, w);
       if (cellsF) gainedF += markAt(cellsF, fr, dir, t, period, w);
       if (cells2) gained2 += markAt(cells2, fr, dir, t, period, w);
       /* THE ARC SWEPT THIS FRAME, walked back from here. */
@@ -724,10 +785,20 @@
         for (var s2 = 1; s2 <= n; s2++) {
           var back = Math.min(sweep, s2 * stepA);
           var dBack = rotate(dir, k, -back), tBack = t - back / omega;
-          gained += markAt(cells, fr, dBack, tBack, period, w);
+          if (cells) gained += markAt(cells, fr, dBack, tBack, period, w);
+          if (cellsM) gainedM += markAt(cellsM, fr, dBack, tBack, period, w);
           if (cellsF) gainedF += markAt(cellsF, fr, dBack, tBack, period, w);
           if (cells2) gained2 += markAt(cells2, fr, dBack, tBack, period, w);
         }
+      }
+      if (gainedM) {
+        rec.cellsM = packCells(cellsM);
+        rec.covM = coverageOf(cellsM);
+        rec.tM = t;
+        [0.25, 0.5, 0.75, 0.95].forEach(function (m2) {
+          if ((rec.covM - 0) >= m2 && !((rec._covMBefore || 0) >= m2)) msgs.push('MAGNETIC  ' + body.name + ' - ' + Math.round(m2 * 100) + '% mapped');
+        });
+        rec._covMBefore = rec.covM;
       }
       if (gainedF) {
         rec.cellsF = packCells(cellsF);
@@ -806,6 +877,245 @@
       }
     });
     return msgs;
+  }
+
+  /* ---- THE MAGNETIC FIELD (2026-11-10) ------------------------------------
+   * One number per one-degree cell, in the same body-fixed frame as every
+   * other map here, and nothing stored: it is a function of the world.
+   *   - the planet's own DIPOLE, if it has a field (body.magnetosphere):
+   *     strength x sqrt(1 + 3 sin^2(magnetic latitude)) / 2, so the poles
+   *     read twice what the magnetic equator does, as they do;
+   *   - ANOMALIES over the ore bodies: iron and its kin are magnetic, so a
+   *     province of ore is a bump in the field. A world with no dipole
+   *     still has them (Mars's crust is magnetised though its core is not),
+   *     which is what makes the magnetometer worth carrying on a dead rock.
+   * The field is on a 0..~1.2 scale; gas giants top the scale.
+   * Field lines are the footprints of the dipole's lines on the surface:
+   * the magnetic meridians, running pole to pole. */
+  var MAG_CACHE = new WeakMap();
+  var ANOMALY = 0.30;
+  function magMap(body, sys) {
+    if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return null;
+    var hit = MAG_CACHE.get(body);
+    if (hit && hit.sys === sys) return hit;
+    var W = global.Weather, m = body.magnetosphere || null;
+    var ax = (m && W && W.magneticAxis) ? W.magneticAxis(body) : null;
+    var gm = groundMap(body, sys), ores = gm && gm.grade.ores, wg = gm && gm.world.ores;
+    var fr = spinFrame(body, 0), field = new Float32Array(NCELL), top = 0, lo = Infinity;
+    for (var i = 0; i < NCELL; i++) {
+      var b = 0;
+      if (ax) {
+        var p = cellBodyFixed(fr, i), sl = dot(p, ax);
+        b = m.strength * Math.sqrt(1 + 3 * sl * sl) / 2;
+      }
+      if (ores && wg > 0) b += ANOMALY * Math.max(0, ores[i] / wg - ORE_FLOOR) / (1 - ORE_FLOOR);
+      field[i] = b;
+      if (b > top) top = b;
+      if (b < lo) lo = b;
+    }
+    var out = { sys: sys, field: field, max: top, min: lo === Infinity ? 0 : lo, axis: ax,
+                strength: m ? m.strength : 0, dipole: !!ax };
+    MAG_CACHE.set(body, out);
+    return out;
+  }
+  function fieldAt(body, sys, cell) {
+    var mm = magMap(body, sys);
+    return mm ? mm.field[cell] : 0;
+  }
+  /* Has the magnetometer read this cell? */
+  function magRead(rec, cell) {
+    return !!rec && !!cellsOf(rec, 'cellsM')[cell];
+  }
+  /* The surface footprints of the dipole's field lines: `n` magnetic
+   * meridians, each a list of [lat, lon] in radians from the world's
+   * magnetic pole to its antipode, and where the two poles are. Empty for
+   * a world with no dipole. */
+  function fieldLines(body, sys, n) {
+    var mm = magMap(body, sys);
+    if (!mm || !mm.axis) return { lines: [], poles: [] };
+    var ax = mm.axis, fr = spinFrame(body, 0);
+    var h = Math.abs(ax.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 };
+    var u = cross(ax, h); u = scale(u, 1 / (len(u) || 1));
+    var v = cross(ax, u);
+    function ll(p) {
+      var z = Math.max(-1, Math.min(1, dot(p, fr.n)));
+      return [Math.asin(z), Math.atan2(dot(p, fr.e2), dot(p, fr.e1))];
+    }
+    var lines = [], N = n || 12, STEPS = 90;
+    for (var k = 0; k < N; k++) {
+      var ph = 2 * Math.PI * k / N, d = add(scale(u, Math.cos(ph)), scale(v, Math.sin(ph))), pts = [];
+      for (var s2 = 0; s2 <= STEPS; s2++) {
+        var th = Math.PI * s2 / STEPS;
+        pts.push(ll(add(scale(ax, Math.cos(th)), scale(d, Math.sin(th)))));
+      }
+      lines.push(pts);
+    }
+    return { lines: lines, poles: [ll(ax), ll(scale(ax, -1))] };
+  }
+
+  /* ---- THE SYSTEM SWEEP (2026-11-10) -------------------------------------
+   *
+   * Astra: "we can use the magnetometer to detect space ports in systems you
+   * don't have a chart for, especially for classified military or corporate
+   * outposts."
+   *
+   * The same instrument, pointed outward instead of down. A port is a power
+   * plant: reactors, pumps, a dock's handling gear, and in a yard a coil
+   * big enough to throw a hull. All of that is a magnetic source, and out
+   * where a black site hides there is nothing else it could be - which is
+   * the honest reason this works at all, and the reason it works BEST
+   * exactly where the chart is emptiest.
+   *
+   * WHAT IT IS NOT: a chart. The sweep hears that something powered is out
+   * there and roughly where; it does not know its name, its flag or its
+   * prices until you have closed enough for the fix to tie down, and the
+   * game's standing rule - that a port list is not remotely observable the
+   * way a star's spectrum is - survives that, because you still have to go
+   * and look.
+   *
+   * INVERSE SQUARE, and that is the whole difficulty curve: a source four
+   * times further away reads a sixteenth as loud, so a sweep from the inner
+   * system hears the big inner ports and a mutter from the dark, and you
+   * find the mutter by flying at it and sweeping again.
+   */
+  var SWEEP_SECONDS = 6;           // sim seconds for a sweep at full power
+  var SWEEP_POWER = 2.5;           // MW it wants; less free, and it runs slow
+  /* THE SCALE IS THE SYSTEM'S, NOT A STATION'S, and the first pass got this
+   * wrong by three orders of magnitude: quoting a field at a million
+   * kilometres gave the coil a useful reach of about 20 Mkm inside systems
+   * that are three or four THOUSAND Mkm across, so a black site could not
+   * be heard until you were already parked next to it. Quoted at a
+   * thousand Mkm instead, which is roughly the inner system's own width, a
+   * site mutters from anywhere in its own system and ties down inside
+   * about 350 Mkm - audible the moment you arrive, so you know there is
+   * something out there, and findable only by flying most of the way at it.
+   * Measured, not guessed: see Claude outputs/measure-sweep.cjs. */
+  var SWEEP_FLOOR = 0.25;          // quietest signal the coil can pick out
+  var FIX_SPAN = 3;                // decades of signal from the floor to a certain fix
+  var FIX_GOOD = 0.72;             // fix quality that ties a contact down
+  var REF_KM = 1e9;                // the range a source's field is quoted at
+
+  /* How loud a port is. Size first - a berth is a building and a yard is a
+   * district - then what it does: a refinery and a shipyard run plant that
+   * a quiet orbital dormitory does not, and a classified site runs its own
+   * reactor because it cannot buy power off anybody's grid without the
+   * invoice saying where it went. */
+  var ROLE_FIELD = {
+    shipyard: 2.3, mining: 1.5, reprocessing: 1.9, milfuel: 2.2,
+    refinery: 1.9, industrial: 1.7, farm: 0.8, orbital: 1.0, colony: 1.1
+  };
+  function sourceField(port) {
+    if (!port) return 0;
+    var r = port.radius || 0.5;
+    /* Square root of size: a station twice as wide is not twice the plant,
+     * it is a bit more plant and a lot more corridor. */
+    var base = 0.9 + 2.1 * Math.sqrt(Math.min(4, r / 1.2));
+    var role = port.market && port.market.role ? ROLE_FIELD[port.market.role] : null;
+    base *= (role || 1.0);
+    /* A surface port sits in a world's own field and under its crust, and
+     * both bury it: a pad is much harder to hear from orbit than a station
+     * of the same size hanging in clean space. */
+    if (port.surface) base *= port.underground ? 0.25 : 0.45;
+    /* AND THIS IS WHY THE MAGNETOMETER IS THE TOOL. A site that is hiding
+     * runs quiet in every band it can control - no beacon, no transponder,
+     * no lights - but it has no grid to draw on, so it carries its own
+     * reactor, and a reactor's steady field is the one emission you cannot
+     * turn off or paint over. It is small, so it is faint; it is unshielded
+     * where it counts, so it is there. Loud for its size, and the only
+     * artificial thing for a hundred million kilometres. */
+    if (port.classified) base *= 1.5;
+    return base;
+  }
+
+  /* Everything a coil at `pos` can hear, loudest first. `lvl` is the
+   * magnetometer's grade (1 for the only one that exists today), kept so a
+   * better instrument can be fitted later without moving this. */
+  function sweepContacts(sys, pos, lvl, t) {
+    var out = [], V = global.V, Sim = global.Sim;
+    if (!sys || !pos || !V || !Sim) return out;
+    var gain = 0.8 + 0.4 * (lvl || 1);
+    var ports = sys.ports || [];
+    for (var i = 0; i < ports.length; i++) {
+      var port = ports[i];
+      var f = sourceField(port);
+      if (!(f > 0)) continue;
+      var pp = Sim.bodyPosition(port, sys, t);
+      var d = V.dist(pp, pos);
+      if (!(d > 0)) d = 1;
+      /* Inverse square off a quoted range, so the numbers stay human: a
+       * field of 1 reads 1 at a million kilometres. */
+      var sig = gain * f * (REF_KM / d) * (REF_KM / d);
+      if (sig < SWEEP_FLOOR) continue;
+      /* How well the bearing ties down, over FIX_SPAN decades of signal: a
+       * loud source is a point, a faint one is a direction with a shrug in
+       * it. Decades rather than a ratio, because inverse square over a
+       * system's width spans six orders of magnitude and anything linear
+       * is either deaf at one end or saturated at the other. */
+      var q = Math.max(0, Math.min(1, (Math.log(sig / SWEEP_FLOOR) / Math.LN10) / FIX_SPAN));
+      out.push({
+        id: port.id, port: port, pos: pp, range: d, signal: sig, fix: q,
+        /* An unlisted source is still a source; what it IS waits for the
+         * fix, which is the whole shape of the find. */
+        classified: !!port.classified,
+        /* The error on where you think it is: a long way out at the edge of
+         * hearing, a few hundred km when it is shouting at you. */
+        error: d * (1 - q) * 0.55 + 200 * (1 - q)
+      });
+    }
+    out.sort(function (a, b) { return b.signal - a.signal; });
+    return out;
+  }
+
+  /* The key that finds things, in one call. Returns what happened and
+   * leaves the readout on G.sweep; the caller says it out loud. */
+  function runSweep(G, sys, t) {
+    var lvl = magLevel(G.ship);
+    if (!lvl) return { ok: false, why: 'no magnetometer fitted' };
+    if (G.ship.docked) return { ok: false, why: 'the coil cannot read anything through a berth' };
+    var C = global.Combat;
+    var free = C && C.fitSummary ? C.fitSummary(G.ship).powerFree : SWEEP_POWER;
+    /* Power buys TIME, not range: short of what it wants, the coil takes
+     * longer to charge rather than hearing less. A quieter cost than
+     * browning out the guns, and one you can choose to pay. */
+    var share = Math.max(0.2, Math.min(1, (free + SWEEP_POWER) / (SWEEP_POWER * 2)));
+    var secs = SWEEP_SECONDS / share;
+
+    var contacts = sweepContacts(sys, G.ship.pos, lvl, t);
+    var found = [], news = [];
+    G.found = G.found || {};
+    for (var i = 0; i < contacts.length; i++) {
+      var c = contacts[i];
+      if (c.fix < FIX_GOOD || !c.classified) continue;
+      /* A fix this good IS the find: a position you can fly to, and the
+       * instrument has earned the right to put it on the list. Only the
+       * unlisted are written down - an ordinary port was never off the
+       * list, and a found-set full of them is a save carrying the obvious. */
+      var key = keyOf(G, c.id);
+      /* PRESENCE, NOT TRUTH. The value stored is the epoch it was found
+       * at, and epoch 0 is a real time - a career that finds something in
+       * its first second stored a falsy 0 and re-found it on every sweep
+       * forever. Caught by the suite rather than in play. */
+      if (Object.prototype.hasOwnProperty.call(G.found, key)) continue;
+      G.found[key] = t;
+      found.push(c);
+      news.push(c);
+    }
+    G.sweep = { star: (G.here && G.here.id) || 'sys', t: t, secs: secs, power: share,
+                contacts: contacts.map(function (c) {
+                  return { id: c.id, range: c.range, signal: c.signal, fix: c.fix,
+                           error: c.error, classified: c.classified,
+                           x: c.pos.x, y: c.pos.y, z: c.pos.z };
+                }) };
+    return { ok: true, secs: secs, share: share, contacts: contacts,
+             found: found, news: news };
+  }
+
+  /* Has this installation been found? Anything not flagged classified was
+   * never hidden, so the question only ever bites on the ones that were. */
+  function foundPort(G, port) {
+    if (!port || !port.classified) return true;
+    if (!G || !G.found) return false;
+    return Object.prototype.hasOwnProperty.call(G.found, keyOf(G, port.id));
   }
 
   /* ---- what a survey is worth --------------------------------------------
@@ -910,7 +1220,11 @@
     readable: readable, unsoldAny: unsoldAny,
     gradeWord: gradeWord, fmtTonnes: fmtTonnes,
     groundMap: groundMap, localGrade: localGrade, groundAt: groundAt, cellRead: cellRead,
-    cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL
+    cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL,
+    magMap: magMap, fieldAt: fieldAt, magRead: magRead, fieldLines: fieldLines, magLevel: magLevel,
+    sourceField: sourceField, sweepContacts: sweepContacts, runSweep: runSweep, foundPort: foundPort,
+    SWEEP_SECONDS: SWEEP_SECONDS, SWEEP_POWER: SWEEP_POWER, SWEEP_FLOOR: SWEEP_FLOOR,
+    FIX_GOOD: FIX_GOOD, FIX_SPAN: FIX_SPAN, REF_KM: REF_KM
   };
   global.Survey = Survey;
   if (typeof module !== 'undefined' && module.exports) module.exports = Survey;

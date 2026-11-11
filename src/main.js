@@ -318,6 +318,13 @@
     /* Whose flag flies where, as far as you know. Separate from `visited`
      * because it is a weaker claim that can be bought — see enterSystem. */
     G.charted = {};
+    /* And the installations no chart carries, found with the coil rather
+     * than bought (survey.js runSweep). Keyed star:body, valued with the
+     * epoch they were found at. */
+    G.found = {};
+    /* And the latent ones a career has been pointed at (generate.js
+     * opts.reveal). Keyed by the site's id, as galaxy.js allocated it. */
+    G.revealed = {};
     G.ship = null;
     G.t = 0;
     G.starMap = null;
@@ -418,8 +425,22 @@
    * should still be disturbed when you come back to it. */
   function systemFor(star) {
     if (!G.systemCache[star.id]) {
+      /* THE LATENT INSTALLATIONS (2026-11-10). Astra: "a few of them
+       * shouldn't even be generated until you're supposed to be looking
+       * for them." galaxy.js allocates those but marks them gated, and
+       * generate.js leaves them out of the world until their id turns up
+       * in opts.reveal. G.revealed is what a career has been pointed at;
+       * nothing writes to it yet - that is the missions work - but the
+       * plumbing is here so that when something does, the site appears on
+       * the next visit rather than needing a new kind of machinery.
+       *
+       * Cached per star like the system itself, so revealing one means
+       * dropping that system's cache (G.systemCache[id] = null) and
+       * letting it build again. */
+      var sysOpts = Galaxy.systemOpts(G.galaxy, star);
+      if (sysOpts && G.revealed) sysOpts.reveal = G.revealed;
       /* its owner, or nobody's - an empty system (Galaxy.systemOpts, 2026-10-24) */
-      G.systemCache[star.id] = Gen.generateSystem(star.seed, Galaxy.systemOpts(G.galaxy, star));
+      G.systemCache[star.id] = Gen.generateSystem(star.seed, sysOpts);
       /* Which star this is, on the system itself. Captains are keyed by
        * star and ship (route ids are per-system), and asking G.here works
        * only for the system you are in — a rumour about somewhere else
@@ -1736,6 +1757,7 @@
            * it belongs with after F10 went to the manifest. Same shift-splits-
            * a-key idea as G, T and / elsewhere in this file. */
           if (fkIdx === 1 && e.shiftKey) selectPanel(modeIndex('node'));
+          else if (fkIdx === 2 && e.shiftKey) selectPanel(modeIndex('scanner'));
           /* F1 twice: already flying, so the second press flips between the
            * cockpit and the exterior chase camera. One key, both ways of
            * looking at your own ship. */
@@ -1868,6 +1890,17 @@
          * Not gated on the cockpit view: pressing it in the exterior view
          * sets what you will be looking at when you get back in, which is
          * what every other display toggle here does. */
+        /* Q: THE FIELD SWEEP (2026-11-10). The magnetometer, pointed out
+         * of the system instead of down at a world. It is not instant -
+         * the coil has to charge, and a tight reactor makes it take
+         * longer - so this starts it and tickFieldSweep finishes it.
+         *
+         * Q rather than F or M: F refuels at a berth and M is the map
+         * layer, and a key that does two things in two contexts is how you
+         * end up refuelling when you meant to listen. */
+        case 'q':
+          startFieldSweep();
+          break;
         case 'k':
           G.cockpitChrome = ((G.cockpitChrome || 0) + 1) % 3;
           G.showCockpitFrame = G.cockpitChrome !== 2;
@@ -2459,9 +2492,102 @@
     canvas.addEventListener('touchend', function () { dragging = false; pinch = 0; });
   }
 
+  /* ---- THE FIELD SWEEP, FROM THE SEAT (2026-11-10) ----------------------
+   * survey.js does the physics; this is the part with a clock in it. The
+   * coil charges for a few seconds of ship time - longer if the reactor is
+   * tight, which is the cost she asked for - and only then does it hear
+   * anything. Charging survives time warp because it is measured in sim
+   * seconds, so warping through a sweep is legitimate and fast, which is
+   * exactly what you will want to do on the long leg out to a contact. */
+  function startFieldSweep() {
+    var Sv = global.Survey;
+    if (!Sv || !Sv.runSweep) return;
+    if (G.fieldSweep) { say('Coil already charging.', 2); return; }
+    if (!Sv.magLevel(G.ship)) { say('No magnetometer fitted.', 3); return; }
+    if (G.ship.docked) { say('The coil reads nothing through a berth.', 3); return; }
+    /* Priced the same way survey.js prices it, so the readout and the
+     * reality cannot disagree about how long this takes. */
+    var C = global.Combat;
+    var free = C && C.fitSummary ? C.fitSummary(G.ship).powerFree : Sv.SWEEP_POWER;
+    var share = Math.max(0.2, Math.min(1, (free + Sv.SWEEP_POWER) / (Sv.SWEEP_POWER * 2)));
+    var secs = Sv.SWEEP_SECONDS / share;
+    G.fieldSweep = { t0: G.t, until: G.t + secs, secs: secs, share: share,
+                     star: (G.here && G.here.id) || 'sys' };
+    say('Field sweep - coil charging, ' + secs.toFixed(0) + ' s' +
+        (share < 0.6 ? ' (reactor tight)' : ''), 3);
+  }
+
+  function tickFieldSweep() {
+    var fsw = G.fieldSweep;
+    if (!fsw) return;
+    /* Jumping out, docking or losing the instrument abandons the charge:
+     * there is nothing dishonest about that, it is a coil in a ship. */
+    if (fsw.star !== ((G.here && G.here.id) || 'sys') || G.ship.docked ||
+        !global.Survey || !global.Survey.magLevel(G.ship)) { G.fieldSweep = null; return; }
+    if (G.t < fsw.until) return;
+    G.fieldSweep = null;
+    var r = global.Survey.runSweep(G, G.sys, G.t);
+    if (!r.ok) { say('Field sweep: ' + r.why, 4); return; }
+    /* What it heard, in the order it matters: the finds first, because a
+     * find is the whole point, then the count of what is still out there
+     * unaccounted for. */
+    for (var i = 0; i < r.news.length; i++) {
+      var c = r.news[i];
+      say('FOUND  ' + c.port.name.toUpperCase() + ' - ' +
+          ((c.port.classified && c.port.classified.label) || 'unlisted installation') +
+          ', ' + fmtDist(c.range), 8);
+    }
+    var hidden = 0;
+    for (var k = 0; k < r.contacts.length; k++) {
+      if (r.contacts[k].classified && !global.Survey.foundPort(G, r.contacts[k].port)) hidden++;
+    }
+    say('Field sweep: ' + r.contacts.length + ' source' + (r.contacts.length === 1 ? '' : 's') +
+        (hidden ? '  \u00b7  ' + hidden + ' unaccounted for' : '  \u00b7  all accounted for'), 6);
+  }
+
+  /* The contacts a sweep left that are NOT on any list yet, as things you
+   * can lock and fly at. A fuzzy position is still a position: this is how
+   * a mutter becomes a heading, and the heading becomes a berth. */
+  function sweepContactRows() {
+    var out = [], sw = G.sweep;
+    if (!sw || sw.star !== ((G.here && G.here.id) || 'sys')) return out;
+    for (var i = 0; i < sw.contacts.length; i++) {
+      var c = sw.contacts[i];
+      if (!c.classified) continue;
+      var port = G.sys.byId && G.sys.byId[c.id];
+      if (port && global.Survey && global.Survey.foundPort(G, port)) continue;
+      var p = { x: c.x, y: c.y, z: c.z };
+      out.push({
+        kind: 'contact', id: 'fs-' + c.id, obj: null,
+        name: 'UNKNOWN SOURCE',
+        type: 'field contact  \u00b1' + fmtDist(c.error),
+        pos: p, vel: { x: 0, y: 0, z: 0 },
+        color: '#ff9f7a',
+        range: V.dist(p, G.ship.pos)
+      });
+    }
+    return out;
+  }
+
+  /* ---- WHAT IS ON YOUR LISTS (2026-11-10) -------------------------------
+   * A classified installation is physically out there - it has mass, it
+   * orbits, the renderer will draw it if you fly close enough to see it -
+   * but it is on no chart, no nav list, no manifest and no scope, because
+   * it carries no transponder and nobody filed it. Until your own coil
+   * finds it (survey.js runSweep), every LIST in the game pretends it is
+   * not there; the world never does. That is the distinction this draws,
+   * and it is the whole mechanic: you can stumble on one by eye, or you
+   * can go looking with the right instrument. */
+  function listed(b) {
+    if (!b || !b.classified) return true;
+    return !global.Survey || !global.Survey.foundPort || global.Survey.foundPort(G, b);
+  }
+
   function focusList() {
     var list = [{ ship: true, name: 'Ship' }];
-    for (var i = 0; i < G.sys.bodies.length; i++) list.push(G.sys.bodies[i]);
+    for (var i = 0; i < G.sys.bodies.length; i++) {
+      if (listed(G.sys.bodies[i])) list.push(G.sys.bodies[i]);
+    }
     return list;
   }
 
@@ -2581,7 +2707,11 @@
      * the pass that cut fifteen bindings off the flight controls. So this is
      * now the planner AND its readout, and the sentence above describes why
      * it was safe to move the screen first, not what is true today. */
-    { key: 'Shift+F2', label: 'NODES', id: 'node', icon: 'node', hidden: true }
+    { key: 'Shift+F2', label: 'NODES', id: 'node', icon: 'node', hidden: true },
+    /* The planetary scanner (2026-11-10): the survey and the magnetometer
+     * as a flattened map of the world, full screen. Hidden like the node
+     * planner; the SURVEY page says where to find it. */
+    { key: 'Shift+F3', label: 'SCANNER', id: 'scanner', icon: 'star', hidden: true }
   ];
   /* The ten that get a slot on the bar and a function key. Anything past
    * them is reachable, but by its own binding. */
@@ -2889,6 +3019,9 @@
        * `-` and `=` mean the node's delta-v here and zoom out in flight,
        * which is not a collision: on this screen there is a burn in front of
        * you and nothing else those keys could sensibly be for. */
+      case 'scanner':
+        return global.Screens.scannerKey(key, e);
+
       case 'system':
       case 'node':
         if (key === 'i') {
@@ -5236,6 +5369,7 @@
     var i;
     for (i = 0; i < G.sys.bodies.length; i++) {
       var b = G.sys.bodies[i];
+      if (!listed(b)) continue;
       var bs = Sim.bodyState(b, G.sys, G.t);
       out.push({
         kind: 'body', id: b.id, obj: b, name: b.name,
@@ -5244,6 +5378,10 @@
         range: V.dist(bs.pos, G.ship.pos)
       });
     }
+    /* Unaccounted field contacts, which are not bodies and not ships but
+     * are certainly things you want to fly at (sweepContactRows). */
+    var fsRows = sweepContactRows();
+    for (i = 0; i < fsRows.length; i++) out.push(fsRows[i]);
     if (G.showTraffic) {
       var ships = Sim.shipsAll(G.sys, G.t);
       for (i = 0; i < ships.length; i++) {
@@ -7732,6 +7870,10 @@
       var surveyMsgs = global.Survey.step(G, G.sys, G.t, G.lastDtSim);
       for (var smi = 0; smi < surveyMsgs.length; smi++) say(surveyMsgs[smi], 4);
     }
+    /* The other half of the same instrument: the coil pointed outward.
+     * Outside the paused gate above, because a sweep started in orbit
+     * should still finish while you sit on a pad waiting for it. */
+    tickFieldSweep();
 
     /* Scooping. Drift onto a canister slowly enough and it is yours — the
      * other half of jettison, and the whole point of robbing a freighter
@@ -9439,6 +9581,9 @@
       for (var i = 0; i < G.sys.bodies.length; i++) {
         var b = G.sys.bodies[i];
         if (!b.orbit) continue;
+        /* An orbit line is a chart drawn over the world, and a chart is
+         * exactly what a black site is not on. */
+        if (!listed(b)) continue;
 
         /* Only draw orbits at a scale the current view can actually show.
          * Zoomed in on a moon, the planet's 34-million-km orbit around the
@@ -9665,7 +9810,7 @@
     if (seaWalk) { drawStationWalkGpu(ctx, cam, w, h); return; }
     /* In the suit: your own ship from outside, the hatches marked, and the
      * suit's own readout in place of the flight HUD (eva.js). */
-    if (G.eva) { drawEvaView(ctx, cam, w, h); return; }
+    if (G.eva) { drawOutsideWeather(ctx, cam, w, h); drawEvaView(ctx, cam, w, h); return; }
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else {
       /* Berthed, from outside her: the hangar you walk in, round her. */
@@ -9682,6 +9827,8 @@
         if (hcut) { Render.setCutaway(hcut); queueHangarFromShip(cam); Render.setCutaway(null); }
       }
       drawShip(ctx, cam);
+      /* AND THE WEATHER ON HER, from out here (2026-11-10). */
+      drawOutsideWeather(ctx, cam, w, h);
     }
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
      * hints. drawShipWalkView drew the walker's own overlay and the bar. */
@@ -10672,14 +10819,32 @@
    * INSIDE THE GLASS CLIP, called from between glassBegin and glassEnd —
    * rain on the canopy has to be cut off by the canopy, or it falls
    * cheerfully across the instrument panel and the inside of the hull. */
+  /* THE FALL ITSELF, shared by every view that is inside a world's air
+   * (2026-11-10). Astra: "I want the planets to show the local weather from
+   * the cockpit, and the external camera view... storms which rain, snow
+   * and thunder/lightning as viewed from on the surface of a planet."
+   *
+   * ONE function for all three views, because the alternative is a canopy
+   * that is raining and a chase camera that is not, six metres apart. What
+   * differs between them is only WHERE it is clipped: the cockpit draws it
+   * inside the glass, and everything else over the whole screen.
+   *
+   * No particles and no state, like the first version: every drop's place
+   * is a hash of its index and the clock, so there is no array to keep, no
+   * update step, and nothing that drifts out of step after an hour.
+   *
+   * THE DRIFT RUNS ON REAL TIME, not sim time - the same decision the
+   * aurora shimmer made, and for the same reason: at 10,000x warp a flake
+   * driven by G.t crosses the screen between two frames and the sky looks
+   * empty, which is a worse lie than snow that falls at one speed. What
+   * the weather IS still comes from G.t; only how fast it appears to fall
+   * does not. */
   var RAIN_LINES = 110;         // at full downpour; fewer as it eases off
   var RAIN_BUCKET = 0.10;       // seconds of sim time per frame of rain
+  var SNOW_FLAKES = 190;
+  var ASH_FLECKS = 90;
 
-  function drawCanopyWeather(ctx, cam, w, h) {
-    if (!Weather || !Weather.aloft) return;
-    var wx = Weather.aloft(G.ship, G.sys, G.t);
-    if (!wx) return;
-
+  function weatherFall(ctx, cam, w, h, wx) {
     /* THE LIGHT GOES FIRST. Under a deck the sun is behind several
      * kilometres of water and the world outside loses its contrast, which
      * is most of what makes being under weather feel different from being
@@ -10716,7 +10881,12 @@
       if (fire > 0.55) {
         var env = Math.exp(-sp.stormPhase * 6.5) +
                   0.7 * Math.exp(-Math.abs(sp.stormPhase - 0.22) * 18);
-        var lit = Math.min(0.8, env * wx.storm * (0.45 + 0.55 * sp.salt[1]));
+        /* CAPPED WELL SHORT OF WHITE (2026-11-10). At 0.8 over `lighter`
+         * a strike seen against an already-bright sky - a molten world's
+         * orange overcast - took the whole canopy to flat white, and a
+         * white rectangle is not a flash, it is a missing frame. Lower, so
+         * the sky goes pale and what is falling through it stays visible. */
+        var lit = Math.min(0.5, env * wx.storm * (0.40 + 0.50 * sp.salt[1]));
         if (lit > 0.01) {
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
@@ -10726,29 +10896,47 @@
           ctx.restore();
         }
       }
+      /* THE THUNDER FOLLOWS IT, late (2026-11-10). Sound travels, so the
+       * crack arrives after the light by however far off the strike was —
+       * that gap is the whole of what tells you whether a storm is on top
+       * of you or over the next range of hills. Queued in REAL time, not
+       * sim time: a rumble is in the room, not in the simulation, so a
+       * pause does not hold it halfway. */
+      queueThunder(sp, wx.storm);
     }
+    fireThunder();
 
     if (wx.rain < 0.04) return;
+    var snow = wx.snow || 0, ash = wx.ash || 0, wet = Math.max(0, 1 - snow - ash);
+    /* The wind in your face: how fast the air is going past, which is what
+     * slants rain and swirls snow. */
+    var rel = G.ship && G.ship.vel && wx.body
+            ? V.len(V.sub(G.ship.vel, Sim.bodyState(wx.body, G.sys, G.t).vel)) : 0;
+    var now = performance.now() / 1000;
 
-    /* THE STREAKS. Positions are hashed off the frame's own bucket rather
-     * than integrated, so they need no array and no update step, and a
-     * paused game has still rain. The slant is airspeed: rain falls past a
-     * hovering ship and arrives almost flat at five hundred metres a
-     * second, which is the one cue that tells you how fast you are going
-     * when there is nothing outside but grey. */
+    if (wet * wx.rain > 0.03) drawRainStreaks(ctx, w, h, wx.rain * wet, rel);
+    if (snow * wx.rain > 0.03) drawSnowfall(ctx, w, h, wx.rain * snow, rel, now, wx.storm);
+    if (ash * wx.rain > 0.03) drawAshfall(ctx, w, h, wx.rain * ash, now);
+  }
+
+  /* RAIN. Positions are hashed off the frame's own bucket rather than
+   * integrated, so they need no array and no update step, and a paused game
+   * has still rain. The slant is airspeed: rain falls past a hovering ship
+   * and arrives almost flat at five hundred metres a second, which is the
+   * one cue that tells you how fast you are going when there is nothing
+   * outside but grey. */
+  function drawRainStreaks(ctx, w, h, amount, rel) {
     /* Even light rain has to be SEEN. Streak count runs from a third of
      * the full complement at the first drop, because twenty lines over a
      * nine-hundred-pixel canopy is a window that needs washing rather than
      * a window with rain on it. */
-    var n = Math.round(RAIN_LINES * (0.34 + 0.66 * Math.min(1, wx.rain)));
+    var n = Math.round(RAIN_LINES * (0.34 + 0.66 * Math.min(1, amount)));
     if (n < 1) return;
-    var rel = G.ship.vel && wx.body ? V.len(V.sub(G.ship.vel,
-                Sim.bodyState(wx.body, G.sys, G.t).vel)) : 0;
     var slant = Math.min(0.92, rel / 1.2);          // 0 = straight down
     var len = 26 + 90 * slant;
     var bucket = Math.floor(G.t / RAIN_BUCKET);
     ctx.save();
-    ctx.strokeStyle = 'rgba(214,230,255,' + (0.34 + 0.44 * wx.rain).toFixed(3) + ')';
+    ctx.strokeStyle = 'rgba(214,230,255,' + (0.34 + 0.44 * amount).toFixed(3) + ')';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     for (var i = 0; i < n; i++) {
@@ -10760,6 +10948,150 @@
     }
     ctx.stroke();
     ctx.restore();
+  }
+
+  /* SNOW. Not rain in another colour: a flake has no terminal velocity
+   * worth the name, so it drifts rather than falls, it sways, and each one
+   * goes at its own speed — which is the whole look of it. Falling is a
+   * continuous wrap rather than a per-bucket reshuffle, because a flake
+   * that teleports every tenth of a second reads as static, and static is
+   * what the eye calls grain on the lens.
+   *
+   * THE FAR ONES ARE SMALLER AND SLOWER, which is the only depth cue a
+   * screen-space fall can have and is most of why it reads as weather
+   * rather than as a screensaver. */
+  function drawSnowfall(ctx, w, h, amount, rel, now, storm) {
+    var n = Math.round(SNOW_FLAKES * (0.3 + 0.7 * Math.min(1, amount)));
+    if (n < 1) return;
+    /* A blizzard is snow plus wind: the storm leans the whole fall over,
+     * and so does flying through it. */
+    var lean = Math.min(0.95, storm * 0.55 + rel / 1.6);
+    ctx.save();
+    ctx.fillStyle = 'rgba(244,248,255,' + (0.45 + 0.45 * amount).toFixed(3) + ')';
+    for (var i = 0; i < n; i++) {
+      var hx = hashUnit(i * 3.71 + 0.17), hs = hashUnit(i * 1.93 + 0.61);
+      var depth = hashUnit(i * 7.13 + 0.29);        // 0 near, 1 far
+      var fall = (0.10 + 0.26 * (1 - depth)) * (0.6 + 0.8 * hs);
+      var y = ((hx + now * fall) % 1) * (h + 60) - 30;
+      /* The sway is the flake's own, out of phase with its neighbours —
+       * one shared sine makes the whole fall pulse like a curtain. */
+      var sway = Math.sin(now * (0.7 + 1.5 * hs) + i * 1.7) * (7 + 16 * (1 - depth));
+      var x = ((hs + hx * 0.37) % 1) * (w + 80) - 40 + sway - lean * y * 0.55;
+      x = ((x % (w + 120)) + (w + 120)) % (w + 120) - 60;
+      var r = 1.1 + 3.2 * (1 - depth);
+      ctx.globalAlpha = (0.34 + 0.66 * (1 - depth)) * Math.min(1, 0.4 + amount);
+      /* THE NEAR ONES ARE SMEARED, the far ones are dots. Round dots alone
+       * read as a starfield — which is exactly what the first version
+       * looked like against a night sky, and a sky full of stationary
+       * white specks is the one thing snow must not be mistaken for. A
+       * flake close enough to see is moving fast enough to streak, so the
+       * near half get drawn along the way they are going, and that single
+       * cue is what turns the fall back into weather. */
+      if (depth < 0.45) {
+        var ln = r * (2.2 + 3.0 * (1 - depth));
+        ctx.beginPath();
+        ctx.lineCap = 'round';
+        ctx.lineWidth = r * 1.5;
+        ctx.strokeStyle = ctx.fillStyle;
+        ctx.moveTo(x + lean * ln * 0.5, y - ln * 0.5);
+        ctx.lineTo(x - lean * ln * 0.5, y + ln * 0.5);
+        ctx.stroke();
+      } else {
+        ctx.beginPath();
+        ctx.arc(x, y, r, 0, 6.2832);
+        ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ASH, over a molten world. Dark against a bright sky and lit from
+   * below by the ground it came out of, so it is drawn twice: the fleck
+   * and a dull ember on the near ones. It wanders more than snow and falls
+   * slower — it is lighter than anything else that comes out of a sky. */
+  function drawAshfall(ctx, w, h, amount, now) {
+    var n = Math.round(ASH_FLECKS * (0.3 + 0.7 * Math.min(1, amount)));
+    if (n < 1) return;
+    ctx.save();
+    for (var i = 0; i < n; i++) {
+      var hx = hashUnit(i * 4.27 + 0.41), hs = hashUnit(i * 2.11 + 0.83);
+      var depth = hashUnit(i * 6.53 + 0.13);
+      var fall = (0.05 + 0.13 * (1 - depth)) * (0.5 + hs);
+      var y = ((hx + now * fall) % 1) * (h + 60) - 30;
+      var sway = Math.sin(now * (0.35 + 0.9 * hs) + i * 2.3) * (14 + 30 * (1 - depth));
+      var x = ((hs + hx * 0.53) % 1) * (w + 80) - 40 + sway;
+      /* Bigger and harder than the first pass, which was invisible against
+       * a molten world's own glare — a fleck of ash is a solid thing and
+       * has to look like one, or it reads as dirt on the lens. */
+      var r = 1.3 + 3.0 * (1 - depth);
+      ctx.globalAlpha = (0.40 + 0.55 * (1 - depth)) * Math.min(1, 0.4 + amount);
+      ctx.fillStyle = '#17120f';
+      ctx.beginPath(); ctx.arc(x, y, r, 0, 6.2832); ctx.fill();
+      if (depth < 0.3 && hs > 0.72) {              // still warm, a few of them
+        ctx.globalAlpha *= 0.7;
+        ctx.fillStyle = '#ff7a3a';
+        ctx.beginPath(); ctx.arc(x, y, r * 0.45, 0, 6.2832); ctx.fill();
+      }
+    }
+    ctx.restore();
+  }
+
+  /* ---- thunder ------------------------------------------------------------
+   * The flash is drawn the instant the sky fires; the sound is queued for
+   * when it would actually get here. Distance comes off the strike's own
+   * salt, so the same strike is the same distance away however many times
+   * you look at it, and a storm you are standing in cracks while one on the
+   * horizon rolls. Air only: in a vacuum there is nothing to carry it, and
+   * aloft() has already refused to return anything without air.
+   *
+   * Real-time queue, deliberately. Sim time warps and pauses; a rumble
+   * that has left the cloud is on its way whatever the clock does. */
+  var thunderQueue = [], thunderSlot = -1;
+  var SOUND_KM_S = 0.343;
+
+  function queueThunder(sp, storm) {
+    if (sp.slot === thunderSlot) return;            // this strike is already spoken for
+    thunderSlot = sp.slot;
+    if (!(storm > 0.12) || sp.salt[0] <= 0.55) return;
+    if (thunderQueue.length > 6) return;            // a wall of rumble is noise
+    /* Half a kilometre to about twelve: near strikes are rarer than far
+     * ones for the same reason a disc has more area at its edge. */
+    var far = 0.5 + 11.5 * Math.pow(sp.salt[2], 0.6);
+    var near = Math.max(0, 1 - far / 9);
+    thunderQueue.push({ when: performance.now() + (far / SOUND_KM_S) * 1000,
+                        near: near, loud: Math.min(1, storm * 1.3) });
+  }
+  function fireThunder() {
+    if (!thunderQueue.length) return;
+    var now = performance.now();
+    while (thunderQueue.length && thunderQueue[0].when <= now) {
+      var th = thunderQueue.shift();
+      if (global.Sound && global.Sound.fx) global.Sound.fx('thunder', th.near * th.loud);
+    }
+  }
+
+  /* The canopy's weather: inside the glass clip, called from between
+   * glassBegin and glassEnd — rain on the canopy has to be cut off by the
+   * canopy, or it falls cheerfully across the instrument panel and the
+   * inside of the hull. */
+  function drawCanopyWeather(ctx, cam, w, h) {
+    if (!Weather || !Weather.aloft) return;
+    var wx = Weather.aloft(G.ship, G.sys, G.t);
+    if (!wx) return;
+    weatherFall(ctx, cam, w, h, wx);
+  }
+
+  /* THE SAME WEATHER FROM OUTSIDE THE HULL: the chase camera, and standing
+   * on the ground in a suit. No glass to clip it, so it runs over the whole
+   * view — which is right: out there it is landing on you, not on a window.
+   *
+   * Drawn AFTER the ship and before the HUD, so the rain is in front of her
+   * hull and behind the instruments. */
+  function drawOutsideWeather(ctx, cam, w, h) {
+    if (!Weather || !Weather.aloft || G.hyper) return;
+    var wx = Weather.aloft(G.ship, G.sys, G.t);
+    if (!wx) return;
+    weatherFall(ctx, cam, w, h, wx);
   }
 
   /* ---- re-entry, from the seat --------------------------------------------
@@ -14886,6 +15218,9 @@
     for (i = 0; i < G.sys.bodies.length; i++) {
       var b = G.sys.bodies[i];
       if (G.ship.docked && b.id === G.ship.docked) continue;
+      /* Nothing on the scope either: a station running dark answers no
+       * interrogation, and a scope plot is interrogation. */
+      if (!listed(b)) continue;
       blip(Sim.bodyPosition(b, G.sys, G.t), bodyDotColor(b.kind),
            b.kind === 'station' ? 'square' : 'dot',
            lock && lock.kind === 'body' && lock.id === b.id);
@@ -14991,6 +15326,7 @@
     var i, p;
     for (i = 0; i < G.sys.bodies.length; i++) {
       var b = G.sys.bodies[i];
+      if (!listed(b)) continue;
       var bp = b.underground ? Sim.portEntrance(b, G.sys, G.t).pos
                              : Sim.bodyPosition(b, G.sys, G.t);
       p = aftCam.project(bp);
@@ -16180,25 +16516,17 @@
        * your instruments have read THERE, brighter where it is richer. A
        * fissile hotspot only shows on ground the spectrometer has flown. */
       if (rec && rec.kind === 'world' && tgt.kind) {
-        var cells = Sv.cellsOf(rec), mx = 318, my = MFD_BODY_TOP + 6, cw = 5, chh = 6;
-        ctx.strokeStyle = 'rgba(74,151,176,0.5)';
-        ctx.strokeRect(mx - 1, my - 1, Sv.LON_BINS * cw + 2, Sv.LAT_BINS * chh + 2);
-        for (var la = 0; la < Sv.LAT_BINS; la++) {
-          for (var lo = 0; lo < Sv.LON_BINS; lo++) {
-            var ci = la * Sv.LON_BINS + lo;
-            if (!cells[ci]) continue;
-            var top = readTop(Sv, tgt, rec, ci);
-            ctx.fillStyle = top ? groundInk(top.cid, top.grade) : 'rgba(74,151,176,0.35)';
-            ctx.fillRect(mx + lo * cw, my + (Sv.LAT_BINS - 1 - la) * chh, cw - 1, chh - 1);
-          }
-        }
+        /* 1 degree cells since 2026-11-10: far too many to draw one by one
+         * at this size, so the page shows the scanner screen's own picture
+         * scaled down. Shift+F3 opens the real thing. */
+        var cells = Sv.cellsOf(rec), mx = 318, my = MFD_BODY_TOP + 6;
+        global.Screens.scanMini(ctx, mx, my, 120, 60);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText('Shift+F3  full scanner', mx, my + 72);
         /* YOU: the ground under the ship, boxed. */
         var under = surveyCellUnder(Sv, tgt);
         if (under !== null) {
-          var ula = Math.floor(under / Sv.LON_BINS), ulo = under % Sv.LON_BINS;
-          ctx.strokeStyle = '#ffffff';
-          ctx.lineWidth = 1;
-          ctx.strokeRect(mx + ulo * cw - 1.5, my + (Sv.LAT_BINS - 1 - ula) * chh - 1.5, cw + 2, chh + 2);
           ctx.font = 'bold 10px ui-monospace, monospace';
           var ub;
           if (!cells[under]) { ctx.fillStyle = MFD_DIM; ub = 'BELOW YOU  not mapped yet'; }
@@ -16217,7 +16545,7 @@
       /* Rung 2: your claim on it, and what your drones there have dug. */
       var Cl = global.Claims;
       if (Cl && key) {
-        var cy = MFD_BODY_TOP + 6 + Sv.LAT_BINS * 6 + 16;
+        var cy = MFD_BODY_TOP + 6 + 60 + 28;
         var claim = Cl.claimFor(G, key, G.t);
         ctx.font = 'bold 10px ui-monospace, monospace';
         ctx.fillStyle = claim ? '#7dffb0' : MFD_DIM;
@@ -17541,6 +17869,9 @@
     for (i = 0; i < G.sys.bodies.length; i++) {
       var b = G.sys.bodies[i];
       if (G.ship.docked && b.id === G.ship.docked) continue;
+      /* Nothing on the scope either: a station running dark answers no
+       * interrogation, and a scope plot is interrogation. */
+      if (!listed(b)) continue;
       blip(Sim.bodyPosition(b, G.sys, G.t), bodyDotColor(b.kind), false, false);
     }
     var ships = Sim.shipsAll(G.sys, G.t);
@@ -20756,6 +21087,7 @@
     for (var i = 0; i < G.sys.bodies.length; i++) {
       var b = G.sys.bodies[i];
       if (G.ship.docked && b.id === G.ship.docked) continue; // nothing to say about the thing you're bolted to
+      if (!listed(b)) continue;                 // and nothing about one you have not found
       var bpos = Sim.bodyPosition(b, G.sys, G.t);
       var rel = Sim.relativeToShipFrame(G.ship, bpos);
       if (rel.range > RADAR_RANGE || rel.range < 1e-6) continue;

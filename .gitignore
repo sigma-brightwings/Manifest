@@ -83,3 +83,9 @@ test/fixtures/
 
 # tools/pack.cjs's record of what each working copy was when last in sync.
 .pack-state.json
+
+# electron-probe.cjs's default drop for screenshots when a run names no
+# other folder. Pictures of a running build, not a build: they belong in
+# Claude outputs/ with the rest of the working area, and a diff can say
+# nothing useful about a PNG.
+.probe-shots/

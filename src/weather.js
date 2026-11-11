@@ -232,6 +232,41 @@
    * one's is low without a second table to keep in step. */
   var DECK_LO = 0.10, DECK_HI = 0.26;
 
+  /* ---- rain, snow or ash (2026-11-10) -----------------------------------
+   *
+   * Astra: "storms which rain, snow and thunder/lightning as viewed from on
+   * the surface of a planet."
+   *
+   * WHAT FALLS IS DECIDED BY THE GROUND IT FALLS ON, because that is the
+   * one thing about a world the picture has already committed to: snow
+   * lands where the ice cap is PAINTED, so flying from a green coast into
+   * the white at the top of the world turns the rain to snow at the line
+   * you can see out of the window, and a tidally locked world's night side
+   * snows for the same reason its night side is white. Over lava, what
+   * falls is ash, which is not weather being clever - a molten world's deck
+   * is not made of water and should not arrive as though it were.
+   *
+   * These are FRACTIONS of what is falling, not extra precipitation:
+   * `rain` stays the whole of it, and snow + ash take their share of it.
+   * One number for how hard it is coming down, three for what it is. */
+  function precipKind(body, sys, nWorld, t) {
+    var T = terrainOf(body);
+    if (T.lava) return { snow: 0, ash: 1 };
+    if (!(T.ice > 0.001) && !body.habitableBand) return { snow: 0, ash: 0 };
+    var sunB = null;
+    if (body.habitableBand === 'terminator' && global.Sim && global.Sim.bodyPosition && sys && sys.root) {
+      var Sim = global.Sim;
+      var sp = Sim.bodyPosition(sys.root, sys, t), bp = Sim.bodyPosition(body, sys, t);
+      var d = { x: sp.x - bp.x, y: sp.y - bp.y, z: sp.z - bp.z };
+      var dl = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) || 1;
+      sunB = bodyFixed(body, { x: d.x / dl, y: d.y / dl, z: d.z / dl }, t);
+    }
+    var g = terrainAt(body, bodyFixed(body, nWorld, t), sunB);
+    /* The cap's own edge, softened: the shader fades ice in over a band,
+     * and the snow line has no business being sharper than the ice is. */
+    return { snow: smoothstep(0.22, 0.62, g.ice), ash: 0 };
+  }
+
   function aloft(ship, sys, t) {
     var Sim = global.Sim, GL = global.GLWorld;
     if (!ship || !Sim || !Sim.atmosphereContext || !GL || !GL.spinOf) return null;
@@ -259,6 +294,7 @@
      * that was black. What thins is the cloud ABOVE you, so the only fade
      * is at the top: full below the deck, gone a little way above it. */
     var below = 1 - smoothstep(hi, hi * 1.4, alt);
+    var kind = precipKind(body, sys, n, t);
 
     /* And in the murk, which is its own state: the window fills and you
      * fly on instruments. Ramped over the outer fifth of the band, or
@@ -276,7 +312,9 @@
       rain: Math.max(0, here.cloud - 0.25) / 0.75 *
             (0.35 + 0.65 * here.storm) * below,
       /* How much of the daylight the deck is keeping off you. */
-      gloom: gloomOf(here) * below
+      gloom: gloomOf(here) * below,
+      /* What that fall is made of, as fractions of it. */
+      snow: kind.snow, ash: kind.ash
     };
   }
 
@@ -458,6 +496,30 @@
     return { x: d.x * c + (k.y * d.z - k.z * d.y) * s + k.x * kd * (1 - c),
              y: d.y * c + (k.z * d.x - k.x * d.z) * s + k.y * kd * (1 - c),
              z: d.z * c + (k.x * d.y - k.y * d.x) * s + k.z * kd * (1 - c) };
+  }
+  /* THE MAGNETIC AXIS (2026-11-10). world = the spin axis leaned `tilt`
+   * toward azimuth `az` (in the basis built from world y, or x near the
+   * pole) carried round by the phase - the aurora's axis in gl.js
+   * (GL.magAxis, which a test holds equal to this). magneticAxis is the
+   * same thing in the body-fixed frame, which does not change with time:
+   * the frame the survey's cells and the terrain are in. null = no field. */
+  function magAxisWorld(mag, ax, phase) {
+    var h = Math.abs(ax.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+    var e1 = { x: h.y * ax.z - h.z * ax.y, y: h.z * ax.x - h.x * ax.z, z: h.x * ax.y - h.y * ax.x };
+    var l = Math.sqrt(e1.x * e1.x + e1.y * e1.y + e1.z * e1.z) || 1;
+    e1 = { x: e1.x / l, y: e1.y / l, z: e1.z / l };
+    var e2 = { x: ax.y * e1.z - ax.z * e1.y, y: ax.z * e1.x - ax.x * e1.z, z: ax.x * e1.y - ax.y * e1.x };
+    var ct = Math.cos(mag.tilt), st = Math.sin(mag.tilt);
+    var ca = Math.cos(mag.az + phase), sa = Math.sin(mag.az + phase);
+    return { x: ax.x * ct + (e1.x * ca + e2.x * sa) * st,
+             y: ax.y * ct + (e1.y * ca + e2.y * sa) * st,
+             z: ax.z * ct + (e1.z * ca + e2.z * sa) * st };
+  }
+  function magneticAxis(body) {
+    var mag = body && body.magnetosphere;
+    if (!mag) return null;
+    var w0 = magAxisWorld(mag, spinAxis(body), spinPhase(body, 0));
+    return bodyFixed(body, w0, 0);
   }
   /* The elevation field at a body-fixed unit direction: the shader's
    * terrain block, line for line (gl.js FRAG, "---- terrain"). */
@@ -750,9 +812,10 @@
     dryAt: dryAt, digFloor: digFloor, padDir: padDir, DIG_MARGIN: DIG_MARGIN, DIG_NUDGE: DIG_NUDGE,
     BIOME: BIOME, biomeParams: biomeParams, biomeAt: biomeAt, biomeGrid: biomeGrid,
     elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
+    magAxisWorld: magAxisWorld, magneticAxis: magneticAxis,
     K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
     report: report, describe: describe, hasWeather: hasWeather,
-    aloft: aloft, overhead: overhead, gloomOf: gloomOf, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
+    aloft: aloft, overhead: overhead, precipKind: precipKind, gloomOf: gloomOf, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
     stormClock: stormClock, saltOf: saltOf,
     FLASH_RHYTHMS: FLASH_RHYTHMS, FLASH_CYCLE: FLASH_CYCLE
   };

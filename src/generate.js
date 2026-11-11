@@ -861,6 +861,10 @@
     });
 
     buildRotations(sys, base);
+    /* After the spin (a field's strength reads the day length), in its own
+     * substream, so nothing already generated moves. opts.noMagnetosphere
+     * leaves every world's field out, for the suite to prove exactly that. */
+    if (!opts.noMagnetosphere) buildMagnetospheres(sys, base);
     settleTwilightPads(sys);
     /* After the twilight fold (which decides where in its band a pad may
      * stand) and before anything reads a pad's position - the survey's
@@ -934,6 +938,12 @@
     /* And the plants over the giants act on what they were just stamped as:
      * skimmers scoop hydrogen, navy and Syndicate refineries press milfuel. */
     if (Eco.runGiantPlants) Eco.runGiantPlants(sys);
+    /* The installations nobody lists (2026-11-10). Last but one, so the
+     * site is a port by the time the signatures run over it, and late
+     * enough that every id, orbit, market and timetable above it is the
+     * one an older seed produced. Its own substream; opts.noBlackSites
+     * leaves it out and the suite proves nothing else moves. */
+    if (!opts.noBlackSites) buildBlackSites(sys, base, opts);
     /* Every port's signature — a major and a minor each way, the rest
      * near list price (Economy.signature, 2026-11-02). Last of the market
      * passes, because every pass above rewrites rows. No draws. */
@@ -2510,6 +2520,66 @@
       } else if (b.kind === 'planet' && b.tipped) {
         b.rotation.tilt = r.range(80, 100) * DEG;   // on its side
       }
+    }
+  }
+
+  /* --- magnetosphere ----------------------------------------------------
+   * A seeded magnetic field per world (2026-11-10), in its OWN substream so
+   * adding it did not move a single planet, moon, rotation or pad (the
+   * suite proves it with opts.noMagnetosphere). Dipole only: a strength
+   * 0..1 (1 = a strong gas-giant field), the tilt of the magnetic axis off
+   * the spin axis, and the azimuth it leans toward in the spin frame (which
+   * turns with the planet's phase, so the field rides the rotation).
+   * `activity` is how hard the star drives it, which sets how bright and
+   * how wide the aurorae burn.
+   *
+   * Physics, roughly: giants have deep conducting layers and always have
+   * one (ice giants with the big Uranus/Neptune tilt); a rock needs a
+   * molten core that is still stirring, so it is a per-type chance, less
+   * for slow or tidally locked worlds and more for fast spinners. A moon
+   * with a trace of air may carry a weak one. A field with no air over it
+   * is still a field (the magnetometer reads it) but burns no aurora.
+   * Plain `null` means none at all. */
+  var MAG_CHANCE = {
+    terran: 0.75, ocean: 0.70, tundra: 0.50, desert: 0.25,
+    molten: 0.35, iceball: 0.10, rocky: 0.20
+  };
+  function buildMagnetospheres(sys, base) {
+    var mr = base.fork('magnetosphere');
+    for (var i = 0; i < sys.bodies.length; i++) {
+      var b = sys.bodies[i];
+      if (b.kind !== 'planet' && b.kind !== 'moon') continue;
+      var r = mr.fork('mag-' + b.id);
+      // Draw everything first, in a fixed order, so the stream reads the
+      // same whichever branch a world then takes.
+      var roll = r.next(), s = r.next(), t = r.next(), az = r.angle(), act = r.next();
+      var strength = 0, tilt = 0, has = false;
+      if (b.type === 'gasGiant') {
+        has = true; strength = 0.7 + 0.3 * s; tilt = t * 12 * DEG;
+      } else if (b.type === 'iceGiant') {
+        has = true; strength = 0.6 + 0.35 * s; tilt = (40 + 20 * t) * DEG;
+      } else if (b.kind === 'moon') {
+        var air = b.atmosphere && b.atmosphere.rho0 > 0;
+        if (air && roll < 0.15) { has = true; strength = 0.1 + 0.25 * s; tilt = t * 20 * DEG; }
+      } else {
+        var p = MAG_CHANCE[b.type] || 0;
+        var per = b.rotation ? Math.abs(b.rotation.period) / 3600 : 24;
+        var spin = per < 14 ? 1.2 : (per > 50 ? 0.7 : 1);
+        if (b.tidallyLocked) spin *= 0.5;
+        if (roll < p * spin) {
+          has = true;
+          strength = Math.min(0.75, (0.25 + 0.5 * s) * (b.tidallyLocked ? 0.6 : 1) * (per < 14 ? 1.2 : 1));
+          tilt = t * 25 * DEG;
+        }
+      }
+      if (!has) { b.magnetosphere = null; continue; }
+      var ins = b.insolation > 0 ? b.insolation : 1;
+      b.magnetosphere = {
+        strength: strength,
+        tilt: tilt,
+        az: az,
+        activity: Math.max(0.3, Math.min(1, 0.45 + 0.35 * Math.log10(ins + 0.1) + 0.2 * act))
+      };
     }
   }
 
@@ -4669,6 +4739,158 @@
    * and puts it in every list the flight loop reads: the host's children,
    * sys.bodies/byId, sys.ports, and sys.pads when it is on a surface.
    * Nothing else in the system moves. */
+  /* ---- THE INSTALLATIONS NOBODY LISTS (2026-11-10) -----------------------
+   *
+   * Astra: "we can use the magnetometer to detect space ports in systems you
+   * don't have a chart for, especially for classified military or corporate
+   * outposts."
+   *
+   * A black site is a REAL PORT - it has a market and you can dock at it -
+   * that appears on no chart, no nav list and no manifest until an
+   * instrument finds it. Three sorts, and which one a system gets follows
+   * from who holds it: a fleet keeps LISTENING POSTS, an industrial power
+   * keeps WORKS it does not put on paper, and the Syndicate keeps CACHES.
+   *
+   * WHERE: far out and off the plane. The inner system is where everybody
+   * already is, so a thing you do not want found goes round the outermost
+   * world on a high, steeply inclined orbit. That is also the honest reason
+   * a magnetometer is what finds it: out there, there is nothing else whose
+   * field it could be, and a reactor on a dark rock is the only artificial
+   * thing for a hundred million kilometres.
+   *
+   * LAST, AND THROUGH attachPort. Every draw comes out of its own substream
+   * and the station is bolted on after everything else is decided, so every
+   * seed that predates this generates exactly the bodies it always did -
+   * same ids, same orbits, same markets, same traffic. opts.noBlackSites
+   * leaves them out entirely and the suite proves nothing else moves. */
+  var SITE_KINDS = {
+    listening: {
+      label: 'Naval listening post', ink: '#b8c6d8',
+      pre: ['Relay', 'Picket', 'Watch', 'Listening Post', 'Station', 'Array', 'Post'],
+      suf: ['Kestrel', 'Harrier', 'Vigil', 'Longshore', 'Aldrin', 'Wake', 'Sentinel',
+            'Tern', 'Merlin', 'Osprey', 'Lanner', 'Saker', 'Hobby', 'Shrike',
+            'Nine', 'Eleven', 'Nineteen', 'Twenty-Three'],
+      note: 'A fleet ear, pointed at somebody. No flag, no beacon, no answer on the public channels.'
+    },
+    works: {
+      label: 'Unlisted works', ink: '#ffd36b',
+      pre: ['Site', 'Works', 'Annexe', 'Facility', 'Plant', 'Shop', 'Bench'],
+      suf: ['Seven', 'Fourteen', 'Twelve', 'Nine', 'Thirty-One', 'Four', 'Twenty',
+            'Two', 'Six', 'Eighteen', 'Twenty-Seven', 'Forty', 'Fifty-Two',
+            'Ayre', 'Candell', 'Mossgate', 'Rew', 'Thorn'],
+      note: 'Somebody’s works, built where no inspector files a report. The books it keeps are not the ones it shows.'
+    },
+    cache: {
+      label: 'Syndicate cache', ink: '#ff9f7a',
+      pre: ['The', 'The', 'The', 'Cache'],
+      suf: ['Hollow', 'Quiet', 'Long Room', 'Understair', 'Backstep', 'Larder',
+            'Coalhole', 'Dry Store', 'Cellar', 'Back Room', 'Lockup', 'Deep Shelf',
+            'Low Door', 'Quiet Berth', 'Keeping Place'],
+      note: 'A hole the Syndicate keeps full. Nobody asks what came in, and nobody writes down what goes out.'
+    }
+  };
+  var SITE_KIND_IDS = ['listening', 'works', 'cache'];
+
+  /* The world a site hides behind: the outermost thing big enough to orbit,
+   * because that is the dark end of the system and the long way from
+   * anybody's shipping lane. */
+  function outerHost(sys) {
+    var best = null, bestA = -1;
+    for (var i = 0; i < sys.bodies.length; i++) {
+      var b = sys.bodies[i];
+      if (b.kind !== 'planet') continue;
+      var a = (b.orbit && b.orbit.a) || 0;
+      if (a > bestA) { bestA = a; best = b; }
+    }
+    return best;
+  }
+
+  function buildBlackSites(sys, base, opts) {
+    sys.blackSites = [];
+    /* Existing military ports in a restricted system go quiet too: a
+     * warship yard's own berths are not on the sheets a broker sells. */
+    var restricted = opts && opts.restricted ? opts.restricted : null;
+    if (restricted) {
+      for (var p = 0; p < (sys.ports || []).length; p++) {
+        var pt = sys.ports[p];
+        if (pt.livery === 'navy' || pt.livery === 'syn') {
+          pt.classified = { kind: pt.livery === 'syn' ? 'cache' : 'listening',
+                            label: pt.livery === 'syn' ? 'Syndicate berth' : 'Naval berth',
+                            unlisted: true, host: true };
+        }
+      }
+    }
+
+    /* THE GALAXY DECIDES, NOT THE SYSTEM (2026-11-10). Astra: "there
+     * shouldn't be more than maybe five or ten black sites per
+     * organization per empire" - a cap on the whole map, which a
+     * per-system roll cannot express at all. galaxy.js assignBlackSites
+     * allocates them against that budget and hands each star its own; this
+     * builds what it is handed and decides nothing. A system generated
+     * without a galaxy round it (a bare seed, as several suites use) hides
+     * nothing, which is the honest answer: there is no empire there to
+     * have hidden anything.
+     *
+     * AND SOME ARE NOT BUILT AT ALL YET. Astra: "a few of them shouldn't
+     * even be generated until you're supposed to be looking for them." A
+     * gated site is allocated and fixed - same seed, same star, same sort
+     * - but it does not exist in the world until a career has been pointed
+     * at it (opts.reveal, keyed by the site's id). */
+    var spec = opts && opts.blackSite;
+    if (!spec) return;
+    if (spec.gated && !(opts.reveal && opts.reveal[spec.id])) return;
+    var host = outerHost(sys);
+    if (!host) return;
+    var rng = base.fork('blacksites');
+    var kindId = spec.kind;
+    var K2 = SITE_KINDS[kindId] || SITE_KINDS.works;
+
+    var srng = rng.fork('site-' + host.id);
+    var hHill = hillRadius(host.mass, (sys.root && sys.root.mass) || host.mass * 1e6,
+                           host.orbit.a, host.orbit.e);
+    var a = host.radius * srng.range(7, 16);
+    if (a > hHill * 0.35) a = Math.max(host.radius * 3, hHill * 0.3);
+    var stRadius = srng.range(0.35, 1.1) * STATION_SCALE;
+    var name = srng.pick(K2.pre) + ' ' + srng.pick(K2.suf);
+
+    var site = {
+      id: spec.id,
+      name: name,
+      kind: 'station', type: 'station', typeName: K2.label,
+      mass: srng.range(2e8, 2e9),
+      radius: stRadius,
+      color: K2.ink,
+      docking: true,
+      dockCaptureRadius: Math.max(DOCK_CAPTURE_MIN, stRadius * 4),
+      dockMaxSpeed: 0.006,
+      faction: spec.faction ||
+        (kindId === 'cache' ? ((sys.outlaw && sys.outlaw.id) || 'outlaw')
+                            : ((opts && opts.faction && opts.faction.id) || 'outlaw')),
+      forceRole: 'orbital',
+      /* THE FLAG THAT KEEPS IT OFF EVERY LIST. Read by the nav list, the
+       * manifest, the orbit map and the chart; cleared for the player by
+       * finding it, never by anything the generator does. */
+      classified: { kind: kindId, label: K2.label, note: K2.note, unlisted: true },
+      orbit: {
+        parent: host.id, a: a, e: srng.range(0, 0.02),
+        /* STEEPLY OFF THE PLANE. Everything else in the system orbits
+         * within a few degrees of the ecliptic; this does not, which is
+         * most of why nobody has tripped over it. */
+        inc: srng.range(22, 61) * DEG,
+        lan: srng.angle(), argp: srng.angle(), m0: srng.angle()
+      },
+      children: []
+    };
+    attachPort(sys, host, site);
+    if (Eco.buildPortMarket) Eco.buildPortMarket(site, host, sys, srng.fork('mkt'));
+    dressPort(sys, site, srng.fork('dress'));
+    /* AND NO PUBLIC TRAFFIC CALLS HERE, for free: buildTraffic laid the
+     * timetable down hundreds of lines above, off the ports that existed
+     * then, and a port attached afterwards is simply not on it. Nothing to
+     * suppress, which is the right kind of quiet. */
+    sys.blackSites.push(site);
+  }
+
   function attachPort(sys, host, port) {
     if (!sys || !host || !port || sys.byId[port.id]) return port;
     if (!host.children) host.children = [];

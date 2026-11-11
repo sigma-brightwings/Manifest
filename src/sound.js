@@ -135,12 +135,24 @@
     blip:      function () { tone('sine', 1050, 1050, 0.05, 0.07); },
     click:     function () { tone('square', 1400, 900, 0.03, 0.05); },
     pay:       function () { tone('sine', 780, 1240, 0.14, 0.12); },
-    scoop:     function () { tone('sine', 300, 520, 0.18, 0.10); }
+    scoop:     function () { tone('sine', 300, 520, 0.18, 0.10); },
+    /* THUNDER (2026-11-10). One sound with a distance knob, because a
+     * strike overhead and a strike on the horizon are the same event heard
+     * through different amounts of air: the crack is the shock front and
+     * only a near one still has it, and the roll is that same front smeared
+     * by the miles it came through - longer, softer and lower the further
+     * off it was. `near` is 0 (far) to 1 (on top of you). */
+    thunder:   function (near) {
+      near = near === undefined ? 0.5 : Math.max(0, Math.min(1, near));
+      if (near > 0.45) noise(0.08 + 0.10 * near, 0.16 * near, 1600 + 2800 * near, 1.1, 300);
+      noise(0.9 + 2.4 * (1 - near), 0.08 + 0.30 * near, 140 + 170 * near, 0.6, 40);
+      tone('sine', 60 + 30 * near, 24, 0.8 + 1.5 * (1 - near), 0.05 + 0.15 * near);
+    }
   };
 
-  function fx(name) {
+  function fx(name, a) {
     if (!enabled || !FX[name]) return;
-    try { FX[name](); } catch (e) { /* a failed noise is still a no-op */ }
+    try { FX[name](a); } catch (e) { /* a failed noise is still a no-op */ }
   }
 
   /* The drive. A looped filtered rumble whose gain follows the throttle —

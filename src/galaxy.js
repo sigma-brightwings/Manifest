@@ -175,6 +175,9 @@
      * decided, so adding restricted space moved no star and changed no
      * flag in any seed that predates it. */
     assignRestricted(rootSeed, stars, factions);
+    /* And who is hiding what, on the same terms: last, its own substream,
+     * reading only what is already decided (2026-11-10). */
+    assignBlackSites(rootSeed, stars, factions);
     /* And who resents whom. Last, out of its own stream, reading nothing
      * but the roster — so it moved no border in any existing galaxy. */
     var rivals = assignRivalries(rootSeed, factions);
@@ -757,6 +760,135 @@
     }
   }
 
+  /* ---- WHO HIDES WHAT, AND HOW MANY (2026-11-10) ------------------------
+   *
+   * Astra: "There shouldn't be more than maybe five or ten black sites per
+   * organization per empire, and a few of them shouldn't even be generated
+   * until you're supposed to be looking for them."
+   *
+   * THE BUDGET IS THE GALAXY'S, NOT THE SYSTEM'S. The first version rolled
+   * a chance per system, which is the wrong shape for a cap: over four
+   * hundred stars an independent roll gives you however many it gives you,
+   * and "no more than five or ten per organization per empire" is a
+   * sentence about the whole map. So the allocation happens here, where the
+   * roster and every star are in one place, exactly as the penal colonies
+   * and warship yards are allocated - and generate.js stops deciding
+   * anything and just builds what it is handed.
+   *
+   * THREE ORGANIZATIONS: a fleet keeps listening posts, an industrial power
+   * keeps works it does not put on paper, and the Syndicate keeps caches.
+   * Each empire gets a few of each; the Syndicate's are spread across the
+   * bands' own space rather than any one empire's.
+   *
+   * AND A FEW ARE LATENT. `gated` sites are allocated here and deliberately
+   * NOT built until a career has reason to look for them (generate.js reads
+   * opts.reveal). The galaxy is still the same galaxy for the same seed -
+   * where they are and what they are is fixed at build time - but they do
+   * not exist in the world until something points you at them.
+   *
+   * Last, out of its own substream, reading only what is already decided:
+   * no star moved and no flag changed in any seed that predates it. */
+  var SITE_PER_ORG_LO = 3, SITE_PER_ORG_HI = 6;   // per organization, per empire
+  var SITE_CACHE_LO = 5, SITE_CACHE_HI = 9;       // the Syndicate's, galaxy-wide
+  var SITE_GATED_SHARE = 0.25;                    // held back until you are sent
+  var SITE_SPACING_LY = 5.0;                      // no two in each other's pockets
+
+  function assignBlackSites(rootSeed, stars, factions) {
+    var br = new RNG('galaxy-blacksites|' + rootSeed);
+    var i;
+    for (i = 0; i < stars.length; i++) stars[i].blackSite = null;
+
+    var byFac = {};
+    for (i = 0; i < stars.length; i++) {
+      var fid = stars[i].factionId;
+      if (!fid) continue;                          // an unclaimed star keeps nothing
+      (byFac[fid] = byFac[fid] || []).push(stars[i]);
+    }
+    var taken = [];
+    function tooClose(st) {
+      for (var k = 0; k < taken.length; k++) {
+        if (distance3(st, taken[k]) < SITE_SPACING_LY) return true;
+      }
+      return false;
+    }
+    /* One site on a star, never two, and never on the doorstep of home:
+     * the first jump of a new career is not where a secret base belongs,
+     * for the same reason assignRestricted keeps the prison out of it. */
+    function eligible(st) {
+      return !st.blackSite && distance3(st, stars[0]) > HOME_CLEAR_LY;
+    }
+    function place(st, kind, fid, gated) {
+      st.blackSite = { id: 'bs-' + st.id, kind: kind, faction: fid, gated: !!gated };
+      taken.push(st);
+    }
+
+    /* The empires. A fleet's ears and an industry's quiet works, in that
+     * faction's own space, as far from its capital as the roster allows -
+     * the far edge of your own territory is where you put the thing you do
+     * not want your own people tripping over. */
+    for (var f = 0; f < factions.length; f++) {
+      var fac = factions[f];
+      if (fac.outlaw || fac.minor) continue;
+      var owned = byFac[fac.id] || [];
+      if (owned.length < 4) continue;
+      var capital = null;
+      for (i = 0; i < stars.length; i++) if (stars[i].id === fac.capitalId) capital = stars[i];
+      var ranked = owned.filter(eligible).sort(function (a, b) {
+        return distance3(b, capital || stars[0]) - distance3(a, capital || stars[0]);
+      });
+      /* A restricted star is the certainty: a warship yard IS the hidden
+       * thing, so it takes the first listening post rather than competing
+       * for one. */
+      var kinds = ['listening', 'works'];
+      for (var ki = 0; ki < kinds.length; ki++) {
+        var want = br.int(SITE_PER_ORG_LO, SITE_PER_ORG_HI);
+        var placed = 0;
+        if (kinds[ki] === 'listening') {
+          for (i = 0; i < owned.length && placed < want; i++) {
+            if (owned[i].restricted && eligible(owned[i])) {
+              place(owned[i], 'listening', fac.id, false);
+              placed++;
+            }
+          }
+        }
+        /* The rest off the far end of the faction's own space, skipping
+         * anything already spoken for or too near a site already placed. */
+        for (i = 0; i < ranked.length && placed < want; i++) {
+          if (!eligible(ranked[i]) || tooClose(ranked[i])) continue;
+          place(ranked[i], kinds[ki], fac.id, br.next() < SITE_GATED_SHARE);
+          placed++;
+        }
+      }
+    }
+
+    /* The Syndicate's, one organization across the whole map rather than
+     * one per empire: the bands' own space first, then the frontier, which
+     * is where a hole in the dark is worth keeping. */
+    var synWant = br.int(SITE_CACHE_LO, SITE_CACHE_HI);
+    var synPool = [];
+    for (i = 0; i < stars.length; i++) {
+      var st = stars[i];
+      if (!eligible(st)) continue;
+      var fac2 = null;
+      for (var g = 0; g < factions.length; g++) if (factions[g].id === st.factionId) fac2 = factions[g];
+      if (fac2 && fac2.outlaw) synPool.push({ st: st, rank: 0 });
+      else if (fac2 && fac2.minor) synPool.push({ st: st, rank: 1 });
+      else if (fac2) synPool.push({ st: st, rank: 2 });
+      /* Not an unclaimed star: "no port, no market, no law" is what an
+       * unclaimed star MEANS, and a berth there would be a port. */
+    }
+    synPool.sort(function (a, b) {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      return distance3(b.st, stars[0]) - distance3(a.st, stars[0]);
+    });
+    var synPlaced = 0;
+    for (i = 0; i < synPool.length && synPlaced < synWant; i++) {
+      if (!eligible(synPool[i].st) || tooClose(synPool[i].st)) continue;
+      place(synPool[i].st, 'cache', 'outlaw', br.next() < SITE_GATED_SHARE);
+      synPlaced++;
+    }
+  }
+
   /* Is this star behind a checkpoint, and does this ship answer it? Two
    * questions, one function, because the chart asks the first to draw the
    * marker and the jump planner asks the second to refuse the course — and
@@ -1012,8 +1144,15 @@
   function systemOpts(galaxy, star) {
     if (!galaxy || !star) return undefined;
     var fac = galaxy.factionById ? galaxy.factionById[star.factionId] : null;
-    if (fac) return { faction: fac, allFactions: galaxy.factions };
-    return { empty: true, allFactions: galaxy.factions };
+    /* The star's restriction travels with it (2026-11-10): a warship yard
+     * or a penal colony is the one place a classified installation is
+     * certain to be, and generate.js cannot read the galaxy to find out. */
+    var restricted = star.restricted || null;
+    /* What this star is hiding, if anything, as the galaxy allocated it.
+     * generate.js builds what it is handed and decides nothing itself. */
+    var site = star.blackSite || null;
+    if (fac) return { faction: fac, allFactions: galaxy.factions, restricted: restricted, blackSite: site };
+    return { empty: true, allFactions: galaxy.factions, restricted: restricted, blackSite: site };
   }
   function isEmpty(star) { return !!star && !star.factionId; }
 
@@ -1040,6 +1179,9 @@
     restrictionOf: restrictionOf,
     barredFrom: barredFrom,
     chartOffer: chartOffer,
+    assignBlackSites: assignBlackSites,
+    SITE_PER_ORG_LO: SITE_PER_ORG_LO, SITE_PER_ORG_HI: SITE_PER_ORG_HI,
+    SITE_CACHE_LO: SITE_CACHE_LO, SITE_CACHE_HI: SITE_CACHE_HI,
     rivalsOf: rivalsOf,
     CHART_RADIUS_LY: CHART_RADIUS_LY,
     SYNDICATE_HOLDS: SYNDICATE_HOLDS,

@@ -47,9 +47,11 @@ var GROUPS = {
   core: [
     'tools/lint-globals.js', 'test/packed.test.js', 'test/packed-browser.test.js',
     'test/self.test.js', 'test/release.test.js', 'test/physics.test.js',
-    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js',
+    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/precip.test.js',
+    'test/blacksites.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
+    'test/magnetosphere.test.js', 'test/magnetometer.test.js',
     'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js'
   ],
   render: ['test/render.test.js'],
@@ -85,7 +87,7 @@ var GROUPS = {
     'test/tradeanalyser.test.js', 'test/tradingfirm.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/claims.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/claims.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [

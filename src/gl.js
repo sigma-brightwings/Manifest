@@ -1120,6 +1120,17 @@
     'uniform vec4 uSeaK;',        // sea time s, lift the depth (1/0), amplitude scale, post reach km
     'uniform vec4 uSeaPost[56];',   // columns: x, y, half-width (km); z 0 ends the list
     'uniform float uHaloPush;',   // km behind the centre the halo sits; a ring's outer radius
+    /* AURORAE AND THE ENVELOPE (2026-11-10). uMag = the world's magnetic
+     * axis (world axes, unit) and the visible aurora strength; uAurA = the
+     * main colour and the oval's colatitude (rad); uAurB = the fringe
+     * colour and the star's activity; uAurT = real seconds mod an hour, so
+     * time warp does not strobe the shimmer; uHaloH = the envelope's depth
+     * in body radii, scaled by the real scale height. */
+    'uniform vec4 uMag;',
+    'uniform vec4 uAurA;',
+    'uniform vec4 uAurB;',
+    'uniform float uAurT;',
+    'uniform float uHaloH;',
     /* The ground-port cone — see GL.setGroundCone. */
     'uniform vec4 uConeS;',       // eye -> ship, km; w = 1 when on
     'uniform vec3 uConeR;',       // radius at the ship, at the eye, and the most it may be, km
@@ -1291,6 +1302,37 @@
     SEA_GLSL,
     /* Biomes: see BIOME_GLSL above and Weather.BIOME. */
     BIOME_GLSL,
+    /* The aurora: an oval of light round each magnetic pole, at a fixed
+     * colatitude from it, pushed equatorward on the day side where the
+     * solar wind squeezes the field. Curtains are noise over
+     * the azimuth about the magnetic axis, drifting slowly. Returns
+     * (colour, intensity). Skipped under the ground sky. */
+    'vec4 auroraAt(vec3 p, float ndl, float pth) {',
+    '  if (uMag.w <= 0.0 || uSkyA.w > 0.0) return vec4(0.0);',
+    '  vec3 m = uMag.xyz;',
+    '  float dm = dot(p, m);',
+    '  float cola = acos(clamp(abs(dm), 0.0, 1.0));',
+    '  float day = smoothstep(-0.2, 0.6, ndl);',
+    '  float ocol = uAurA.w + 0.06 * day;',
+    '  float wd = 0.05 + 0.03 * uAurB.w;',
+    '  float oval = exp(-pow((cola - ocol) / wd, 2.0));',
+    '  if (oval < 0.003) return vec4(0.0);',
+    '  vec3 e1 = normalize(cross(m, abs(m.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));',
+    '  vec3 e2 = cross(m, e1);',
+    '  vec3 q = p - m * dm;',
+    '  float az = atan(dot(q, e2), dot(q, e1));',
+    '  float sg = dm >= 0.0 ? 1.0 : -1.0;',
+    '  vec2 c2 = vec2(cos(az), sin(az));',
+    '  float t = uAurT;',
+    '  float rays = fbm(vec3(c2 * 5.0 + vec2(t * 0.02, -t * 0.015), t * 0.05 + sg * 7.0));',
+    '  float fine = fbm(vec3(c2 * 14.0, cola * 30.0 + t * 0.2));',
+    '  float curtain = 0.35 + 0.65 * smoothstep(0.25, 0.75, rays) * (0.6 + 0.8 * fine);',
+    '  float pulse = 0.75 + 0.25 * sin(t * 0.07 + sg * 2.0 + az);',
+    '  float night = 1.0 - smoothstep(-0.05, 0.20, ndl);',
+    '  float I = oval * curtain * pulse * (0.25 + 0.75 * night) * uMag.w * pth;',
+    '  vec3 cc = mix(uAurA.rgb, uAurB.rgb, smoothstep(0.0, 1.0, abs(cola - ocol) / (wd * 1.8)));',
+    '  return vec4(cc, I);',
+    '}',
 
     'void main() {',
     /* The view ray for this pixel, in world axes, from the eye. */
@@ -1356,7 +1398,8 @@
      * crescent on a half-lit world instead of a uniform ring. */
     '    vec3 nl = normalize(uRight * d.x - uUp * d.y);',
     '    float lam = max(0.0, dot(nl, uSunDir));',
-    '    float fall = exp(-(r - 1.0) / (0.055 + 0.10 * uAtmo));',
+    '    float hh = uHaloH > 0.0 ? uHaloH : (0.055 + 0.10 * uAtmo);',
+    '    float fall = exp(-(r - 1.0) / hh) * (1.0 - smoothstep(0.55, 1.0, (r - 1.0) / max(uPad - 1.0, 1e-3)));',
     '    float a = fall * uAtmo * (0.16 + 0.84 * lam);',
     /* The halo sits at the body's own distance rather than at the limb it
      * surrounds — near enough, and it keeps the glow from being punched
@@ -1368,7 +1411,12 @@
      * — a dark band between the disc and the ring behind it. Behind the
      * back of the ring, nothing of the ring can fail against it. */
     '    gl_FragDepth = encodeDepth(dot(oc, uFwd) + uHaloPush);',
-    '    frag = vec4(uAtmoColor * a, a);',
+    '    float twl = exp(-pow((dot(nl, uSunDir) - 0.10) / 0.12, 2.0));',
+    '    vec3 hcol = mix(uAtmoColor, vec3(1.0, 0.50, 0.24), 0.55 * twl);',
+    '    vec4 au = auroraAt(nl, dot(nl, uSunDir), 3.0);',
+    '    float aI = au.w * exp(-(r - 1.0) / max(0.010, 0.12 * hh));',
+    '    float aT = min(1.0, a + aI);',
+    '    frag = vec4((hcol * a * a + au.rgb * aI) / max(aT, 1e-4), aT);',
     '    return;',
     '  }',
 
@@ -1511,6 +1559,11 @@
     '    if (uAtmo > 0.0) {',
     '      float grim = pow(1.0 - z, 3.0);',
     '      gc += uAtmoColor * grim * uAtmo * (0.08 + 0.45 * lam);',
+    '    }',
+    '    if (uAtmo > 0.0 && uSkyA.w <= 0.0) {',
+    '      gc += vec3(1.0, 0.42, 0.18) * exp(-pow((ndl - 0.06) / 0.11, 2.0)) * uAtmo * (0.14 + 0.40 * (1.0 - z));',
+    '      vec4 aug = auroraAt(n, ndl, 1.0 + 1.5 * (1.0 - z));',
+    '      gc += aug.rgb * aug.w * 0.9;',
     '    }',
     '    frag = vec4(gc, 1.0 - uSkyVeil);',
     '    return;',
@@ -1856,6 +1909,11 @@
     '    col += uAtmoColor * rim * uAtmo * (0.08 + 0.45 * lam);',
     '  }',
 
+    '  if (uAtmo > 0.0 && uSkyA.w <= 0.0) {',
+    '    col += vec3(1.0, 0.42, 0.18) * exp(-pow((ndl - 0.06) / 0.11, 2.0)) * uAtmo * (0.14 + 0.40 * (1.0 - z));',
+    '    vec4 aud = auroraAt(n, ndl, 1.0 + 1.5 * (1.0 - z));',
+    '    col += aud.rgb * aud.w * 0.9;',
+    '  }',
     '  col = groundHaze(col, rd, tHit, sqrt(dot(oc, oc)) - uWorldRadius, uWorldRadius);',
     '  frag = vec4(col, 1.0 - uSkyVeil);',
     '}'
@@ -3139,7 +3197,8 @@
                               'uSkyC', 'uSkyD', 'uSkyVeil',
                               'uBoxO', 'uBoxA', 'uBoxB', 'uBoxU', 'uBoxD', 'uBoxTop',
                               'uGdOn', 'uGdAnchorRel', 'uGdCell', 'uGdFrac', 'uGdCq', 'uBio',
-                              'uTear', 'uTearK', 'uTearN']);
+                              'uTear', 'uTearK', 'uTearN',
+                              'uMag', 'uAurA', 'uAurB', 'uAurT', 'uHaloH']);
 
     /* The pit wall (GL.queueGroundWall): one full-screen pass. */
     try {
@@ -4364,9 +4423,11 @@
       /* How much wider than the body the quad has to be, to leave room for
        * whatever glows outside the silhouette. A star's corona is generous;
        * an airless rock needs no margin at all and should not pay for one. */
-      var pad = isStar ? 3.2 : (at ? 1.22 : 1.0);
-
       var atmoStrength = airOf(b);
+      /* The envelope is as deep as the air is tall (2026-11-10): a gas
+       * giant's soft shell is far thicker than a thin world's hairline. */
+      var haloH = (!isStar && at) ? haloThickness(b, atmoStrength) : 0;
+      var pad = isStar ? 3.2 : (at ? Math.max(1.22, 1 + 2.4 * haloH) : 1.0);
 
       gl.uniform2f(uni.uCenterPx, q.x, q.y);
       /* The quad only has to CONTAIN the sphere's screen footprint — the
@@ -4409,6 +4470,12 @@
        * colour does. */
       var ac = atmoTint(b);
       gl.uniform3f(uni.uAtmoColor, ac[0], ac[1], ac[2]);
+      gl.uniform1f(uni.uHaloH, haloH);
+      var au = isStar ? null : auroraUniforms(b, q.t, atmoStrength);
+      gl.uniform4f(uni.uMag, au ? au.mag[0] : 0, au ? au.mag[1] : 0, au ? au.mag[2] : 0, au ? au.mag[3] : 0);
+      gl.uniform4f(uni.uAurA, au ? au.a[0] : 0, au ? au.a[1] : 0, au ? au.a[2] : 0, au ? au.a[3] : 0);
+      gl.uniform4f(uni.uAurB, au ? au.b[0] : 0, au ? au.b[1] : 0, au ? au.b[2] : 0, au ? au.b[3] : 0);
+      gl.uniform1f(uni.uAurT, (Date.now() / 1000) % 3600);
       gl.uniform1f(uni.uCloud, at ? at.cloud : 0);
       var terr = terrainOf(b);
       var sc = rgb(terr.sea, [0, 0, 0]);
@@ -4710,6 +4777,54 @@
     var W = global.Weather;
     if (W && W.terrainOf) return W.terrainOf(b);
     return TERRAIN[b.type] || { ocean: 0, sea: '#000000', ice: 0 };
+  }
+
+  /* ---- AURORAE AND THE ENVELOPE, the JS half (2026-11-10) ----------------
+   * The envelope is as deep as the air is tall: scale height against
+   * Earth-ish 8.8 km, square-rooted and clamped so a gas giant gets a deep
+   * soft shell and a thin world a hairline, never a different planet. */
+  function haloThickness(b, airAmount) {
+    var at = b.atmosphere, H = (at && at.scaleHeight) || 8.8;
+    return (0.055 + 0.10 * airAmount) * Math.max(0.75, Math.min(1.7, Math.sqrt(H / 8.8)));
+  }
+  /* The magnetic axis in world axes: the spin axis leaned `tilt` toward
+   * azimuth `az` in the body frame, carried round by the world's phase so
+   * the field turns with the planet, exactly as the surface lookup is
+   * turned. Pure, so the suite can check the geometry without a GPU. */
+  function magAxisOf(mag, ax, phase) {
+    var h = Math.abs(ax.y) < 0.9 ? { x: 0, y: 1, z: 0 } : { x: 1, y: 0, z: 0 };
+    var e1 = { x: h.y * ax.z - h.z * ax.y, y: h.z * ax.x - h.x * ax.z, z: h.x * ax.y - h.y * ax.x };
+    var l = Math.sqrt(e1.x * e1.x + e1.y * e1.y + e1.z * e1.z) || 1;
+    e1 = { x: e1.x / l, y: e1.y / l, z: e1.z / l };
+    var e2 = { x: ax.y * e1.z - ax.z * e1.y, y: ax.z * e1.x - ax.x * e1.z, z: ax.x * e1.y - ax.y * e1.x };
+    var ct = Math.cos(mag.tilt), st = Math.sin(mag.tilt);
+    var ca = Math.cos(mag.az + phase), sa = Math.sin(mag.az + phase);
+    return { x: ax.x * ct + (e1.x * ca + e2.x * sa) * st,
+             y: ax.y * ct + (e1.y * ca + e2.y * sa) * st,
+             z: ax.z * ct + (e1.z * ca + e2.z * sa) * st };
+  }
+  GL.magAxis = magAxisOf;
+  GL.haloThickness = haloThickness;
+  /* main colour, fringe colour by world type. */
+  var AURORA_COL = {
+    terran:   ['#4dff9a', '#ff4f8a'], ocean:   ['#4dff9a', '#ff4f8a'],
+    tundra:   ['#3ee8d0', '#4f8dff'], desert:  ['#aef0ff', '#5f8cff'],
+    molten:   ['#ffb347', '#ff4a3a'], iceball: ['#3ee8d0', '#4f8dff'],
+    iceGiant: ['#6f8bff', '#e04fff'], gasGiant: ['#b07bff', '#ff6fd0'],
+    moon:     ['#a9d2ff', '#7f9bff']
+  };
+  function auroraUniforms(b, t, airAmount) {
+    var mag = b.magnetosphere;
+    if (!mag || !(airAmount > 0)) return null;
+    var sp = spinOf(b, t);
+    var ax = magAxisOf(mag, sp.ax, sp.phase);
+    var cols = AURORA_COL[b.type] || AURORA_COL.moon;
+    var c1 = rgb(cols[0], [0.3, 1, 0.6]), c2 = rgb(cols[1], [1, 0.3, 0.5]);
+    var vis = mag.strength * Math.min(1, 0.3 + airAmount / 0.6 * 0.7);
+    var colat = 0.36 + 0.10 * (mag.activity - 0.5) - 0.06 * (mag.strength - 0.5);
+    return { mag: [ax.x, ax.y, ax.z, vis],
+             a: [c1[0], c1[1], c1[2], colat],
+             b: [c2[0], c2[1], c2[2], mag.activity] };
   }
 
   var ATMO_TINT = {
@@ -5394,7 +5509,11 @@
       salt: clock ? clock.salt : saltOf(Math.floor(t / STORM_BUCKET)),
       saltPrev: clock ? clock.saltPrev : [0, 0, 0],
       slow: clock ? clock.slow : [0, 0, 0, 0],
-      stormPhase: clock ? clock.phase : wrap(t / STORM_BUCKET, 1)
+      stormPhase: clock ? clock.phase : wrap(t / STORM_BUCKET, 1),
+      /* WHICH strike this is, not just how far into it we are (2026-11-10).
+       * The thunder needs to know one flash from the next so it can queue
+       * a rumble per strike rather than one per frame. */
+      slot: clock ? clock.slot : Math.floor(t / STORM_BUCKET)
     };
   }
 

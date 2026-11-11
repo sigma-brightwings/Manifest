@@ -641,6 +641,17 @@
                   uniqueGroup: 'survey',
                   minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers.' },
+    /* THE MAGNETOMETER (2026-11-10, Astra: "a magnetic field mapping
+     * function on the planetary scanner"; separate instrument, her answer).
+     * Reads a world's magnetic field - the planet's own dipole and the
+     * ore bodies' local anomalies - along the same ground track a survey
+     * scanner maps, in a coverage of its own. A utility slot; it fits
+     * beside a survey scanner (different group) - two readings, two slots. */
+    magnetometer: { id: 'magnetometer', name: 'Magnetometer', slot: 'utility',
+                    kind: 'magnet', magnet: 1, price: 4200, power: 0.6, mass: 1,
+                    uniqueGroup: 'magnet',
+                    minDev: 0.20, minStanding: -100, minCrime: 0, grey: false,
+                    pitch: 'Maps a world\'s magnetic field: its dipole, its poles, the anomalies over ore.' },
 
     /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
      * air as you fly through it - a RAM SCOOP on the nose, a mouth about
@@ -3706,6 +3717,13 @@
       if (it.kind === 'scanner' && (it.scan || 0) > best) best = it.scan;
     }
     return best;
+  }
+
+  /* A magnetometer fitted: 0 or 1. */
+  function magLevel(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) if (list[i].item.kind === 'magnet') return 1;
+    return 0;
   }
 
   /* The survey grade fitted: 0 none, 1 scanner, 2 gamma spectrometer, 3
@@ -9897,7 +9915,7 @@
     cruiseOnMilfuel: cruiseOnMilfuel, drivePreview: drivePreview, driveSlotCount: driveSlotCount,
     ensureCruiseDrive: ensureCruiseDrive,
     SINK: SINK, sinkRackSize: sinkRackSize, armSink: armSink,
-    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel,
+    scanLevel: scanLevel, scanShip: scanShip, hasScoop: hasScoop, hasSkimmer: hasSkimmer, surveyLevel: surveyLevel, magLevel: magLevel,
     npcArmament: npcArmament, hasTradeAnalyser: hasTradeAnalyser, hasPortAnalyser: hasPortAnalyser, playerDps: playerDps,
     hailRumour: hailRumour, rumourFacts: rumourFacts, RUMOUR_DAY: RUMOUR_DAY,
     startRescue: startRescue, updateRescue: updateRescue, restoreRescue: restoreRescue,

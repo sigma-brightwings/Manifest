@@ -254,6 +254,17 @@
        * a port without going there. Saved separately so a bought chart
        * survives a reload — it was paid for. */
       charted: Object.keys(G.charted || {}),
+      /* THE INSTALLATIONS YOU HAVE FOUND (2026-11-10). A black site is on
+       * no chart you can buy; the only record that it exists is the one
+       * your own coil made, so it is saved as its own key. Values are the
+       * epoch each was found at, kept as an object rather than a list so
+       * the when survives too - a find is worth less the older it is when
+       * you come to sell it. Additive: an older career has none, which
+       * reads as "found nothing yet", and that is exactly true. */
+      found: G.found || {},
+      /* And which latent installations a career has been pointed at, so a
+       * reload does not quietly take one back out of the world again. */
+      revealed: G.revealed || {},
       ship: {
         pos: s.pos, vel: savedVel(G), fwd: s.fwd, up: s.up, right: s.right,
         /* Standing on open ground (rung 2): the spot on the world, which
@@ -618,6 +629,18 @@
     G.charted = G.charted || {};
     var chartedList = data.charted || data.visited || [];
     for (var ci = 0; ci < chartedList.length; ci++) G.charted[chartedList[ci]] = true;
+
+    /* No fallback and no guessing: a career that predates the coil has
+     * found nothing, and saying otherwise would hand it installations it
+     * never looked for. */
+    G.revealed = {};
+    if (data.revealed) for (var rk in data.revealed) {
+      if (Object.prototype.hasOwnProperty.call(data.revealed, rk)) G.revealed[rk] = data.revealed[rk];
+    }
+    G.found = {};
+    if (data.found) for (var fk in data.found) {
+      if (Object.prototype.hasOwnProperty.call(data.found, fk)) G.found[fk] = data.found[fk];
+    }
 
     if (data.here && data.here !== G.here.id) {
       var star = null;
