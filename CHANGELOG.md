@@ -40,6 +40,20 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-12, you can tell what a row is without reading it)
+
+Astra: *"the ascii icons for the various places are difficult to recognize as what they are at a glance. Stations should be in bold or something, or an icon be made up that will fit beside them. Ships should be in grey if neutral, green if friendly and red if hostile. If unknown, the track shows up as white."*
+
+Two changes on the F3 nav and F4 comms lists, doing different jobs.
+
+**The mark says what it is, and it is drawn now rather than typed.** `*`, `O`, `o` and `#` are four marks that all read as "a small bright smudge" at twelve pixels in a column of forty rows. In their place: a ringed disc is a star, a filled disc a planet, a small one a moon, a **barred square a station**, a triangle on a ground line a pad on a world, a chevron a hull, a diamond an incident (filled while somebody is still asking, hollow once it is over), a ring with a dot in it a field contact, and a mast with two arcs a police channel — a frequency, not a place. You can tell them apart without reading them.
+
+**The colour says whose it is, and only for hulls.** Grey is a hull with no opinion of you, green one whose flag thinks well of you (+10, where the standing words turn warm), red one that would shoot (hostile, or a flag at −40 where the law already shoots over it), and **white one you cannot read**: running dark, or flying no flag at all. White should be rare, and when it turns up it should be a question. Places keep their faction's colour, because whose dock it is matters more than whether they like you today.
+
+- **A trader flies no flag of her own.** The first version came out of the probe reading **159 of 166 hulls in Mirven as "unknown"** — ordinary traffic carries no `faction` field at all, only the patrols do. A freighter is of the flag over the dock she sails from, which is what the port list, the customs officer and the raid news already assume. Fixed, and measured again: 164 neutral and 2 hostile on a fresh career, which is what grey-by-default should look like.
+- Neutral grey is deliberately brighter than the game's disabled grey. A hull with no opinion of you is not an unavailable one.
+- `tools/probe-marks.js` rigs one of each colour in the running game and photographs both lists.
+
 ### Added (2026-11-11, the open band: what is happening to somebody else)
 
 Astra: *"We're gonna need NPC ships to both trade with each other and fight one another, something that the player can come across in the local system chatter and attempt to render aid or even pirate their ship."*

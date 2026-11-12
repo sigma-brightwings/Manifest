@@ -565,8 +565,12 @@
         ctx.fillStyle = 'rgba(255,211,107,0.20)';
         ctx.fillRect(pad + 6, yy - 12, listW - 12, rowH);
       }
-      ctx.fillStyle = e.hostile ? '#ff8a76' : (idx === sel ? MFD_HOT : e.color);
-      ctx.fillText(navMark(e), pad + 12, yy);
+      /* A hull's colour says whose she is; a place keeps her flag's.
+       * The selected row wins over both, because the one thing you must
+       * never lose track of is which row you are on. */
+      var ink = e.kind === 'ship' ? trackInk(e) : (e.hostile ? TRACK.hostile : e.color);
+      if (idx === sel) ink = MFD_HOT;
+      markAt(ctx, pad + 8, yy, e, ink);
       /* Clipped to the room the distance actually leaves, measured, not to
        * a fixed 24 characters — at a narrow window the two ran into each
        * other ("Coldwater Drove38,606 km"). */
@@ -577,7 +581,7 @@
         while (nm.length > 2 && ctx.measureText(nm + '.').width > nameRoom) nm = nm.slice(0, -1);
         nm += '.';
       }
-      ctx.fillStyle = idx === sel ? MFD_HOT : MFD_INK;
+      ctx.fillStyle = idx === sel ? MFD_HOT : (e.kind === 'ship' ? ink : MFD_INK);
       ctx.fillText(nm, pad + 26, yy);
       ctx.fillStyle = idx === sel ? MFD_HOT : MFD_DIM;
       ctx.textAlign = 'right';
@@ -644,6 +648,157 @@
    * in the current system? */
   function outlawHoldsHere(fid) {
     return (G.sys.ports || []).some(function (p) { return p && p.faction === fid; });
+  }
+
+  /* ---- WHAT A ROW IS, AT A GLANCE (2026-11-12) ---------------------------
+   * Astra: "the ascii icons for the various places are difficult to
+   * recognize as what they are at a glance. Stations should be in bold or
+   * something, or an icon be made up that will fit beside them. Ships
+   * should be in grey if neutral, green if friendly and red if hostile.
+   * If unknown, the track shows up as white."
+   *
+   * Two changes, and they are doing different jobs:
+   *
+   *   THE MARK says WHAT it is. A star, a planet, a moon, a station, a
+   *   pad, a hull, a call for help. These were single ASCII characters -
+   *   '*', 'O', 'o', '#' - which are four marks that all read as "a
+   *   small bright smudge" at twelve pixels in a column of forty rows.
+   *   Drawn instead: a ringed dot is a star, a filled disc is a planet, a
+   *   little one is a moon, a barred square is a station, a triangle on
+   *   a line is a pad on a world. You can tell them apart without
+   *   reading them.
+   *
+   *   THE COLOUR says WHOSE it is, and only for hulls. Grey is a hull
+   *   with no opinion of you, green is one whose flag thinks well of
+   *   you, red is one that would shoot, and white is one you cannot
+   *   read: no flag, or running dark. That last one is the point of
+   *   having it - white should be rare, and when it turns up it should
+   *   be a question.
+   *
+   * Places keep their faction's colour, because whose dock it is matters
+   * more than whether they like you today.
+   */
+  var TRACK = {
+    hostile:  '#ff5a5a',
+    friendly: '#7dffb0',
+    /* Brighter than the game's disabled grey (#6a7d92) on purpose: a hull
+     * with no opinion of you is not an unavailable one. */
+    neutral:  '#aebecb',
+    unknown:  '#e8f0f4'
+  };
+  /* Where the ordinary standing words change (Missions.standingLabel, and
+   * combat.js's HUSH_FROM_STANDING). Warm is friendly; the hostile band is
+   * the one the law already shoots over. */
+  var TRACK_WARM = 10, TRACK_COLD = -40;
+
+  /* The flag a hull actually answers to. A Syndicate runner sails from
+   * somebody's port under somebody else's orders, and its transponder
+   * says the second one - which is what the board you open next will say
+   * too (generate.js buildRunners). */
+  function trackFaction(s) {
+    if (!s) return null;
+    if (s.route && s.route.runner) return s.route.flag || null;
+    if (s.faction) return s.faction;
+    /* HER HOME BERTH'S FLAG. Ordinary traffic carries no faction of its
+     * own - only the patrols do - so a freighter is of the flag over the
+     * dock she sails from, which is what the port list, the customs
+     * officer and the raid news all already assume. Without this, white
+     * meant "a trader", which is the opposite of rare: measured at 159
+     * of 166 hulls in one system. Origin first, then the far end, since
+     * a ship on her return leg has them the other way round. */
+    var r = s.route, by = G && G.sys && G.sys.byId;
+    if (!r || !by) return null;
+    var a = r.from && by[r.from], b = r.to && by[r.to];
+    return (a && a.faction) || (b && b.faction) || null;
+  }
+
+  function trackInk(e) {
+    if (!e) return TRACK.neutral;
+    var s = e.obj;
+    if (e.hostile || (s && s.hostile)) return TRACK.hostile;
+    /* RUNNING DARK, or flying no flag at all. Either way you have a
+     * contact and not an identity. */
+    if (s && s.silent) return TRACK.unknown;
+    var fid = trackFaction(s);
+    if (!fid) return TRACK.unknown;
+    var M = global.Missions;
+    var st = M && M.standing ? M.standing(G, fid) : 0;
+    if (st <= TRACK_COLD) return TRACK.hostile;
+    if (st >= TRACK_WARM) return TRACK.friendly;
+    return TRACK.neutral;
+  }
+
+  /* One mark, drawn rather than typed, in a 10 px box whose baseline is
+   * the row's. `ink` is the row's colour so the mark and the name agree. */
+  function markAt(ctx, x, y, e, ink) {
+    var cx = x + 4, cy = y - 4;
+    ctx.save();
+    ctx.fillStyle = ink;
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 1.4;
+    var kind = e && e.kind;
+    var obj = e && e.obj;
+    var bk = obj && obj.kind;
+
+    if (kind === 'ship') {
+      /* A chevron, pointing the way a hull points. */
+      ctx.beginPath();
+      ctx.moveTo(cx - 3, cy - 3.6);
+      ctx.lineTo(cx + 3.6, cy);
+      ctx.lineTo(cx - 3, cy + 3.6);
+      ctx.closePath();
+      ctx.fill();
+    } else if (kind === 'incident') {
+      /* A diamond: filled while somebody is still asking, hollow once it
+       * is over. */
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 4.2); ctx.lineTo(cx + 4.2, cy);
+      ctx.lineTo(cx, cy + 4.2); ctx.lineTo(cx - 4.2, cy);
+      ctx.closePath();
+      if (e.help) ctx.fill(); else ctx.stroke();
+    } else if (kind === 'contact') {
+      /* A ring with nothing in it - a bearing, not a thing. */
+      ctx.beginPath(); ctx.arc(cx, cy, 3.6, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, 0.9, 0, Math.PI * 2); ctx.fill();
+    } else if (kind === 'authority' || kind === 'comsat') {
+      /* A mast with two arcs coming off it: a frequency, not a place. */
+      ctx.beginPath(); ctx.moveTo(cx, cy + 4); ctx.lineTo(cx, cy - 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy - 2, 2.4, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy - 2, 4.4, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
+    } else if (kind === 'collector') {
+      ctx.beginPath(); ctx.arc(cx, cy, 4, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(cx, cy, 1.6, 0, Math.PI * 2); ctx.fill();
+    } else if (kind === 'crew') {
+      ctx.fillRect(cx - 3, cy - 3, 6, 6);
+    } else if (kind === 'distress') {
+      /* The one mark that is allowed to shout. */
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - 4.6); ctx.lineTo(cx + 4.2, cy + 3.4); ctx.lineTo(cx - 4.2, cy + 3.4);
+      ctx.closePath(); ctx.fill();
+    } else if (kind === 'station' || bk === 'station') {
+      /* A barred square. A station is a built thing and reads as one. */
+      if (obj && (obj.surface || obj.underground)) {
+        /* A pad on a world: a triangle standing on its ground line. */
+        ctx.beginPath();
+        ctx.moveTo(cx, cy - 4); ctx.lineTo(cx + 3.8, cy + 2.4); ctx.lineTo(cx - 3.8, cy + 2.4);
+        ctx.closePath(); ctx.fill();
+        ctx.beginPath(); ctx.moveTo(cx - 4.6, cy + 4); ctx.lineTo(cx + 4.6, cy + 4); ctx.stroke();
+      } else {
+        ctx.strokeRect(cx - 3.6, cy - 3.6, 7.2, 7.2);
+        ctx.beginPath(); ctx.moveTo(cx - 3.6, cy); ctx.lineTo(cx + 3.6, cy); ctx.stroke();
+      }
+    } else if (bk === 'star') {
+      /* A disc with a ring off it, which nothing else in the list has. */
+      ctx.beginPath(); ctx.arc(cx, cy, 2.6, 0, Math.PI * 2); ctx.fill();
+      ctx.beginPath(); ctx.arc(cx, cy, 4.6, 0, Math.PI * 2); ctx.stroke();
+    } else if (bk === 'planet') {
+      ctx.beginPath(); ctx.arc(cx, cy, 3.8, 0, Math.PI * 2); ctx.fill();
+    } else if (bk === 'moon') {
+      ctx.beginPath(); ctx.arc(cx, cy, 2.2, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.beginPath(); ctx.arc(cx, cy, 1.6, 0, Math.PI * 2); ctx.fill();
+    }
+    ctx.restore();
   }
 
   function commsContacts() {
@@ -903,17 +1058,15 @@
         ctx.fillStyle = 'rgba(255,211,107,0.18)';
         ctx.fillRect(pad + 6, yy - 13, listW - 12, rowH);
       }
-      ctx.fillStyle = c.color;
+      var cink = c.kind === 'ship' ? trackInk(c) : c.color;
+      ctx.fillStyle = cink;
       /* Plain ASCII, and specifically a character that IS on the keyboard
        * in front of the player. The first version used a section sign,
        * which is not on a US layout at all — so it read as an instruction
        * to press a key that does not exist rather than as a marker in a
        * list. A glyph in a legend has to be typeable even when nothing
        * asks you to type it. */
-      ctx.fillText(c.kind === 'authority' || c.kind === 'crew' ? '*'
-                 : c.kind === 'collector' ? '$'
-                 : c.kind === 'station' ? '#'
-                 : (c.hostile ? '!' : '>'), pad + 12, yy);
+      markAt(ctx, pad + 8, yy, c, cink);
       /* Clip the name to the room actually left over, not to a fixed
        * character count. Twenty-four characters is only the right answer at
        * one pane width and one distance format: "Pilgrim Runner" beside
@@ -927,7 +1080,7 @@
       var room = (pad + listW - 12 - distW - 10) - nameX;
       var maxChars = Math.max(4, Math.floor(room / chW));
 
-      ctx.fillStyle = idx === G.commsSel ? MFD_HOT : MFD_INK;
+      ctx.fillStyle = idx === G.commsSel ? MFD_HOT : (c.kind === 'ship' ? cink : MFD_INK);
       ctx.fillText(clipText(c.name, maxChars), nameX, yy);
       ctx.fillStyle = MFD_DIM;
       ctx.textAlign = 'right';
@@ -8720,7 +8873,7 @@
     bind: bind,
     draw: draw,
     scannerKey: scannerKey, scanMini: scanMini,
-    commsContacts: commsContacts,
+    commsContacts: commsContacts, trackInk: trackInk, markAt: markAt, TRACK: TRACK,
     systemManifest: systemManifest, worldFacts: worldFacts,
     btn: btn,
     tile: tile,
