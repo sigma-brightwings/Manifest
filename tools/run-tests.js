@@ -52,7 +52,8 @@ var GROUPS = {
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
     'test/magnetosphere.test.js', 'test/magnetometer.test.js',
-    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js'
+    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js',
+    'test/saveroundtrip.test.js'
   ],
   render: ['test/render.test.js'],
   view: [

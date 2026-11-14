@@ -272,12 +272,57 @@
     G.seenItems[id] = 1;
   }
 
+  /* EVERYTHING ABOARD, NOTED (2026-11-14). Astra's rule for what counts as
+   * having laid eyes on a thing: anything you have ever held.
+   *
+   * A SWEEP RATHER THAN A note() AT EACH ACQUISITION, deliberately. note()
+   * above was written, exported and documented when this file was built,
+   * and then called from precisely nowhere - the bug hunt found it with
+   * the record it fills still empty, and `owns` reading a map nothing ever
+   * wrote. A dozen scattered calls at every place a thing can reach your
+   * hold - bought, looted, salvaged, scooped, traded for, handed over,
+   * pulled off a wreck - is the shape that rots again the first time a
+   * thirteenth way is added and nobody remembers this list. One sweep over
+   * what you are holding catches all of them, and catches the ones nobody
+   * has written yet.
+   *
+   * Cheap on purpose: a hold and a fit are tens of entries, not thousands,
+   * and writing a 1 over a 1 costs nothing. */
+  function noteHeld(G) {
+    if (!G) return;
+    var s = G.ship, i, j;
+    if (s) {
+      if (s.hullId) note(G, s.hullId);
+      if (s.fittings) for (i = 0; i < s.fittings.length; i++) note(G, s.fittings[i]);
+      if (s.cargo) {
+        for (var cid in s.cargo) {
+          if (Object.prototype.hasOwnProperty.call(s.cargo, cid) && s.cargo[cid] > 0) note(G, cid);
+        }
+      }
+      /* A Crawler's bolted-down modules are things you own too. */
+      if (s.modules) for (i = 0; i < s.modules.length; i++) {
+        var md = s.modules[i];
+        note(G, md && md.id ? md.id : md);
+      }
+    }
+    /* A hull parked at a berth is still a hull you have owned. */
+    var F = G.fleet;
+    if (F && F.length) {
+      for (i = 0; i < F.length; i++) {
+        var f = F[i];
+        if (!f) continue;
+        if (f.hullId) note(G, f.hullId);
+        if (f.fittings) for (j = 0; j < f.fittings.length; j++) note(G, f.fittings[j]);
+      }
+    }
+  }
+
   var Catalogue = {
     GROUPS: GROUPS, EQ_GROUP: EQ_GROUP,
     equipment: equipment, stores: stores, hulls: hulls, goods: goods,
     modules: modules, all: all, groups: groups, find: find, count: count,
     loreGroups: loreGroups, pageCount: pageCount,
-    note: note, owns: owns
+    note: note, noteHeld: noteHeld, owns: owns
   };
   global.Catalogue = Catalogue;
   if (typeof module !== 'undefined' && module.exports) module.exports = Catalogue;

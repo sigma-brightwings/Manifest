@@ -21,7 +21,7 @@ climbed one rung at a time: survey, claim, cut, and eventually your own
 skimmers and stations. It is a desktop game (Electron), developed and tested
 on a modest machine (Syndicate Crawler, an RX 540) so it has to run on one.
 
-Releases have a number and a pigeon's name. Everything that changes the
+Releases have a number and a polytope's name. Everything that changes the
 game is entered below with its date, under **Unreleased** until it ships;
 when changes are grouped into a release commit, the section takes the
 version number.
@@ -35,6 +35,273 @@ that behave differently than they did), **Fixed** (things that were wrong),
 and **Saves** (whether an existing career survives). That last heading is
 not optional — a player who has flown a seed for a week deserves to know
 before they update.
+
+---
+
+## Unreleased
+
+## 1.5.1 "Icosidodecahedron" (2026-11-14)
+
+A repair release, and an unusually honest one: most of what is below
+was found by going looking for it rather than by anybody hitting it.
+Four faults in the game, four more in the suite that was supposed to
+be watching the game, and two in the wiki pictures that shipped last
+night. The name is the solid that is both of the last two at once,
+because this fixes things from both of them.
+
+### Fixed (2026-11-14, a promise the catalogue had never kept)
+
+- **`Catalogue.note()` WAS CALLED FROM NOWHERE.** It was written, exported
+  and documented when the catalogue was built, and its own comment makes a
+  promise - *"so an unlisted item he has owned and sold stays in his
+  reference"* - which had never once been kept, because nothing ever called
+  it. `owns()` read a `seenItems` map that nothing ever wrote. Found by
+  the bug hunt asking who calls it; the answer was nobody. (The same hunt
+  found that `seenItems` was not saved either, so even once filled it
+  would have emptied on reload - both halves are fixed.)
+- **What counts as having laid eyes on a thing**, Astra's rule: anything
+  you have ever held. So the record is now **swept from what is aboard** -
+  the fit, the hold, the hull she is flying, a Crawler's bolted-down
+  modules, and the hulls and fits of anything parked in the fleet - rather
+  than noted at each place a thing can arrive. That is deliberate: a dozen
+  calls at every route into your hold (bought, looted, salvaged, scooped,
+  traded for, pulled off a wreck) is exactly the shape that rotted the
+  first time, and it would rot again the first time a thirteenth route was
+  added and nobody remembered the list. A sweep catches all of them,
+  including the ones nobody has written yet.
+
+- **Saves:** additive. An existing career starts filling its reference from
+  what is aboard the moment it loads; nothing is lost, and nothing it had
+  before is changed.
+- **Tests:** `test/catalogue.test.js` grows to 34. The checks that matter
+  are that the sweep writes the fit, the hold, the hull and the fleet - and
+  then that **selling it all does not take any of it back out**, which is
+  the promise the comment made and the code never delivered.
+
+### Fixed (2026-11-14, the ports were lying on their sides)
+
+Astra, looking at the finished wiki page: *"the projection reads as tilted
+on its side - all of them do."* They were, and it was one line.
+
+- **EVERY PORT PORTRAIT WAS DRAWN A QUARTER TURN OVER.** `localToWorld`
+  multiplies a mesh vertex out as `right*x + up*y + fwd*z`, so the field
+  called `up` is **where the mesh's Y axis goes** - not the world's
+  vertical. That is the cockpit and hull convention, where models are built
+  y-up and z-forward, and `drawHullPortrait` and `drawItemPortrait` are
+  right to use it. A PortLib station is built **z-up**: `Sim.stationBasis`
+  hands the renderer `up: normal` for the orbit normal, and main.js places
+  a port with `fwd = basis.up`. `paintPortIso` had been given the hull
+  frame, read by its field names rather than its arithmetic, so every
+  station's Y went to world up and its Z went out sideways. The ring station
+  stood on its rim like a tyre; the ground ports came out as grey slabs seen
+  edge-on. A z-up model wants the identity, and the camera supplies the
+  vertical. **The live game was never affected** - that path had the mapping
+  right all along, which is also why this is not the docking wall-clipping.
+- **AND NOW GROUND PORTS SHOW WHAT THEY ARE.** Astra: *"for ground ports,
+  perhaps the projection should show the underground portion?"* A ground
+  port in this game is a shaft cut DOWN into rock, and measured across the
+  five patterns, **68-93% of one's vertices are below the ground line** -
+  hidden under a handful of very large plate triangles, at the one camera
+  angle that puts the plate between the eye and all the rest of it. The
+  portrait is sectioned now, the way a drawing of a building is: the
+  quadrant nearest the viewer is taken away, plate and shaft wall together,
+  top to bottom. Cutting only the lid would open a hole to look down while
+  the near wall still stood in front of everything inside. Cut before the
+  decimation, deliberately - a quarter fewer faces means the 14,000 budget
+  buys more detail, and spends it on the half nobody could see before.
+
+- **Saves:** unaffected. Pictures.
+- **Tests:** `test/lore.test.js` grows to 49. The new pair is deliberately
+  not just a restatement of the frame: one holds the frame to the identity,
+  and the other PROJECTS each ground port and insists a plate comes out
+  **wider than it is tall**, which is the thing anybody looking at the page
+  could see. Both were confirmed to fail against the old frame before being
+  kept - "Mountain works: 1.37 wide by 2.24 tall", a landing field standing
+  on its end. New tools: `tools/probe-portaxes.js`, `tools/probe-portdepth.js`,
+  `tools/probe-groundline.js`.
+
+### Fixed (2026-11-14, a bug hunt through everything new)
+
+A deliberate sweep of what has landed since the last hunt: `charts.js`,
+`lore.js`, `outside.js`, `catalogue.js`, the chart camera, the hull reprice
+and the thicker disc. Every finding below was **reproduced by a script before
+anything was changed**, and every one now has a test that fails without its
+fix. Two of them were quietly costing players something.
+
+- **FOUR PIECES OF A CAREER DID NOT SURVIVE A RELOAD.** `outside`, `adrift`
+  and `crewRep` were written into the save payload from the day the EVA work
+  landed and read back by nobody; `seenItems` was never written at all. The
+  comment sitting directly above the first three says what was supposed to
+  happen - *"a reload must not hand a dying hand a fresh candle - nor a
+  captain who left one a clean name"* - and the code did exactly that. In
+  practice: an engineer on the hull vanished on load, anybody adrift on a
+  beacon dropped out of the world along with their rescue, **a captain who
+  got somebody killed reloaded with a clean name**, and an item you had owned
+  and sold fell out of your reference. Found by `tools/audit-saves.cjs`,
+  which reads every `G.<field> =` in the source against what the slot stores
+  and what it restores.
+- **A JUMP STOPPED THE CLOCK ON SOMEBODY'S AIR.** The oxygen candle burns by
+  `dt`, so it only burns where something hands it a `dt`. A slipspace
+  transit does not advance the clock a frame at a time - it crosses the whole
+  interval in one assignment - and nothing handed that interval to
+  `Outside.step`. So anyone on the hull or adrift came out of a jump with
+  exactly the candle they went in with. Measured on kawartha in a Talon:
+  **643 of 660 real jumps - 97% - are longer than the twelve-hour candle**,
+  median 31.2 h. Stranding somebody and jumping away was therefore free,
+  which is the one outcome that module exists to prevent. A transit now burns
+  its own interval, with the pickup check suppressed because nobody is
+  collected out of a tunnel. The invariant, and the test: **equal intervals,
+  equal outcomes** - thirty hours is thirty hours however the clock got there.
+- **ONE BARREN ROCK COULD BUY A FACTION'S GOODWILL OUTRIGHT.** The frontier
+  nod fired on every successful publish while its cap counted per faction,
+  and a barren world costs nothing in Guild standing. So the cheapest
+  goodwill in the game was one rock surveyed a little at a time and sold over
+  and over: measured at **8,330 cr and 15 nods against 8,340 cr and 1** for
+  the same ground sold whole - the entire designed cap, for the price of one
+  sheet. The nod is recorded per world now, and that record is saved, so a
+  reload is not a way round it either. The credits were never the exploit:
+  the price is the difference of two curves, so slicing a sheet is worth what
+  selling it whole is worth, to within rounding.
+- **ONE TRADE-IN RATE, NAMED ONCE.** Three places computed the credit for
+  your old hull as `price * 0.7` beside a `TRADE_IN` constant that is 0.7.
+  Nothing was wrong today, but retuning it would have moved the large-hull
+  path and silently left the small and medium one behind - with the yard card
+  quoting one figure and the sale charging another.
+- **A TEST THAT GREPPED FOR A LINE.** The three reload checks in
+  `outside.test.js` read `save.js` as text and asserted only that each field
+  was *written*. All three passed for a day while `load()` read none of them
+  back. That is how the first fault above survived a green suite, and it is
+  worth saying plainly: a test that searches the source for a line cannot
+  tell you the line does anything.
+
+#### And then the suite itself, which turned out to be the worse half
+
+The hunt started in the new systems and ended in the thing that was
+supposed to be watching them. `test/render.test.js` **has not finished a run
+in some time, and did not finish one in the 1.5.0 release commit** - verified
+by running it against a clean worktree of HEAD, where it fails and dies
+identically with none of today's work in it.
+
+- **IT WAS RED, AND IT SHIPPED RED.** `a drag pans the chart` asserted the
+  gesture the chart had before 1.4.0 made the galaxy a solid you can turn.
+  Panning moved to shift-drag and right-drag then - the chart says so in its
+  own help line, and `chartPointer` decides which gesture it is at the press
+  and holds it for the whole drag, deliberately. The code was right and the
+  test was stale, so the test moved: a plain drag is checked to turn and not
+  pan, shift-drag to pan and not turn, and the pan is checked first, while
+  the chart is still square on, because once it is turned the direction a
+  pan moves the view in is a function of the yaw.
+- **AND IT DIED HALFWAY, TAKING 111 CHECKS WITH IT.** `openOptions()` opened
+  the pause menu and pressed ArrowDown exactly three times, Options being the
+  fourth row. `menuItems()` splices an extra row in at index 1 for a career
+  that has not chosen its ship yet, which moves Options to the fifth: three
+  downs opened Load game, `G.menu` was left on the wrong page, and the next
+  line threw on null. **Everything after that point in the file - a hundred
+  and eleven `check()` calls - has simply not been running.** It finds the
+  row rather than counting to it now, and returns whether it got there so a
+  caller fails a check instead of dying. A test that crashes takes every test
+  after it down in silence, which is the failure mode that hid all of this.
+- **AND ONCE IT RAN TO THE END, IT WAS PRINTING THIRTY STACK TRACES A RUN.**
+  The ground-port sweep installs a stand-in `GLWorld` that says yes to
+  everything and draws nothing - the right default, except that main.js draws
+  the weather over the outside view every frame and `weather.js` asks GLWorld
+  for the body's spin and then reads `sp.ax`. The stub answered `false`, so
+  `rotAbout` got an undefined axis and threw. The harness catches and prints
+  those rather than failing them, so the suite stayed green while its output
+  filled with stack traces - which is exactly where a real one would hide.
+  The real `spinOf` was already loaded in that block, so the stub uses it.
+  **Not a fault in the game**: with a real GLWorld the path is sound.
+
+`test/render.test.js` now runs to its end: **1,144 checks, all green, no
+throws.** The three faults above are each small; what they add up to is a
+suite that was reporting on about seven eighths of itself.
+
+**What the hunt cleared.** Determinism holds across all the new modules - no
+`Math.random`, no `Date.now`, every stream named and derived. An old
+pre-November career was run against every new module's entry points: 23
+survived, and the single throw was the probe calling a function that does not
+exist. Capital placement uses 2D distance in a disc that is now 18 thick,
+which looked like a bug and is not: capitals sit at **0.86x** the typical
+star's height off the plane, so they are no more on-plane than anything else
+is. And the hull reprice was swept for everything that derives a number from
+it - every consumer scales proportionally, as intended.
+
+- **Saves:** **improved, and no epoch bump.** All of this is additive. Saves
+  already on disk start restoring the four lost fields correctly the moment
+  you load them - nothing is discarded and no career is reset. A career that
+  published sheets before today carries no record of which worlds already
+  nodded, so each of them may extend somebody once more, bounded by the same
+  cap it was always bounded by.
+- **Tests:** a new `test/saveroundtrip.test.js` (33 checks) - `save.js` had
+  **no test of its own**, which is the root of how four fields went missing.
+  Its first test is deliberately not a list of those four: it walks the real
+  payload key by key and insists each one lands back on `G`, with two named
+  exemptions, so a field saved without a line to read it back fails the day
+  it is added. `test/outside.test.js` grows to 65 and `test/charts.test.js`
+  to 74, and `test/render.test.js` finishes for the first time in a
+  while at 1,144. New tools: `tools/audit-saves.cjs`,
+  `tools/probe-boot.js`.
+
+### Added (2026-11-14, the ports, drawn)
+
+- **EVERY PORT PATTERN HAS ITS PICTURE** on the wiki’s PORTS tab: a proper
+  isometric of the real model, turned 45° and looked down at 35.264°, the
+  angle where all three axes foreshorten alike. Fourteen patterns, each one
+  recognisable at a glance — the drum with its arms, the ring’s wheel, the
+  yard’s two rows of berths, a landing field with its cargo stacked on it.
+
+**IT STARTED AS A TURNING MODEL AND THAT WAS THE WRONG ANSWER.** An item icon
+turns in its card and nobody notices, because a gun is a few hundred
+triangles. A station is not: measured off the library, the shells run 9,143
+faces (a comet works) to 89,316 (a cradle station). Cut to 4,200 and painted
+every frame, one thumbnail measured **16 to 19 ms a frame** — the whole of a
+60 Hz budget, on the dev machine rather than on the Crawler this game is
+built for.
+
+Astra’s answer was better than tuning that number down: *"maybe just do an
+isometric projection of the ports?"* **A still is painted once into a canvas
+of its own and copied from then on** — the same trick the market rows
+already use — so the budget stops being a frame-rate question:
+
+- **0.00 ms a frame**, measured, against 16–19 before.
+- And because the cost is one-off, the budget went **4,200 — 14,000 faces**:
+  more than three times the detail for none of the running cost. At 2,600 a
+  shipyard came out as floating boxes, because a yard IS berth blocks on an
+  open frame and the frame is thin beams of small area — area-ranking cut
+  exactly the structure holding the picture together.
+- The one-off is 23–280 ms the first time a card is opened, nearly all of it
+  the geometry fetch that was already happening there.
+
+**And it is the right register for a reference page.** A reader comparing a
+ring against a spine wants them shot from the same angle; a still is the only
+way to promise that.
+
+### Fixed (2026-11-14, three things wrong with the first picture)
+
+- **Every station was framed off-centre, some barely on the card at all.** A
+  PortLib model is not built around its origin — a drum station’s sits 146
+  units off down z, because in the live world a port is placed by its dock
+  point rather than its middle. Pointing a portrait camera at the origin
+  therefore framed the empty space beside the station. The portrait mesh is
+  centred on its own bounding box when it is cut, and the suite checks all
+  fourteen sit on the origin.
+- **A shipyard came out a smudge in the middle of an empty card.** The camera
+  was placed against the bounding radius, and a yard’s extent is set by a few
+  long outrigger beams: framing to those frames mostly nothing. It is placed
+  against a **90th-percentile radius** now, so the body of the station decides
+  the shot and a handful of spars are allowed off the edge — which is what a
+  photographer would do with the same subject.
+- **Every station came out very nearly black.** The sun was written down as a
+  fixed vector and sat behind the subject. It is worked out from the camera’s
+  own angle now, the same relationship the item portraits use, so the page is
+  lit one way throughout.
+
+- **Saves:** unaffected. A picture.
+- **Tests:** `test/lore.test.js` grows to 46 checks — every pattern draws,
+  none exceeds the budget, all fourteen are centred, decimation keeps the
+  largest faces and re-indexes cleanly, `portraitReach` ignores the outermost
+  tenth, and the angles really are isometric. `tools/probe-portmodels.js`
+  photographs all fourteen in the running game and times the frame.
 
 ---
 

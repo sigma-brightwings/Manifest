@@ -362,18 +362,41 @@
   }
 
   /* A sheet of a world nobody holds extends whoever is nearest, so they
-   * notice. Capped, and only on the genuine frontier. */
-  function frontierNod(G, galaxy, star) {
+   * notice. Capped, only on the genuine frontier, and ONCE PER WORLD.
+   *
+   * THE FARM THIS CLOSES (2026-11-14). This used to fire on every
+   * successful publish, and the cap is per faction rather than per
+   * world, so the cheapest route to a faction's goodwill was one
+   * barren rock surveyed a little at a time and sold seventeen times:
+   * measured at 8330 cr and 15 nods against 8340 cr and 1 for the same
+   * ground sold whole. Fifteen editions of one sheet are not fifteen
+   * worlds extended, and the comment above always said so.
+   *
+   * `key` is the survey key of the world being published. Without one
+   * nothing is credited: a caller that cannot say WHICH world this is
+   * cannot be allowed to pay for it, and publish() always can. Losing
+   * the nod to a refactor is a quiet feature loss, which the suite
+   * catches; granting it per call was a quiet exploit, which it did
+   * not. Additive: a career that published before this has no record,
+   * so each of its worlds may extend somebody once more - bounded by
+   * the same cap it was always bounded by. */
+  function frontierNod(G, galaxy, star, key) {
     var M = global.Missions;
     if (!M || !M.bumpStanding || !galaxy || !star) return null;
     var ctl = (Gal && Gal.control) ? Gal.control(galaxy, star) : 1;
     if (ctl >= FRONTIER_CTL) return null;
     var fac = nearestPower(galaxy, star);
     if (!fac) return null;
-    G.carto = G.carto || { paid: 0, given: 0, frontier: {} };
+    G.carto = G.carto || { paid: 0, given: 0, frontier: {}, nodded: {} };
     G.carto.frontier = G.carto.frontier || {};
+    G.carto.nodded = G.carto.nodded || {};
+    /* The cap first, so a world is not spent against a faction that
+     * has nothing left to give. */
     var had = G.carto.frontier[fac.id] || 0;
     if (had >= FRONTIER_CAP) return { fac: fac, up: 0, capped: true };
+    if (!key) return { fac: fac, up: 0, capped: false, unkeyed: true };
+    if (G.carto.nodded[key]) return { fac: fac, up: 0, capped: false, already: true };
+    G.carto.nodded[key] = 1;
     G.carto.frontier[fac.id] = had + 1;
     M.bumpStanding(G, fac.id, 1);
     return { fac: fac, up: 1, capped: false };
@@ -403,7 +426,7 @@
 
     var up = cartoCredit(G, price);
     if (cost > 0 && M && M.bumpStanding) M.bumpStanding(G, 'guild', -cost);
-    var nod = frontierNod(G, galaxy, star);
+    var nod = frontierNod(G, galaxy, star, key);
 
     var res = {
       ok: true, price: price, guild: cost, carto: up,

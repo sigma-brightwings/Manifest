@@ -4366,8 +4366,13 @@ console.log('--- the chart zooms ---');
   var keydown = listeners.keydown[0];
   function press(k, shift) { keydown({ key: k, shiftKey: !!shift, preventDefault: function () {} }); }
   function each(name, ev) { (listeners[name] || []).forEach(function (fn) { fn(ev); }); }
-  function mouse(name, x, y) {
-    each(name, { clientX: x, clientY: y, button: 0, shiftKey: false, preventDefault: function () {} });
+  /* `mods` carries the shift key and the button, because the chart
+   * decides pan-or-turn from them at the press. */
+  function mouse(name, x, y, mods) {
+    each(name, { clientX: x, clientY: y,
+                 button: (mods && mods.button) || 0,
+                 shiftKey: !!(mods && mods.shiftKey),
+                 preventDefault: function () {} });
   }
   function wheelAt(x, y, dy) {
     listeners.wheel[0]({ clientX: x, clientY: y, deltaY: dy, preventDefault: function () {} });
@@ -4470,15 +4475,41 @@ console.log('--- the chart zooms ---');
           G.starMap.list[G.starMap.sel].to.name + ' vs ' + target.name);
   }
 
-  // ---- a drag pans and does not select
-  var sel0 = G.starMap.sel, gx0 = G.starMap.view.gx, gy0 = G.starMap.view.gy;
+  // ---- shift-drag pans, a plain drag TURNS, and neither selects
+  /* THE GESTURE MOVED AND THIS TEST DID NOT (fixed 2026-11-14). It
+   * asserted that a plain drag pans, which was true until 1.4.0 made
+   * the galaxy a solid you can turn. Panning became shift-drag or
+   * right-drag then - the chart says so in its own help line - and
+   * this went on checking the old gesture, so render.test.js was red
+   * through the 1.5.0 release commit. The pan is checked FIRST, while
+   * the chart is still square on, because once it is turned the
+   * direction a pan moves the view in is a function of the yaw. */
+  var sel0 = G.starMap.sel;
+  var gx0 = G.starMap.view.gx, gy0 = G.starMap.view.gy;
+  var yaw0 = G.starMap.view.yaw || 0;
+  mouse('mousedown', plot.cx, plot.cy, { shiftKey: true });
+  mouse('mousemove', plot.cx + 30, plot.cy + 10, { shiftKey: true });
+  mouse('mousemove', plot.cx + 80, plot.cy + 30, { shiftKey: true });
+  mouse('mouseup', plot.cx + 80, plot.cy + 30, { shiftKey: true });
+  frames(1);
+  check('shift-drag pans the chart',
+        G.starMap.view.gx < gx0 && G.starMap.view.gy > gy0);
+  check('and a pan does not turn it', (G.starMap.view.yaw || 0) === yaw0,
+        'yaw still ' + yaw0.toFixed(3));
+  check('and does not change the selection', G.starMap.sel === sel0);
+
+  var gx1 = G.starMap.view.gx, gy1 = G.starMap.view.gy;
   mouse('mousedown', plot.cx, plot.cy);
   mouse('mousemove', plot.cx + 30, plot.cy + 10);
   mouse('mousemove', plot.cx + 80, plot.cy + 30);
   mouse('mouseup', plot.cx + 80, plot.cy + 30);
   frames(1);
-  check('a drag pans the chart', G.starMap.view.gx < gx0 && G.starMap.view.gy > gy0);
-  check('and does not change the selection', G.starMap.sel === sel0);
+  check('a plain drag turns the chart instead',
+        (G.starMap.view.yaw || 0) !== yaw0,
+        'yaw ' + yaw0.toFixed(3) + ' -> ' + (G.starMap.view.yaw || 0).toFixed(3));
+  check('and a turn does not pan it',
+        G.starMap.view.gx === gx1 && G.starMap.view.gy === gy1);
+  check('and does not change the selection either', G.starMap.sel === sel0);
 
   // ---- the edge arrow, the keys, and C / Shift+C
   G.starMap.sel = G.starMap.list.length - 1;   // the farthest star there is
@@ -7097,17 +7128,38 @@ console.log('--- options ---');
                             * when the two lines were merged: row 9. */
                            G.cutawayStyle]);
   }
+  /* THE PAUSE MENU IS NOT A FIXED LIST (fixed 2026-11-14). This used to
+   * press Escape and exactly three ArrowDowns, Options being the fourth
+   * row. menuItems() splices an extra row in at index 1 for a career
+   * that has not chosen its ship yet, which moves Options to the fifth:
+   * three downs then opened Load game, G.menu was left on the wrong
+   * page, and the next line threw on null - taking the 111 checks after
+   * it in this file down with it, in silence, including through the
+   * 1.5.0 release. Opening each row in turn finds Options wherever it
+   * is, and stops before Quit either way, because Options is always
+   * above it. Returns whether it got there, so the caller can fail a
+   * check rather than die. */
   function openOptions() {
-    if (G.menu && G.menu.page === 'options') return;
-    G.menu = null; G.showHelp = false;
-    press('Escape');
-    press('ArrowDown'); press('ArrowDown'); press('ArrowDown');
-    press('Enter');
+    if (G.menu && G.menu.page === 'options') return true;
+    for (var oi = 0; oi < 8; oi++) {
+      G.menu = null; G.showHelp = false;
+      press('Escape');
+      if (!G.menu || G.menu.page !== 'main') continue;
+      G.menu.sel = oi;
+      press('Enter');
+      if (G.menu && G.menu.page === 'options') return true;
+      /* Quit to the title is the one row that would end the career: if
+       * a press lands there, stop rather than walk off the end. */
+      if (G.title) break;
+    }
+    return !!(G.menu && G.menu.page === 'options');
   }
   var stuck = [], where = null;
-  for (var i = 0; i < 20; i++) {
+  check('the options page opens from the pause menu', openOptions(),
+        'without this the rest of this file never runs');
+  for (var i = 0; i < 20 && G.menu; i++) {
     if (!G.menu || G.menu.page !== 'options') {
-      openOptions();
+      if (!openOptions()) break;
       if (where !== null) G.menu.sel = where;    // carry on from where we were
     }
     press('ArrowDown');
@@ -7829,7 +7881,19 @@ console.log('--- the ground under a ground port (2026-11-02) ---');
                      f: [[0, 1, 2], [0, 2, 3], [4, 5, 6], [4, 6, 7], [0, 1, 5], [0, 5, 4], [1, 2, 6], [1, 6, 5],
                          [2, 3, 7], [2, 7, 6], [3, 0, 4], [3, 4, 7]] };
   var FOOT_TOWER = { v: FOOT_BLOCK.v.map(function (p) { return [p[0], p[1], p[2] * 10]; }), f: FOOT_BLOCK.f };
+  /* SAYING YES TO EVERYTHING IS NOT ENOUGH FOR spinOf (2026-11-14). The
+   * stand-in answers every call it does not know with `false`, which is
+   * the right default for "draws nothing". But main.js draws the weather
+   * over the outside view each frame, and weather.js asks GLWorld for the
+   * body's spin and then reads `sp.ax` - so `false` handed rotAbout an
+   * undefined axis and threw, thirty times a run, from the ground-port
+   * sweep below. The harness catches and prints those rather than failing
+   * them, so the suite stayed green while its output filled with stack
+   * traces, which is exactly where a real one would hide. Invisible until
+   * the openOptions fix let this file reach its end at all. The real
+   * spinOf is right there in GLreal, so use it. */
   W.GLWorld = new Proxy({ available: true, skyOver: GLreal.skyOver,
+    spinOf: GLreal.spinOf,
     setSurfaceHole: function (b, p, r, d) { holes.push(d || 0); },
     /* The keyhole main.js hands the meshes (stationCutShader), so the
      * street's burnt edge is held to the cut actually drawn. */

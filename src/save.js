@@ -292,6 +292,15 @@
       outside: G.outside || null,
       adrift: G.adrift || [],
       crewRep: G.crewRep || 0,
+      /* WHAT HE HAS LAID EYES ON (catalogue.js, fixed 2026-11-14).
+       * Catalogue.note makes a promise in its own comment - that an
+       * item a captain has owned and sold stays in his reference - and
+       * this was the one record that never reached the slot, so every
+       * reload quietly shortened his library back to what was aboard.
+       * Additive: an older save carries none, which restores as a
+       * reference holding only what is in the racks today, which is
+       * exactly what that career had before this line existed. */
+      seenItems: G.seenItems || {},
       /* WHAT YOU HAVE SOLD, AND TO WHOM (intel.js). The risk model is
        * entirely a function of this, so a reload must not launder it. */
       intel: G.intel || {},
@@ -691,11 +700,64 @@
     if (data.intel) for (var ik in data.intel) {
       if (Object.prototype.hasOwnProperty.call(data.intel, ik)) G.intel[ik] = data.intel[ik];
     }
-    G.carto = (data.carto && typeof data.carto === 'object')
-      ? { paid: data.carto.paid || 0, given: data.carto.given || 0,
-          frontier: (data.carto.frontier && typeof data.carto.frontier === 'object')
-            ? data.carto.frontier : {} }
-      : { paid: 0, given: 0, frontier: {} };
+    /* `nodded` is which worlds have already extended somebody
+     * (charts.js). It has to come back, or a reload is a way round the
+     * one-nod-per-world rule and the farm is open again. Both maps are
+     * copied rather than aliased, for the reason given below. */
+    G.carto = { paid: 0, given: 0, frontier: {}, nodded: {} };
+    if (data.carto && typeof data.carto === 'object') {
+      G.carto.paid = data.carto.paid || 0;
+      G.carto.given = data.carto.given || 0;
+      var cFr = data.carto.frontier;
+      if (cFr && typeof cFr === 'object') {
+        for (var cfk in cFr) {
+          if (Object.prototype.hasOwnProperty.call(cFr, cfk)) G.carto.frontier[cfk] = cFr[cfk];
+        }
+      }
+      var cNd = data.carto.nodded;
+      if (cNd && typeof cNd === 'object') {
+        for (var cnk in cNd) {
+          if (Object.prototype.hasOwnProperty.call(cNd, cnk)) G.carto.nodded[cnk] = 1;
+        }
+      }
+    }
+    /* THE THREE THAT WERE WRITTEN AND NEVER READ (fixed 2026-11-14).
+     * These went into the payload from the day outside.js landed and
+     * came back out of it nowhere, so a reload did precisely what the
+     * comment beside them forbids: it handed a dying hand a fresh
+     * candle, dropped anybody adrift on a beacon out of the world, and
+     * washed a captain's name clean of what hands had heard. The
+     * standing bounds come off the live table rather than a second
+     * copy of the numbers. */
+    /* Copied field by field rather than aliased: snapshot() hands out the
+     * live object, so a restore that kept the reference would leave two
+     * careers sharing one hand on the hull. Through a real slot the JSON
+     * round-trip hides that; in memory it does not. */
+    function flatCopy(o) {
+      var c = {};
+      for (var fk in o) {
+        if (Object.prototype.hasOwnProperty.call(o, fk)) c[fk] = o[fk];
+      }
+      return c;
+    }
+    G.outside = (data.outside && typeof data.outside === 'object')
+      ? flatCopy(data.outside) : null;
+    G.adrift = [];
+    if (Array.isArray(data.adrift)) {
+      for (var adI = 0; adI < data.adrift.length; adI++) {
+        var adR = data.adrift[adI];
+        if (adR && typeof adR === 'object') G.adrift.push(flatCopy(adR));
+      }
+    }
+    var oTab = global.Outside;
+    var repLo = (oTab && typeof oTab.REP_MIN === 'number') ? oTab.REP_MIN : -60;
+    var repHi = (oTab && typeof oTab.REP_MAX === 'number') ? oTab.REP_MAX : 20;
+    G.crewRep = (typeof data.crewRep === 'number')
+      ? Math.max(repLo, Math.min(repHi, data.crewRep)) : 0;
+    G.seenItems = {};
+    if (data.seenItems) for (var sik in data.seenItems) {
+      if (Object.prototype.hasOwnProperty.call(data.seenItems, sik)) G.seenItems[sik] = 1;
+    }
     G.patron = {};
     if (data.patron) for (var pk in data.patron) {
       if (Object.prototype.hasOwnProperty.call(data.patron, pk)) G.patron[pk] = data.patron[pk];

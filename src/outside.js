@@ -154,7 +154,12 @@
   /* ---- the thing that strands them ------------------------------------- */
   /* Called every frame from the sim. Any thrust at all, with somebody out
    * and off the line, and they are behind you. */
-  function step(G, dt, hooks) {
+  /* `opts.noPickup` suppresses the collection check at the end. A
+   * slipspace transit hands its whole interval to this function at
+   * once (main.js, at the tunnel swap) and nobody is taken aboard out
+   * of a tunnel - but their air still runs, which is the whole point
+   * of being handed the interval at all. */
+  function step(G, dt, hooks, opts) {
     var o = current(G);
     var s = G && G.ship;
     if (o && s) {
@@ -190,7 +195,8 @@
      * button, because at the moment you are finally alongside somebody you
      * nearly killed, hunting for a control is the wrong thing to be doing.
      * Only with the engine cold - you do not collect a person at speed. */
-    if (!G.paused && G.ship && !G.ship.docked && !G.ship.landed) {
+    if (!(opts && opts.noPickup) &&
+        !G.paused && G.ship && !G.ship.docked && !G.ship.landed) {
       var Vp = global.V;
       var moving = Vp && G.ship.thrust ? Vp.len(G.ship.thrust) : 0;
       if (moving <= BURN_EPS) {

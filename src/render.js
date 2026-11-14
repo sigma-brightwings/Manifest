@@ -14779,6 +14779,361 @@
    * good_<commodity>, mod_<station module>. `hull` asks for a gun's lighter
    * copy, the one hung on ships. */
   var ITEM_MESH = {};
+  /* ---- A PORT, TURNING IN THE WIKI'S CARD (2026-11-14) -------------------
+   *
+   * Astra asked for the fourteen port patterns to be "demonstrated". The
+   * berth plans were the first answer and she scrapped them; this is the
+   * other half, the one she kept: the model itself, turning.
+   *
+   * IT CANNOT BE DRAWN THE WAY AN ITEM IS. A gun is a few hundred
+   * triangles and drawItemPortrait repaints it every frame without
+   * anybody noticing. A station is not: measured off the real library,
+   * the shells run 9,143 faces (a comet works) to 54,868 (a gas skimmer),
+   * with a shipyard at 39,058. Repainting fifty thousand triangles sixty
+   * times a second for a picture the size of a postcard would cost more
+   * than the entire rest of the screen, and the machine this game is
+   * built to run on is a Crawler with an RX 540.
+   *
+   * So the portrait gets a DECIMATED COPY, cut once and kept:
+   *
+   *   - faces are ranked by area and the largest PORTRAIT_FACES kept. Area
+   *     rather than a proper simplification because what a thumbnail needs
+   *     is the SILHOUETTE and the big flat panels that carry the light;
+   *     the greebles that make up most of a station's face count are
+   *     invisible at this size and are exactly what should go first.
+   *   - vertices are re-indexed down to the ones the survivors use, so the
+   *     camera transform walks a short list rather than the original's
+   *     tens of thousands.
+   *
+   * It is a picture, not a model: nothing flies this mesh, nothing docks
+   * at it, and collision never sees it. The only thing it has to be is
+   * recognisably the station.
+   *
+   * THE FIRST LOOK COSTS. PortLib is an index until somebody asks for the
+   * triangles (libPort's lazy path), and that fetch measured 43 ms for a
+   * comet works and 839 ms for a drum station. It happens once per pattern
+   * per session, on the frame the card is first shown, and the caller is
+   * told to draw something else until it is ready rather than being made
+   * to wait. */
+  /* THE BUDGET IS LARGE BECAUSE THE PICTURE IS DRAWN ONCE.
+   *
+   * The first cut of this turned the model in the card the way an item
+   * icon turns, and measured 16 to 19 ms a frame at 4,200 faces - the
+   * whole of a 60 Hz budget, for one thumbnail, on the dev machine rather
+   * than on the Crawler the game is built for. Astra's answer was better
+   * than tuning that down: "maybe just do an isometric projection of the
+   * ports?"
+   *
+   * A still costs nothing per frame. It is painted once into a canvas of
+   * its own and copied from then on, the same trick drawItemIcon uses for
+   * market rows - so the budget stops being a frame-rate question and
+   * becomes a one-off cost paid the first time a card is opened, beside
+   * the geometry fetch that is already happening there.
+   *
+   * 2,600 was the per-frame budget and a shipyard came out as floating
+   * boxes: a yard IS berth blocks on an open frame, and the frame is thin
+   * beams of small area, so area-ranking cut the structure holding the
+   * picture together. 14,000 keeps the beams, the handrails and the
+   * greebles that make a station look built, and still caps the one-off
+   * paint on the heaviest pattern in the library. */
+  var PORTRAIT_FACES = 14000;        // triangles kept for a one-off still
+
+  /* Settable so the budget can be chosen against a MEASUREMENT rather than
+   * a guess: tools/probe-portcost.js sweeps it on the real machine through
+   * the real drawing path, which is the only way to know what a thumbnail
+   * costs. Clears the cut meshes, so the next draw re-cuts at the new
+   * budget. Not called by the game. */
+  function setPortraitBudget(n) {
+    if (!(n > 16)) return PORTRAIT_FACES;
+    PORTRAIT_FACES = Math.round(n);
+    PORT_PORTRAIT = {};
+    PORT_ISO = {};
+    return PORTRAIT_FACES;
+  }
+  /* HOW MUCH OF THE CARD THE STATION FILLS, as a multiple of the portrait
+   * reach. Under the old turning camera this was a DISTANCE and 2.9 was
+   * about right; once the shot became an isometric with a narrowed field
+   * it became the frame's half-width, and the same number left every
+   * station sitting at a third of the card with black all round it. 1.35
+   * was a snug fit and clipped a drum station’s outer arm and the right
+   * edge of a landing field; 1.62 leaves room for the spars that
+   * portraitReach deliberately ignores. */
+  var PORT_FILL = 1.62;              // frame half-width, in portrait reaches
+  var PORT_REACH_PCT = 0.90;         // ignore the outermost tenth of the hull
+
+  /* WHERE THE STATION ACTUALLY IS, as opposed to how far its furthest
+   * spar reaches. meshReach takes the bounding box, which is the right
+   * answer for a gun and the wrong one for a structure with booms: one
+   * 200-metre beam off a 60-metre body triples the radius and the picture
+   * becomes a dot in the middle of a card.
+   *
+   * Vertices sorted by distance from the centre, the 90th percentile
+   * taken. The outermost tenth is allowed off the edge, which is what a
+   * photographer would do with the same subject. */
+  function portraitReach(mesh) {
+    if (!mesh || !mesh.v || !mesh.v.length) return 0.5;
+    var d = [];
+    for (var i = 0; i < mesh.v.length; i++) {
+      var v = mesh.v[i];
+      d.push(Math.sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]));
+    }
+    d.sort(function (a, b) { return a - b; });
+    var at = Math.min(d.length - 1, Math.max(0, Math.round((d.length - 1) * PORT_REACH_PCT)));
+    return Math.max(1e-6, d[at]);
+  }
+  var PORT_PORTRAIT = {};
+
+  function triArea(a, b, c) {
+    var ux = b[0] - a[0], uy = b[1] - a[1], uz = b[2] - a[2];
+    var vx = c[0] - a[0], vy = c[1] - a[1], vz = c[2] - a[2];
+    var cx = uy * vz - uz * vy, cy = uz * vx - ux * vz, cz = ux * vy - uy * vx;
+    return Math.sqrt(cx * cx + cy * cy + cz * cz) * 0.5;
+  }
+
+  /* The biggest PORTRAIT_FACES triangles of a mesh, re-indexed. */
+  function decimateMesh(mesh, budget) {
+    if (!mesh || !mesh.f || !mesh.f.length) return null;
+    if (mesh.f.length <= budget) return mesh;
+    var order = [];
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i];
+      order.push([triArea(mesh.v[f[0]], mesh.v[f[1]], mesh.v[f[2]]), i]);
+    }
+    order.sort(function (a, b) { return b[0] - a[0]; });
+    var keep = order.slice(0, budget);
+    /* Back into drawing order, so the painter's sort has the same work it
+     * would have had: a shuffled face list paints the same picture but
+     * costs the sort more. */
+    keep.sort(function (a, b) { return a[1] - b[1]; });
+    var vmap = {}, v = [], fo = [], co = [];
+    for (var k = 0; k < keep.length; k++) {
+      var src = mesh.f[keep[k][1]], tri = [];
+      for (var j = 0; j < 3; j++) {
+        var vi = src[j];
+        if (vmap[vi] === undefined) { vmap[vi] = v.length; v.push(mesh.v[vi]); }
+        tri.push(vmap[vi]);
+      }
+      fo.push(tri);
+      co.push(mesh.c ? mesh.c[keep[k][1]] : '#8fa3ac');
+    }
+    return { v: v, f: fo, c: co };
+  }
+
+  /* GROUND PORTS ARE SHAFTS, AND A LID IS NOT A PORTRAIT (2026-11-14).
+   *
+   * Astra: "for ground ports, perhaps the projection should show the
+   * underground portion?" She is right, and the measurement is worse
+   * than the hunch: across the five -site patterns, 68-93% of a ground
+   * port's vertices are BELOW the ground line. Only 13-17% are at or
+   * above it - but those few are the plate, a handful of enormous
+   * triangles, and the isometric looks down at 35 degrees, which is
+   * precisely the angle that puts the plate between the eye and all the
+   * rest of it. "Landing pads" came out a flat grey slab.
+   *
+   * So the portrait is sectioned, the way a drawing of a building is.
+   * The eye sits over the +x +y +z corner - camDir at ISO_YAW and
+   * ISO_PITCH is (1,1,1)/sqrt(3), a true isometric - so the quadrant
+   * nearest the viewer is the one to take away. Top to bottom, plate
+   * and shaft wall together: cutting only the lid would open a hole to
+   * look down, and the near wall would still stand in front of
+   * everything inside. A quarter off is what lets you see INTO it.
+   *
+   * Cut before the decimation on purpose. A quarter fewer faces means
+   * the 14,000 budget buys more detail on what is left, and what is
+   * left is the half of the model nobody could see before. */
+  var SECTION_ROLE = /-site(?:-(?:navy|syn))?-[sml]$/;
+  function sectionQuarter(mesh) {
+    if (!mesh || !mesh.v || !mesh.v.length || !mesh.f.length) return mesh;
+    var loX = Infinity, hiX = -Infinity, loY = Infinity, hiY = -Infinity, i;
+    for (i = 0; i < mesh.v.length; i++) {
+      var p = mesh.v[i];
+      if (p[0] < loX) loX = p[0];
+      if (p[0] > hiX) hiX = p[0];
+      if (p[1] < loY) loY = p[1];
+      if (p[1] > hiY) hiY = p[1];
+    }
+    var cx = (loX + hiX) / 2, cy = (loY + hiY) / 2;
+    var f = [], c = [];
+    for (i = 0; i < mesh.f.length; i++) {
+      var t = mesh.f[i];
+      var a = mesh.v[t[0]], b = mesh.v[t[1]], d = mesh.v[t[2]];
+      /* By the centroid: a face straddling the cut is kept or dropped
+       * whole rather than split, which would mean re-triangulating for
+       * a difference of a pixel at this size. */
+      if ((a[0] + b[0] + d[0]) / 3 > cx && (a[1] + b[1] + d[1]) / 3 > cy) continue;
+      f.push(t);
+      c.push(mesh.c ? mesh.c[i] : '#8fa3ac');
+    }
+    /* If the cut would take nearly everything, it has misread the
+     * model - keep the whole thing rather than print a sliver. */
+    if (f.length < mesh.f.length * 0.15) return mesh;
+    return { v: mesh.v, f: f, c: c };
+  }
+
+  /* The picture of a port, cut once. Null while the geometry is still an
+   * index - the caller draws something else and tries again next frame. */
+  function portPortraitMesh(role) {
+    if (!role) return null;
+    if (PORT_PORTRAIT[role] !== undefined) return PORT_PORTRAIT[role];
+    var lib = libPort(role);
+    if (!lib) return null;                       // lazy fetch not in yet
+    /* The shell, plus the parts that were lifted OUT of it for the live
+     * world and would leave a hole in a picture: a ground site's city, and
+     * anything that spins. Movers (lift cars, bore arms) are left out -
+     * they are furniture, and at this size they are two pixels. */
+    var parts = [lib.shell, lib.city, lib.spin].filter(function (m) {
+      return m && m.f && m.f.length;
+    });
+    if (!parts.length) { PORT_PORTRAIT[role] = null; return null; }
+    var merged = parts.length === 1 ? parts[0] : (function () {
+      var v = [], f = [], c = [];
+      parts.forEach(function (m) {
+        var base = v.length;
+        for (var i = 0; i < m.v.length; i++) v.push(m.v[i]);
+        for (var j = 0; j < m.f.length; j++) {
+          f.push([m.f[j][0] + base, m.f[j][1] + base, m.f[j][2] + base]);
+          c.push(m.c ? m.c[j] : '#8fa3ac');
+        }
+      });
+      return { v: v, f: f, c: c };
+    })();
+    if (SECTION_ROLE.test(role)) merged = sectionQuarter(merged);
+    var out = decimateMesh(merged, PORTRAIT_FACES);
+    /* CENTRE IT. A PortLib model is NOT built around its origin - a drum
+     * station's sits 146 units off down z, because in the live world a
+     * port is placed by its dock point rather than its middle. Pointing a
+     * portrait camera at the origin therefore framed empty space beside
+     * the station, which is exactly what the first draw did: a sliver of
+     * landing pad at the edge of the card and nothing in the middle.
+     *
+     * Moved once here rather than every frame in the camera, because the
+     * portrait mesh is cut once and then only ever looked at. */
+    if (out && out.v.length) {
+      var lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+      for (var vi = 0; vi < out.v.length; vi++) {
+        for (var a = 0; a < 3; a++) {
+          var q = out.v[vi][a];
+          if (q < lo[a]) lo[a] = q;
+          if (q > hi[a]) hi[a] = q;
+        }
+      }
+      var mid = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+      var cv = [];
+      for (var vj = 0; vj < out.v.length; vj++) {
+        cv.push([out.v[vj][0] - mid[0], out.v[vj][1] - mid[1], out.v[vj][2] - mid[2]]);
+      }
+      out = { v: cv, f: out.f, c: out.c };
+    }
+    PORT_PORTRAIT[role] = out || null;
+    return PORT_PORTRAIT[role];
+  }
+
+  /* ---- THE ISOMETRIC STILL ----------------------------------------------
+   *
+   * The classic three-quarter engineering view: turned 45 degrees and
+   * looked down at atan(1/sqrt(2)), which is 35.26 degrees and the angle
+   * at which all three axes foreshorten equally. A true isometric wants an
+   * orthographic camera and this one is perspective, so the camera is set
+   * a long way back with the model small in front of it - far enough that
+   * the convergence is under a pixel across the card, which is isometric
+   * for every purpose a reader has.
+   *
+   * It is a drawing rather than a photograph, which is the right register
+   * for a reference page: a reader comparing a ring station against a
+   * spine wants them shot from the same angle, and a still is the only way
+   * to promise that. */
+  var ISO_YAW = Math.PI / 4;                     // 45 degrees
+  var ISO_PITCH = Math.atan(1 / Math.SQRT2);     // 35.264 degrees
+  var ISO_FLATTEN = 14;                          // how far back, in reaches
+  var PORT_ISO = {};
+
+  /* The identity, named and exported so the suite can hold it to the one
+   * thing it has to be. See the note in paintPortIso: `up` is where the
+   * MESH'S Y goes, and a PortLib station is built z-up, so anything but
+   * the identity lays it on its side. */
+  var PORT_ISO_FRAME = {
+    pos: { x: 0, y: 0, z: 0 },
+    right: { x: 1, y: 0, z: 0 },
+    up: { x: 0, y: 1, z: 0 },
+    fwd: { x: 0, y: 0, z: 1 }
+  };
+
+  function paintPortIso(ctx, mesh, size) {
+    var cam = new Camera();
+    cam.target = V.zero();
+    cam.yaw = ISO_YAW;
+    cam.pitch = ISO_PITCH;
+    /* Far back to flatten the perspective, and the field narrowed to match
+     * so the model still fills the card. */
+    var reach = portraitReach(mesh);
+    cam.dist = reach * ISO_FLATTEN;
+    cam.fov = 2 * Math.atan((reach * PORT_FILL) / cam.dist);
+    cam.near = cam.dist * 1e-3;
+    cam.build(size, size);
+    /* LIT FROM OVER THE VIEWER'S SHOULDER, worked out from the camera's
+     * own yaw rather than written down as a fixed vector. The first cut
+     * used a constant direction and put the sun BEHIND the subject: every
+     * station came out very nearly black, which at a glance reads as a
+     * broken renderer rather than as a dark station.
+     *
+     * Same relationship drawItemPortrait uses - a little to one side of
+     * the viewer, well above - which is the lighting the rest of the page
+     * is already drawn in. */
+    var sunDir = V.norm({ x: Math.cos(ISO_YAW + 0.9), y: Math.sin(ISO_YAW + 0.9), z: 0.65 });
+    /* THE IDENTITY, AND A STATION NEEDS IT TO BE (2026-11-14). Astra,
+     * looking at the finished page: "the projection reads as tilted on its
+     * side - all of them do." It did, and this frame was why.
+     *
+     * localToWorld multiplies a mesh vertex out as
+     *     right * x  +  up * y  +  fwd * z
+     * so `up` is NOT the world's up. It is where the mesh's Y AXIS goes.
+     * That is the cockpit and hull convention, where a model is built y-up
+     * and z-forward, and drawHullPortrait and drawItemPortrait are right to
+     * use it - their models are built that way.
+     *
+     * A PortLib station is not. It is built Z-UP: Sim.stationBasis hands
+     * the renderer `up: normal` for the orbit normal, and the ground ports
+     * measure as plates thin in z (0.30 to 0.47 against 2.00 across). The
+     * first cut of this function copied the hull frame and read the field
+     * NAME rather than the arithmetic, so the mesh's y went to world up and
+     * its z went out sideways: every station in the catalogue drawn a
+     * quarter turn onto its side, which is exactly what it looked like.
+     *
+     * A z-up model wants the identity. The camera supplies the vertical. */
+    paintMesh(ctx, cam, PORT_ISO_FRAME, mesh, 1, sunDir, '#9aa6b4');
+  }
+
+  /* Same shape as drawItemPortrait, and false means "I could not, draw
+   * your own thing" rather than throwing or painting an empty box. The
+   * spin argument is ignored: these do not turn, deliberately. */
+  function drawPortPortrait(ctx, x, y, size, role, spin) {
+    if (!(size > 8)) return false;
+    var mesh = portPortraitMesh(role);
+    if (!mesh || !mesh.f.length) return false;
+    var doc = global.document;
+    var key = role + '|' + Math.round(size);
+    /* Without a DOM - the tests - there is nowhere to cache, so it paints
+     * straight through. Correct either way, just not free in that case. */
+    if (!doc || !doc.createElement) {
+      ctx.save();
+      ctx.beginPath(); ctx.rect(x, y, size, size); ctx.clip();
+      ctx.translate(x, y);
+      paintPortIso(ctx, mesh, size);
+      ctx.restore();
+      return true;
+    }
+    var cv = PORT_ISO[key];
+    if (!cv) {
+      cv = doc.createElement('canvas');
+      cv.width = Math.round(size);
+      cv.height = Math.round(size);
+      paintPortIso(cv.getContext('2d'), mesh, Math.round(size));
+      PORT_ISO[key] = cv;
+    }
+    ctx.drawImage(cv, Math.round(x), Math.round(y));
+    return true;
+  }
+
   var ITEM_FILL = 2.8;               // camera distance, in model reaches
   /* TIERED FITTINGS SHARE ART UNTIL THEY DON'T (2026-11-12). A ladder whose
    * rungs are the same instrument built better - gravI..gravIV - wears tier
@@ -18374,6 +18729,13 @@
     HULL_ASSIGN: HULL_ASSIGN,
     hullSpan: hullSpan,
     libPort: libPort, portIds: portIds, reloadPorts: reloadPorts,
+    drawPortPortrait: drawPortPortrait, portPortraitMesh: portPortraitMesh,
+    portraitReach: portraitReach, paintPortIso: paintPortIso,
+    ISO_YAW: ISO_YAW, ISO_PITCH: ISO_PITCH,
+    SECTION_ROLE: SECTION_ROLE, sectionQuarter: sectionQuarter,
+    PORT_ISO_FRAME: PORT_ISO_FRAME,
+    decimateMesh: decimateMesh, setPortraitBudget: setPortraitBudget,
+    portraitBudget: function () { return PORTRAIT_FACES; },
     portModelFor: portModelFor, STATION_MODELS: STATION_MODELS,
     portRole: portRole, assignPort: assignPort, PORT_ASSIGN: PORT_ASSIGN,
     portLivery: portLivery, ROLE_PATTERNS: ROLE_PATTERNS, PORT_HELD_BACK: PORT_HELD_BACK,

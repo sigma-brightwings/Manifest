@@ -396,6 +396,65 @@ if (barren) {
           var f = Ch.nearestPower(gal, barren.star);
           return !f || !f.outlaw;
         })());
+
+  /* ONE WORLD, ONE NOD (2026-11-14). The nod used to fire on every
+   * successful publish while its cap counted per faction, so the cheapest
+   * goodwill in the game was one barren rock surveyed a little at a time
+   * and sold seventeen times over: 8330 cr and 15 nods against 8340 cr
+   * and 1 for the same ground sold whole. The credits were never the
+   * exploit - slicing loses a few to rounding - so this asserts the two
+   * halves separately, and the first of them is what actually broke. */
+  if (ctl5 < Ch.FRONTIER_CTL) {
+    var sliced = (function () {
+      var B = freshG(barren, Ch.COV_FLOOR);
+      var kb = barren.star.id + ':' + barren.body.id;
+      var cov = Ch.COV_FLOOR, eds = 0, nods = 0, paid = 0;
+      while (cov <= 1.0001 && eds < 60) {
+        var r = Ch.publish(B, barren.sys, gal, kb, null);
+        if (r.ok) { eds++; paid += r.price; if (r.nod && r.nod.up > 0) nods++; }
+        cov = Math.min(1, cov + 0.055);
+        var rc = B.surveys[kb];
+        rc.cov = rc.cov2 = rc.covF = cov;
+        if (cov >= 1 && rc.pubCov >= 1) break;
+      }
+      var fac = Ch.nearestPower(gal, barren.star);
+      return { eds: eds, nods: nods, paid: paid,
+               standing: fac ? (B.standing[fac.id] || 0) : 0 };
+    })();
+    check('the same ground sold in slices takes more than one edition',
+          sliced.eds > 1, sliced.eds + ' editions');
+    check('and still only extends anybody once',
+          sliced.nods === 1, sliced.nods + ' nod from ' + sliced.eds + ' editions');
+    check('so their standing moved by one, not by the cap',
+          sliced.standing === 1, '+' + sliced.standing);
+    check('while the credits are the whole sheet either way',
+          Math.abs(sliced.paid - r5.price) <= 10 * sliced.eds,
+          sliced.paid + ' cr sliced vs ' + r5.price + ' cr whole');
+
+    /* And the guard must not have killed the feature it guards: a world
+     * nobody has charted still pays its nod the first time. */
+    check('a second, different world still earns its own nod',
+          (function () {
+            var C = freshG(barren, 1);
+            var kb = barren.star.id + ':' + barren.body.id;
+            var first = Ch.publish(C, barren.sys, gal, kb, null);
+            if (!first.ok || !first.nod || first.nod.up !== 1) return false;
+            /* A different key stands in for a different world: the record
+             * is keyed by survey key, which is what publish passes. */
+            C.surveys['elsewhere'] = recFor(barren.star, barren.body, 1);
+            var second = Ch.publish(C, barren.sys, gal, 'elsewhere', null);
+            return second.ok && second.nod && second.nod.up === 1;
+          })(), 'the record is per world, not per career');
+
+    check('an unkeyed ask is told nothing is credited',
+          (function () {
+            var D = freshG(barren, 1);
+            var nod = Ch.frontierNod(D, gal, barren.star);
+            var fac = Ch.nearestPower(gal, barren.star);
+            if (!fac) return true;
+            return nod && nod.up === 0 && (D.standing[fac.id] || 0) === 0;
+          })(), 'no world named, nothing paid');
+  }
 }
 
 /* ---- 11. THE DESK’S CHOICE ----------------------------------------- */

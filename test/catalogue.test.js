@@ -138,6 +138,57 @@ check('contraband is flagged', band.length > 0, band.length + ' goods');
 var grey = all.filter(function (e) { return e.grey; });
 check('grey-market kit is flagged', grey.length > 0, grey.length + ' items');
 
+/* ---- WHAT HE HAS LAID EYES ON -----------------------------------------
+ *
+ * THE BUG THIS EXISTS FOR (2026-11-14). `note()` was written, exported and
+ * documented when this file was built - its own comment promises that "an
+ * unlisted item he has owned and sold stays in his reference" - and then
+ * called from NOWHERE. `owns` read a map nothing ever wrote, so the
+ * promise had never once been kept. The bug hunt found it by asking who
+ * calls it; the answer was nobody.
+ *
+ * Astra's rule for what counts: anything you have ever held. Which is why
+ * the record is swept from what is aboard rather than noted at each place
+ * a thing can arrive - a list of call sites is what rotted the first time.
+ * So this tests the SWEEP, and that what it writes outlives the holding. */
+console.log('--- the reference remembers what you have held ---');
+(function () {
+  var G = {
+    ship: { hullId: 'talon', fittings: ['miningbeam1'], cargo: { ore: 5 } },
+    fleet: [{ hullId: 'kestrel', fittings: ['shieldsurvey'] }]
+  };
+  check('nothing is remembered before the sweep', !G.seenItems);
+
+  Cat.noteHeld(G);
+  check('what is fitted is remembered',
+        !!G.seenItems && G.seenItems.miningbeam1 === 1);
+  check('what is in the hold is remembered', G.seenItems.ore === 1);
+  check('the hull she is flying is remembered', G.seenItems.talon === 1);
+  check('and a hull parked in the fleet, with its fit',
+        G.seenItems.kestrel === 1 && G.seenItems.shieldsurvey === 1,
+        'a thing you own is a thing you have seen');
+
+  /* The whole point: sell it and it stays in the reference. */
+  G.ship.fittings = [];
+  G.ship.cargo = {};
+  G.fleet = [];
+  Cat.noteHeld(G);
+  check('selling it does not take it back out of the reference',
+        G.seenItems.miningbeam1 === 1 && G.seenItems.ore === 1 &&
+        G.seenItems.shieldsurvey === 1,
+        'owned and sold, and still written down');
+  check('and owns() can see it afterwards',
+        Cat.owns(G, 'miningbeam1') === true,
+        'which is the thing the record is FOR');
+
+  /* An empty career sweeps without complaint, and a toolless call does
+   * not throw - noteHeld runs every frame. */
+  var threw = null;
+  try { Cat.noteHeld(null); Cat.noteHeld({}); } catch (e) { threw = e; }
+  check('a sweep with nothing aboard is harmless', !threw,
+        threw ? String(threw.message) : 'runs every frame, so it must be');
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

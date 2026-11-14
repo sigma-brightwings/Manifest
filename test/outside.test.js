@@ -235,12 +235,135 @@ check('but shooting one is, and it tops the killing ladder',
       C.BOUNTY.killSuited > C.BOUNTY.killNavy,
       C.BOUNTY.killSuited + ' vs tender ' + C.BOUNTY.killTender);
 
+console.log('--- a jump is not a pause ---');
+/* THE INVARIANT: EQUAL INTERVALS, EQUAL OUTCOMES (2026-11-14).
+ *
+ * The candle burns by dt, so it only burns where something hands it a dt.
+ * A slipspace transit does not advance the clock a frame at a time - it
+ * crosses the whole interval in one assignment (main.js, at the tunnel
+ * swap) - and for a day nothing handed that interval to step(). Anybody on
+ * the hull or adrift therefore came out of a jump with exactly the candle
+ * they went in with, and 97% of the jumps a captain actually makes are
+ * longer than the candle (median 31.2 h on kawartha in a Talon). So
+ * stranding somebody and jumping away was free: the one outcome this
+ * module exists to prevent.
+ *
+ * Thirty hours is thirty hours however the clock got there. */
+(function () {
+  var JUMP = 31.2 * HOUR;          // the measured median jump
+
+  /* One interval, handed over whole, against the same interval ticked a
+   * frame at a time. Both arms suppress the pickup, because a hand cast
+   * off beside a cold engine is ALONGSIDE and gets taken straight back
+   * aboard - correct, and not what is being measured here. That the
+   * pickup works is asserted on its own further down. */
+  function adriftAfter(steps) {
+    var g = makeG(), hk = says();
+    O.send(g, 0, null, false, hk);          // off the line
+    g.ship.thrust = { x: 1, y: 0, z: 0 };   // and a burn casts them off
+    O.step(g, 1, hk, { noPickup: true });
+    g.ship.thrust = { x: 0, y: 0, z: 0 };
+    var each = JUMP / steps;
+    for (var i = 0; i < steps; i++) {
+      g.t += each;
+      O.step(g, each, hk, { noPickup: true });
+    }
+    return g;
+  }
+
+  var whole = adriftAfter(1);
+  var ticked = adriftAfter(600);
+  check('somebody was actually cast off to measure',
+        whole.adrift.length === 1 && ticked.adrift.length === 1);
+  check('a jump-length interval handed over whole kills them',
+        !!whole.adrift[0].dead, (JUMP / HOUR).toFixed(1) + ' h against a 12 h candle');
+  check('and ticking the same interval kills them too',
+        !!ticked.adrift[0].dead, 'equal intervals, equal outcomes');
+  check('their air agrees either way',
+        whole.adrift[0].o2 === ticked.adrift[0].o2,
+        'o2 ' + whole.adrift[0].o2 + ' both ways');
+  check('and your name is docked the same either way',
+        whole.crewRep === ticked.crewRep, 'crewRep ' + whole.crewRep);
+
+  /* A short jump is survivable, and must leave them with less air than
+   * they started with rather than the same. */
+  var shortG = (function () {
+    var g = makeG(), hk = says();
+    O.send(g, 0, null, false, hk);
+    g.ship.thrust = { x: 1, y: 0, z: 0 };
+    O.step(g, 1, hk, { noPickup: true });
+    g.ship.thrust = { x: 0, y: 0, z: 0 };
+    var before = g.adrift[0].o2;
+    g.t += 5 * HOUR;
+    O.step(g, 5 * HOUR, hk, { noPickup: true });
+    return { g: g, before: before };
+  })();
+  check('a five-hour jump does not kill them', !shortG.g.adrift[0].dead);
+  check('but it does cost them five hours of air',
+        Math.abs((shortG.before - shortG.g.adrift[0].o2) - 5 * HOUR) < 1e-6,
+        ((shortG.before - shortG.g.adrift[0].o2) / HOUR).toFixed(1) + ' h gone');
+
+  /* And the hand still on the hull burns the same interval. */
+  var onHull = (function () {
+    var g = makeG(), hk = says();
+    O.send(g, 0, null, true, hk);
+    var before = g.outside.o2;
+    g.t += JUMP;
+    O.step(g, JUMP, hk, { noPickup: true });
+    return { g: g, before: before };
+  })();
+  check('a hand riding the hull through a long jump does not come out fresh',
+        onHull.g.outside === null || onHull.g.outside.o2 < onHull.before,
+        'the candle went with them');
+
+  /* noPickup is the only thing a transit suppresses: nobody is collected
+   * out of a tunnel, however close the beacon is. */
+  (function () {
+    var g = makeG(), hk = says();
+    O.send(g, 0, null, false, hk);
+    g.ship.thrust = { x: 1, y: 0, z: 0 };
+    O.step(g, 1, hk, { noPickup: true });
+    g.ship.thrust = { x: 0, y: 0, z: 0 };
+    g.adrift[0].pos = { x: 0, y: 0, z: 0 };      // right alongside
+    g.adrift[0].sysKey = g.here.id;
+    var n = g.adrift.length;
+    O.step(g, HOUR, hk, { noPickup: true });
+    check('nobody is collected out of a tunnel',
+          g.adrift.length === n, 'alongside, and still outside');
+    /* Without the flag, the same frame takes them aboard - which is also
+     * what proves the flag is the only thing standing in the way. */
+    var g2 = makeG(), hk2 = says();
+    O.send(g2, 0, null, false, hk2);
+    g2.ship.thrust = { x: 1, y: 0, z: 0 };
+    O.step(g2, 1, hk2, { noPickup: true });
+    g2.ship.thrust = { x: 0, y: 0, z: 0 };
+    g2.adrift[0].pos = { x: 0, y: 0, z: 0 };
+    g2.adrift[0].sysKey = g2.here.id;
+    O.step(g2, 1, hk2);
+    check('but an ordinary frame alongside does take them aboard',
+          g2.adrift.length === 0,
+          'so the flag suppresses the pickup and nothing else');
+  })();
+})();
+
 console.log('--- it survives a reload ---');
+/* These used to read save.js as TEXT and check only that each field was
+ * WRITTEN. All three passed for a day while load() read none of them back,
+ * which is how `outside`, `adrift` and `crewRep` were silently discarded
+ * on every reload until 2026-11-14. A test that greps the source for a
+ * line cannot tell you the line does anything. So: the write is still
+ * asserted here, the round trip is asserted for real in
+ * test/saveroundtrip.test.js, and this checks the restore exists too. */
 var save = require('fs').readFileSync(
   require('path').join(__dirname, '..', 'src', 'save.js'), 'utf8');
 check('the hand on the hull is saved', /outside: G\.outside/.test(save));
 check('anybody adrift is saved', /adrift: G\.adrift/.test(save));
 check('and so is your name', /crewRep: G\.crewRep/.test(save));
+check('the hand on the hull is also read back',
+      /G\.outside\s*=\s*\(data\.outside/.test(save),
+      'the half that was missing');
+check('anybody adrift is read back', /G\.adrift\s*=\s*\[\]/.test(save));
+check('and your name is read back', /G\.crewRep\s*=\s*\(typeof data\.crewRep/.test(save));
 
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');

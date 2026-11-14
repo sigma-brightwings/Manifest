@@ -1248,7 +1248,20 @@
        * here means you genuinely come out somewhere else. */
       if (!hy.swapped && u >= HYPER_SWAP_AT) {
         hy.swapped = true;
+        /* A JUMP IS NOT A PAUSE (2026-11-14). The clock crosses the
+         * entire transit in the assignment below, so the only code that
+         * sees that interval is whatever is handed it by name. Air was
+         * not, and 97% of the jumps a captain actually makes are longer
+         * than the twelve-hour candle (median 31.2 h), so stranding
+         * somebody and jumping away cost nothing at all. Burned here,
+         * before the new system is entered, so that a death is recorded
+         * against the place and the clock it happened on. The pickup
+         * check is suppressed: nobody is collected out of a tunnel. */
+        var jumpDt = Math.max(0, hy.arriveT - hy.departT);
         G.t = hy.arriveT;
+        if (global.Outside && jumpDt > 0) {
+          global.Outside.step(G, jumpDt, HOOKS, { noPickup: true });
+        }
         enterSystem(hy.plan.to, { arrive: true });
         leaveOwnWake('arrival');
       }
@@ -8023,6 +8036,14 @@
      * Outside the paused gate above, because a sweep started in orbit
      * should still finish while you sit on a pad waiting for it. */
     tickFieldSweep();
+
+    /* WHAT HE HAS LAID EYES ON (catalogue.js, wired 2026-11-14). Astra's
+     * rule for what counts: anything you have ever held stays in your
+     * reference afterwards. Swept from what is aboard rather than noted at
+     * each acquisition - Catalogue.noteHeld says why that is the shape
+     * that survives. Outside the paused gate, because what you are holding
+     * is true whether the clock is running or not. */
+    if (global.Catalogue && global.Catalogue.noteHeld) global.Catalogue.noteHeld(G);
 
     /* SOMEBODY OUT ON THE HULL, and anybody already adrift (outside.js).
      * Its own statement, not inside the survey block above: a hand on a

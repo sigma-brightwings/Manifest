@@ -5367,7 +5367,15 @@
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
     var spin = (now / CAT_TURN) * Math.PI * 2;
     var drew = false;
-    if (entry.group === 'ports' || entry.group === 'factions' ||
+    /* A PORT TURNS LIKE EVERYTHING ELSE ON THE PAGE. The model is fetched
+     * the first time its card is opened and cut down to a card-sized mesh
+     * once (Render.portPortraitMesh); until that fetch lands this returns
+     * false and the swatch stands in, so the page never waits on a
+     * geometry read. */
+    if (entry.group === 'ports' && entry.portKey && Render.drawPortPortrait) {
+      drew = Render.drawPortPortrait(ctx, px, py, pic, entry.portKey, spin);
+      if (!drew) { drawWikiSwatch(ctx, px, py, pic, entry); drew = true; }
+    } else if (entry.group === 'ports' || entry.group === 'factions' ||
                entry.group === 'types') {
       drawWikiSwatch(ctx, px, py, pic, entry);
       drew = true;
@@ -5948,7 +5956,7 @@
       var fq = Combat.floorQuote(G, hullId, keep);
       return { cost: fq.cost, ok: true, outfit: fq.outfit || [] };
     }
-    return { cost: keep ? hull.price : hull.price - Math.round((here ? here.price : 0) * 0.7), ok: true };
+    return { cost: keep ? hull.price : hull.price - Math.round((here ? here.price : 0) * Combat.TRADE_IN), ok: true };
   }
 
   function gearCredit(s) {
@@ -9152,7 +9160,11 @@
   }
 
   /* A press on the plot is a click until it moves CHART_DRAG_PX, then it
-   * is a pan for the rest of the drag; a click selects the nearest dot. */
+   * is a DRAG for the rest of the press; a click selects the nearest
+   * dot. Which drag it is was decided at the press: shift or the right
+   * button pans, anything else turns the galaxy - see the help line the
+   * chart prints for itself. (It used to pan either way, and this
+   * comment went on saying so after 1.4.0 made the chart a solid.) */
   function chartPointer(kind, x, y, mods) {
     if (kind === 'down') {
       if (!chartLive() || !chartInPlot(chartPlot, x, y)) { chartPress = null; return false; }

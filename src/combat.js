@@ -9734,7 +9734,7 @@
   function floorQuote(G, hullId, keep) {
     var s = G.ship, to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
     if (!to) return { ok: false, cost: 0, outfit: [] };
-    var base = keep ? to.price : to.price - Math.round(from.price * 0.7);
+    var base = keep ? to.price : to.price - Math.round(from.price * TRADE_IN);
     var moved = keep ? { ok: true, fit: {} } : replanFit(s, to);
     if (!moved.ok) return { ok: false, why: moved.why, cost: base, outfit: [] };
     var o = outfitOver(hullId, moved.fit);
@@ -9773,7 +9773,7 @@
       var credit = keep ? 0 : Math.round(from.price * TRADE_IN) + gearValue(s, null);
       plan = { mode: 'stock', fit: sf.fit, moved: {}, cost: to.price + sf.gear - credit, items: sf.items };
     }
-    var cost = plan ? plan.cost : (keep ? to.price : to.price - Math.round(from.price * 0.7));
+    var cost = plan ? plan.cost : (keep ? to.price : to.price - Math.round(from.price * TRADE_IN));
     if (cost > 0 && s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
     if (global.Sim.cargoMass(s) > to.cargoCap) {
       return { ok: false, why: 'hold too small for your cargo — sell some first' };
