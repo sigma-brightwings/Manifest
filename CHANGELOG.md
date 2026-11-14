@@ -38,6 +38,185 @@ before they update.
 
 ---
 
+## 1.5.0 "Icosahedron" (2026-11-14)
+
+Twenty faces, one solid — which is the release. **The game can now explain
+itself**: every hull, fitting, cargo, station module, world type, star class,
+government, port pattern and faction is written down in one place a player
+can read without leaving the cockpit. 189 entries over twelve tabs.
+
+The naming convention changed with this one. The names were pigeons from the
+rescue through 1.3.1 "Clementine"; 1.4.0 "Dodecahedron" looked like a one-off
+break and turned out to be the first of a new series (Astra, 2026-11-14:
+*"our new naming convention is polytopes"*).
+
+> ### Saves survive.
+>
+> No version bump — nothing stored changed. The wiki stores nothing at all
+> (every entry is a pure function of the tables, the galaxy and what the
+> career has already charted), and the hull reprice moves a price list rather
+> than a save field. A career from 1.4.0 loads and finds its ships dearer and
+> a reference page where there was none.
+
+### Added (2026-11-13, the wiki: factions, ports and what a Terran world is)
+
+Astra: *"a kind of wiki style game encyclopedia with ship hulls, factions
+(as generated per seed), cargo items and equipment, as well as the
+descriptions of all relevant types. The ports should also be demonstrated in
+our game wiki thing."* (`src/lore.js`, new.)
+
+The catalogue already held four of those — hulls, equipment, trade goods and
+station modules. **Three new tabs** finish it, and they are a different shape
+of thing: a government has no price and a faction is not something you can
+own. Same house rule throughout, though: **read from the live tables, never a
+copy**. Add a government to `Gen.GOVERNMENTS` and it is in the wiki with its
+numbers.
+
+- **TYPES** — all nine world types, five star classes and eleven governments.
+  A world carries the generator’s own density, albedo and **air**: surface
+  density against Earth’s 1.225, scale height, how much of the sky is cloud,
+  and the one line a pilot actually wants — *wants a heat shield*, *thin air;
+  the drive does most of it*, or *effectively vacuum*. A null entry in
+  `Gen.ATMOSPHERES` is genuine airlessness and says so rather than inventing a
+  number. Governments carry **both axes**, violence and corruption, because
+  the one number the rest of the game reads is a function of the two.
+- **PORTS** — the **fourteen patterns** every port in every seed is built to,
+  told apart from the library’s own keys. Each says where it is built, which
+  of the three sizes and three liveries exist, how many metres across it is,
+  and how many berths — of which how many take a large hull.
+- **FACTIONS** — this seed’s actual powers: their kind, whose space they
+  operate inside, their capital, who they are at odds with and where you
+  stand with them.
+
+**NO PORT LAYOUT DRAWING.** The first cut drew a berth plan off each model’s
+own anchors; Astra looked at it and scrapped it the same evening (*"scrap the
+port layouts for the game wiki thing"*). **The berth counts stay** — how many
+a pattern has, and how many take a large hull, are what a pilot looking this
+up actually wants — and `berthPlan` went out with the drawing rather than
+being left in place against a future that may not come. *(A turning model is
+still the open question for this tab.)*
+
+**WHAT THE WIKI IS ALLOWED TO TELL YOU.** Astra’s call, asked before any of
+it was built: **types always, specifics once met.** The game SELLS slipspace
+charts — whose flag flies over the systems around a port, at 85 cr a star and
+rising with distance — so a page listing every faction’s territory to a
+brand-new career would be giving away the thing the chart seller is holding.
+
+- A reader can **always** look up what a Charter is, what an outlaw band is,
+  how a Syndicate differs from a government, and every world, star and port
+  type. A fresh career opens FACTIONS to the four **kinds** of power and none
+  of this seed’s ten named ones.
+- The named ones fill in **behind** the purchase: charting or visiting a
+  system introduces whoever holds it, and standing with somebody counts too,
+  because a power that has dealt with you has introduced itself. Measured on
+  kawartha: 0 of 10 on a new career, 7 of 10 after charting eighty stars.
+- **Meeting them is not the same as knowing where they live.** A faction you
+  have standing with but whose space you have never charted shows its capital
+  as *not on your charts yet*, and the systems count says *buy the local
+  sheets to fill this in*.
+- **One gate, one function** (`Lore.knownFactions`). A gate in one place can
+  be audited; a gate in nine cannot.
+
+**THE LINKS ARE CLICKABLE,** which is what makes it a wiki rather than a list.
+A faction names its kind and the power it operates inside, and both are rows
+you can click to go there — tab and all.
+
+- **Resolved against the live tab list**, never a stored index. The FACTIONS
+  tab GROWS as the player charts, so an index cached when the card was drawn
+  would quietly point at the wrong row a few systems later.
+- **A link to a power you have not met does not appear.** Standing with a
+  minor power introduces THEM, not their host, and a host link on that card
+  would be the gate leaking out through the back door. The suite checks
+  exactly that, and checks that with the whole galaxy charted no link dangles.
+- A target that is not on the page is drawn dim and does nothing, rather than
+  being a live row that goes nowhere.
+
+- **Reading the wiki cannot change a save.** The suite checks the source for
+  an RNG call and for any write to `G`, because a reference page that touches
+  the world is not a reference page.
+- **Saves:** unaffected. Nothing is stored; every entry is a pure function of
+  the tables, the galaxy and what the career has already charted.
+- **Tests:** `test/lore.test.js` (37 checks, `economy` group beside the
+  catalogue’s own); `tools/probe-wiki.js` opens the page in the running game,
+  photographs a port plan and watches the roster fill in as stars are
+  charted.
+
+### Fixed (2026-11-13, two things the first draw got wrong)
+
+- **"NaN cr" down the whole of every new tab.** The list column printed
+  `fmtCredits(undefined)` for things that have no price. It carries what the
+  entry IS instead — *star*, *world type*, *government* — which is the useful
+  fact for something you cannot buy.
+- **The berth plan drew a circle through a grid.** The guide ring assumed
+  berths ring a structure. A shipyard’s ten do not, and a circle drawn
+  through a grid is not a neutral guide — it is a claim about the shape of
+  the station that the model flatly contradicts. It is a box round the berths
+  now, which claims only what is true: this is how far they spread.
+- **A flat square told the reader nothing.** World types and stars had the
+  same blank swatch as everything else. A world is a lit ball now and a star
+  a glowing disc, both in the generator’s own colours, so retinting a type in
+  the tables retints it here. A faction keeps the flat square, because a flag
+  colour genuinely is a flat colour.
+
+### Changed (2026-11-13, a bit more expensive)
+
+- **EVERY HULL IS 25% DEARER.** Astra, from the original rebalance: *"make
+  all ships a bit more expensive."* A Talon goes 32,000 — **40,000**, a
+  Kestrel 150,000 — **188,000**, a Leviathan 780,000 — **975,000**, the
+  carrier 18M — **22.5M**. Rounded to a step that suits the magnitude,
+  because a price list wants reading at a glance.
+- **Uniform, and uniform is the point.** Trade-in and resale are fractions of
+  price, so an upgrade from one hull to the next costs 25% more rather than
+  becoming disproportionately cheap or dear, and the shape of the ladder is
+  exactly what it was. What changes is the one thing meant to: every rung now
+  costs more of the income that buys it, and mission pay did not move.
+- **The opening purse was measured, not assumed.** `start.js` computes a
+  start rather than writing it down — every focus at a difficulty is worth
+  the dearest focus’s kit plus a fixed floor, and your cash is that total
+  less your own kit. I expected the rise to cancel out. It does for the
+  dearest-kit focus (easy/trade and normal/mining are unchanged to the
+  credit) but not for the others, which pocket the difference between their
+  hull’s rise and the dearest hull’s: **easy/combat +13,000, easy/mining
+  +10,000, normal/trade +3,000, normal/combat −1,000.**
+  - The invariant `start.js` exists to protect still holds exactly — every
+    focus at a difficulty totals the same (easy 166,800, normal 82,400), so
+    no start became richer than another. Each start is worth about 25% more
+    in total, which is the same wealth measured in dearer ships.
+  - It cannot be cancelled by lowering the floors: the dearest-kit focus is
+    already sitting exactly on its floor, so the floor would have to go
+    negative. Say the word if the starts should be pinned to their old cash
+    instead and the starting hulls left at the old prices.
+
+- **The Cartographers are twice as quick to warm to you.** 12,000 cr of sheet
+  per point of standing → **6,000**, so **one good frontier world charted end
+  to end is about one point** rather than half of one. At the old rate a
+  career could file real work and still read zero, which is not a
+  relationship you can feel yourself building. Still a running ledger rather
+  than a per-sale rate, so the median world’s 340 cr is not lost to rounding.
+
+### Fixed (2026-11-13, one fact, one place)
+
+- **A craft’s price was typed out twice.** `construction.js` kept its own
+  copy of the Bollard’s, Wren’s, heavy shuttle’s and heavy tug’s prices
+  beside the hull they name, with a test standing guard over the two copies
+  — and the guard duly went off the moment the hulls were repriced. The
+  test did its job, but **a fact that needs a guard is a fact stored in the
+  wrong number of places**: a craft’s price now resolves from `Combat.HULLS`
+  when it is read, so the two cannot disagree. Lazily, so it is right
+  whichever module a test requires first.
+  - `size` is left written out. It did not drift, and a craft’s size is a
+    fact about which pad it takes in the Crawler’s bay rather than about the
+    hull. The test still checks the two agree, which is the right
+    relationship for a number that is genuinely its own.
+- **Two more tests pinning a number where they meant to protect arithmetic.**
+  The Crawler’s refit costs were checked against 44,000 and 18,000 written
+  out in the test — the old Bollard and Wren prices — so both failed over a
+  formula that had not changed. Now priced off the live table. **That is the
+  fifth test this week** failing because it pinned a figure rather than the
+  behaviour the figure happened to produce.
+
+---
+
 ## 1.4.0 "Dodecahedron" (2026-11-13)
 
 Not a pigeon. Astra: *"a break from the bird names; but that’s okay"* — and

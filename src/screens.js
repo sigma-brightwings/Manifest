@@ -5150,6 +5150,72 @@
     st.sel = Math.max(0, Math.min(gs[st.group].items.length - 1, st.sel + (dy > 0 ? 3 : -3)));
   }
 
+  /* ---- A SWATCH, for the things that are not objects ---------------------
+   * A faction is a colour and a name; a world type is a colour and a name.
+   * Neither has a model and neither should pretend to - an empty icon box
+   * reads as a missing asset, which is a worse lie than no box at all. */
+  function drawWikiSwatch(ctx, px, py, pic, entry) {
+    ctx.save();
+    var col = entry.swatch || '#4a97b0';
+    ctx.fillStyle = '#03090e';
+    ctx.fillRect(px, py, pic, pic);
+    var pad = Math.round(pic * 0.18);
+    var cx = px + pic / 2, cy = py + pic / 2, r = pic / 2 - pad;
+    /* A WORLD IS A BALL AND A STAR IS A LIGHT. The first cut drew every
+     * wiki entry as the same flat square, which was honest about having no
+     * model and told the reader nothing. The colours are the generator's
+     * own (Gen.PLANET_TYPES, Gen.STAR_CLASSES), so a type retinted in the
+     * tables is retinted here. A faction keeps the flat square, because a
+     * flag colour genuinely is a flat colour. */
+    if (entry.kind === 'world type' && ctx.createRadialGradient) {
+      var gw = ctx.createRadialGradient(cx - r * 0.35, cy - r * 0.35, r * 0.1, cx, cy, r);
+      gw.addColorStop(0, col);
+      gw.addColorStop(0.62, col);
+      gw.addColorStop(1, 'rgba(0,0,0,0.85)');
+      ctx.fillStyle = gw;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = 'rgba(2,6,9,0.55)';
+      ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+    } else if (entry.kind === 'star' && ctx.createRadialGradient) {
+      var gs2 = ctx.createRadialGradient(cx, cy, r * 0.05, cx, cy, r);
+      gs2.addColorStop(0, '#ffffff');
+      gs2.addColorStop(0.28, col);
+      gs2.addColorStop(0.55, col);
+      gs2.addColorStop(1, 'rgba(0,0,0,0)');
+      ctx.fillStyle = gs2;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    } else {
+      ctx.globalAlpha = 0.85;
+      ctx.fillStyle = col;
+      ctx.fillRect(px + pad, py + pad, pic - pad * 2, pic - pad * 2);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = 'rgba(2,6,9,0.8)';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(px + pad + 0.5, py + pad + 0.5, pic - pad * 2 - 1, pic - pad * 2 - 1);
+    }
+    ctx.strokeStyle = 'rgba(74,151,176,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pic - 1, pic - 1);
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText((entry.kind || '').toUpperCase(), px + 10, py + 16);
+    ctx.restore();
+  }
+
+  /* Where an entry id sits on the page right now: which tab, which row.
+   * Against the live group list, because the FACTIONS tab grows as the
+   * player charts and a cached index would quietly rot. */
+  function catFindAt(gs, id) {
+    for (var g = 0; g < gs.length; g++) {
+      var items = gs[g].items;
+      for (var i = 0; i < items.length; i++) {
+        if (items[i].id === id) return { group: g, index: i };
+      }
+    }
+    return null;
+  }
+
   function drawCatalogue(ctx, w, h) {
     var Cat = global.Catalogue;
     var gs = catGroups();
@@ -5182,7 +5248,11 @@
     ctx.fillText('CATALOGUE', x0 + 18, y0 + 26);
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = MFD_DIM;
-    var total = Cat ? Cat.count(G) : 0;
+    /* The PAGE's count, not the shop's: since the wiki groups landed
+     * (lore.js) the tabs hold factions, port patterns and world types that
+     * have no price and are not for sale, and a figure that quietly left
+     * them out would understate the page by a third. */
+    var total = Cat ? (Cat.pageCount ? Cat.pageCount(G) : Cat.count(G)) : 0;
     var foot = total + ' entries  ·  arrows move  ·  Shift+C or Esc closes';
     ctx.textAlign = 'right';
     ctx.fillText(foot, x0 + pw - 18, y0 + 26);
@@ -5242,7 +5312,13 @@
       ctx.fillText(clipText(e.name, Math.floor((listW - 72) / 6.6)), listX, ry);
       ctx.fillStyle = idx === st.sel ? '#ffe6a8' : MFD_DIM;
       ctx.textAlign = 'right';
-      ctx.fillText(e.price < 0 ? '(' + fmtCredits(-e.price) + ')' : fmtCredits(e.price),
+      /* A GOVERNMENT HAS NO PRICE, and fmtCredits(undefined) printed "NaN
+       * cr" down the whole of the FACTIONS, PORTS and TYPES tabs the first
+       * time they were drawn. The right-hand column carries what the thing
+       * IS instead, which is the useful fact for an entry you cannot buy. */
+      ctx.fillText(typeof e.price !== 'number'
+                     ? clipText(e.kind || '', 14)
+                     : e.price < 0 ? '(' + fmtCredits(-e.price) + ')' : fmtCredits(e.price),
                    listX + listW - 10, ry);
       ctx.textAlign = 'left';
       hot(listX - 4, ry - 11, listW, CAT_ROW,
@@ -5291,7 +5367,11 @@
     var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
     var spin = (now / CAT_TURN) * Math.PI * 2;
     var drew = false;
-    if (entry.kind === 'hull') {
+    if (entry.group === 'ports' || entry.group === 'factions' ||
+               entry.group === 'types') {
+      drawWikiSwatch(ctx, px, py, pic, entry);
+      drew = true;
+    } else if (entry.kind === 'hull') {
       drew = Render.drawHullPortrait
         ? Render.drawHullPortrait(ctx, px, py, pic, pic, entry.id, spin) : false;
     } else {
@@ -5308,9 +5388,15 @@
     ctx.fillText(clipText(entry.name, Math.floor(tw2 / 9.2)), tx2, py + 16);
     ctx.font = 'bold 12px ui-monospace, monospace';
     ctx.fillStyle = '#ffe6a8';
-    var money = entry.price < 0
-      ? 'pays ' + fmtCredits(-entry.price) + ' to haul'
-      : fmtCredits(entry.price) + (entry.group === 'goods' ? ' / t base' : '');
+    /* NOT EVERYTHING ON THE PAGE HAS A PRICE. A Theocracy, a class M star
+     * and a drum station are things to look up, not things to buy, and
+     * printing "0 cr" over them would be a small lie in a reference. They
+     * get what they actually are instead. */
+    var money = typeof entry.price !== 'number'
+      ? (entry.kind || '').toUpperCase()
+      : entry.price < 0
+        ? 'pays ' + fmtCredits(-entry.price) + ' to haul'
+        : fmtCredits(entry.price) + (entry.group === 'goods' ? ' / t base' : '');
     var tagBits = [];
     if (entry.grey) tagBits.push('grey market');
     if (entry.contraband) tagBits.push('contraband');
@@ -5333,6 +5419,50 @@
       ctx.fillText(val, tx2 + col2, sy);
     }
     ctx.restore();
+
+    /* ---- THE LINKS ------------------------------------------------------
+     *
+     * What makes the page a wiki rather than a list: an entry that mentions
+     * another one lets you go there. A faction names its kind and the
+     * empire it operates inside; clicking either moves the page to that
+     * entry, tab and all.
+     *
+     * Resolved against the LIVE tab list rather than against a stored
+     * index, so a link cannot point at the wrong row when the roster grows
+     * behind it - which it does, every time the player charts another
+     * system. A target that is not on the page yet is drawn dim and does
+     * nothing, because a faction you have not met has no entry to go to. */
+    var links = entry.links || [];
+    if (links.length) {
+      ctx.save();
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      sy += 8;
+      for (var li = 0; li < links.length && sy < py + pic + 4; li++, sy += 17) {
+        var lk = links[li];
+        var at = catFindAt(gs, lk.id);
+        var lw = (ctx.measureText ? ctx.measureText(lk.label).width : lk.label.length * 6.6) + 16;
+        ctx.fillStyle = at ? 'rgba(127,214,255,0.10)' : 'rgba(255,255,255,0.03)';
+        ctx.fillRect(tx2, sy - 11, lw, 15);
+        ctx.fillStyle = at ? '#9fe8ff' : MFD_DIM;
+        ctx.fillText(lk.label, tx2 + 8, sy);
+        if (at) {
+          ctx.strokeStyle = 'rgba(127,214,255,0.35)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(tx2 + 8, sy + 2.5);
+          ctx.lineTo(tx2 + 8 + lw - 16, sy + 2.5);
+          ctx.stroke();
+          hot(tx2, sy - 11, lw, 15, (function (t) {
+            return function () {
+              var st2 = catState();
+              st2.group = t.group; st2.sel = t.index;
+              st2.scroll = Math.max(0, t.index - 6);
+            };
+          })(at), 'pick');
+        }
+      }
+      ctx.restore();
+    }
 
     /* THE COPY, full width under both, all of it. */
     var qy = Math.max(py + pic + 24, sy + 10);

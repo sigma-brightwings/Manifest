@@ -280,10 +280,19 @@ section('--- her craft bay ---');
   check('three tugs and no shuttle cannot reach a surface site', Cn.buildDaysFor(load, orb, true) === Infinity);
   check('no tugs, no building', Cn.buildDaysFor(load, { craft: ['shuttle'] }, false) === Infinity);
   check('an empty load takes no time', Cn.buildDaysFor([], std, true) === 0);
+  /* Priced off the LIVE table rather than off 44,000 and 18,000 written
+   * out here. Those were the Bollard's and the Wren's prices, and when every
+   * hull was repriced on 2026-11-13 both checks failed over a formula that
+   * had not changed at all. What is being protected is the arithmetic — the
+   * craft coming in at list, the one going out at seven tenths — and that
+   * survives a reprice only if it is written as arithmetic. */
+  var tugP = Cn.CRAFT.tug.price, shuttleP = Cn.CRAFT.shuttle.price;
   check('refit cost: a new tug in, the shuttle traded at seven tenths',
-        Cn.loadoutCost('standard', 'orbital') === 44000 - Math.round(18000 * 0.7));
+        Cn.loadoutCost('standard', 'orbital') === tugP - Math.round(shuttleP * 0.7),
+        tugP + ' less seven tenths of ' + shuttleP);
   check('going back pays most of it back',
-        Cn.loadoutCost('orbital', 'standard') === 18000 - Math.round(44000 * 0.7));
+        Cn.loadoutCost('orbital', 'standard') === shuttleP - Math.round(tugP * 0.7),
+        shuttleP + ' less seven tenths of ' + tugP);
 
   if (!found.yard || !found.orbital) return;
   var G = makeG(found.yard, 'crawler');

@@ -5780,6 +5780,12 @@
   var Gen = {
     AU: AU, M_SUN: M_SUN, M_EARTH: M_EARTH, R_SUN: R_SUN, DEG: DEG,
     PLANET_TYPES: PLANET_TYPES,
+    /* Exported for the wiki (lore.js, 2026-11-13), which describes a world
+     * type by what its air actually does and a star by what class it is.
+     * Read-only reference: nothing in the generator changes because these
+     * two names are now visible from outside it. */
+    STAR_CLASSES: STAR_CLASSES,
+    ATMOSPHERES: ATMOSPHERES,
     SHIP_CLASSES: SHIP_CLASSES, CLASS_HOLD: CLASS_HOLD, HOLD_FILL: HOLD_FILL, holdCapacity: holdCapacity,
     PATROL_CLASSES: PATROL_CLASSES,
     OUTLAW: OUTLAW,

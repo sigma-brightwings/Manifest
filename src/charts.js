@@ -108,7 +108,19 @@
   var REACH_LO = 0.6, REACH_SPAN = 0.8;
 
   /* ---- what the Cartographers think of you ------------------------------ */
-  var CARTO_PER = 12000;          // cr of sheet per point
+  /* Halved from 12,000 after the first evening with it (2026-11-13). The
+   * census says a fully mapped frontier world pays 5,000 to 8,000 cr of
+   * sheet, so at 12,000 a point the Cartographers thought nothing of you
+   * for a world charted end to end — and a career could file real work and
+   * still read zero, which is a relationship you cannot feel yourself
+   * building. At 6,000 ONE GOOD FRONTIER WORLD IS ABOUT ONE POINT, which is
+   * a rate a player can hold in their head.
+   *
+   * Still a running ledger rather than a per-sale rate, so the median
+   * world’s 340 cr is not lost to rounding: thirty small sheets are worth
+   * one big one, which is the difference between this and the Mining
+   * Guild’s books. */
+  var CARTO_PER = 6000;           // cr of sheet per point
   var CARTO_MAX_PER_SALE = 5;
 
   /* ---- what the Mining Guild thinks of it ------------------------------- */

@@ -188,6 +188,13 @@
 <!-- The catalogue page (2026-11-12): every purchasable thing, read from
      the live tables. After combat.js, economy.js and construction.js,
      which own those tables; before render.js, which draws the icons. -->
+<!-- THE WIKI HALF of the catalogue page (lore.js, 2026-11-13): factions as
+     this seed grew them, the fourteen port patterns, and what a Terran
+     world or a Theocracy actually is. After generate.js (whose tables it
+     reads), ports.js (whose models it measures) and galaxy.js (whose
+     factions it gates on what you have charted); before catalogue.js,
+     which appends its groups to the page. -->
+<script src="src/lore.js"></script>
 <script src="src/catalogue.js"></script>
 <script src="src/render.js"></script>
 <!-- The weather field, on the CPU. Before gl.js, which reads its own

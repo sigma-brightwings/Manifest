@@ -219,6 +219,19 @@
     return equipment(G).concat(stores(G), hulls(), goods(), modules());
   }
 
+  /* THE WIKI HALF (lore.js, 2026-11-13): factions, port patterns and the
+   * descriptions of world, star and government types. Kept in its own file
+   * because it is a different shape of thing — a government has no price and
+   * a faction is not something you can own — but shown on the same page,
+   * because Astra asked for one place to look rather than two.
+   *
+   * Appended rather than interleaved, so the item tabs a player already
+   * knows stay exactly where they were. */
+  function loreGroups(G) {
+    var L = global.Lore;
+    return L && L.groups ? L.groups(G) : [];
+  }
+
   function groups(G) {
     var items = all(G), by = {};
     items.forEach(function (e) { (by[e.group] || (by[e.group] = [])).push(e); });
@@ -231,16 +244,25 @@
         return a.name < b.name ? -1 : a.name > b.name ? 1 : 0;
       });
       return { id: g.id, label: g.label, note: g.note, items: list };
-    }).filter(function (g) { return g.items.length > 0; });
+    }).filter(function (g) { return g.items.length > 0; }).concat(loreGroups(G));
   }
 
   function find(G, id) {
     var items = all(G);
     for (var i = 0; i < items.length; i++) if (items[i].id === id) return items[i];
-    return null;
+    var L = global.Lore;
+    return (L && L.find) ? L.find(G, id) : null;
   }
 
+  /* The item count, and the whole page's count. They are different numbers
+   * and both get asked for: the first is "how much can I buy", the second
+   * is "how much is written down". */
   function count(G) { return all(G).length; }
+  function pageCount(G) {
+    var n = all(G).length;
+    loreGroups(G).forEach(function (g) { n += g.items.length; });
+    return n;
+  }
 
   /* Remember that the player has laid eyes on something, so an unlisted
    * item he has owned and sold stays in his reference. */
@@ -254,6 +276,7 @@
     GROUPS: GROUPS, EQ_GROUP: EQ_GROUP,
     equipment: equipment, stores: stores, hulls: hulls, goods: goods,
     modules: modules, all: all, groups: groups, find: find, count: count,
+    loreGroups: loreGroups, pageCount: pageCount,
     note: note, owns: owns
   };
   global.Catalogue = Catalogue;

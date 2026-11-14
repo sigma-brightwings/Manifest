@@ -1161,7 +1161,7 @@
    * steps slower. Combat and specialist hulls (Cutter, the Syndicate's,
    * the tugs and tenders) are not trade ladders and were not moved. */
   var HULLS = {
-    talon: { id: 'talon', size: 'S', name: 'Talon Courier', price: 32000, mesh: 'courier',
+    talon: { id: 'talon', size: 'S', name: 'Talon Courier', price: 40000, mesh: 'courier',
              dryMass: 42, thrustKN: 2700, thrusterCap: 16, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
              slots: { hardpoint: 2, utility: 3, internal: 3 },
@@ -1187,7 +1187,7 @@
                'on armour early and never looked back. Ideal for a first ' +
                'career: light freight, courier work, and learning which ' +
                'of your mistakes are expensive.' },
-    dart:  { id: 'dart', size: 'M', name: 'Dart Interceptor', price: 61000, mesh: 'police',
+    dart:  { id: 'dart', size: 'M', name: 'Dart Interceptor', price: 76000, mesh: 'police',
              dryMass: 30, thrustKN: 3300, thrusterCap: 13, fuelCap: 27,
              cargoCap: 22, hullMax: 80,
              /* THE RULE, checked by the hull-budget test: a reactor must
@@ -1216,7 +1216,7 @@
                'does not forgive a hard landing. Ideal for people who ' +
                'need to be somewhere before somebody else is: couriers ' +
                'on a deadline, and anybody whose plan depends on leaving.' },
-    kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 150000, /* 120,000 before 2026-11-04 */ mesh: 'merc',
+    kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 188000, /* 120,000 before 2026-11-04 */ mesh: 'merc',
              dryMass: 60, thrustKN: 4050, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
              slots: { hardpoint: 3, utility: 4, internal: 4 },
@@ -1232,7 +1232,7 @@
                'fastest, the roomiest or the cheapest thing on this list ' +
                'and it is the only one that is never badly wrong. Ideal ' +
                'for a pilot who takes whatever is on the board.' },
-    mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 135000, /* 78,000 before 2026-11-04 */ mesh: 'freighter',
+    mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 169000, /* 78,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 80, thrustKN: 5550, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
              slots: { hardpoint: 2, utility: 4, internal: 5 },
@@ -1273,7 +1273,7 @@
      * that flies it, only to a captain at that standing with them, and
      * never to one they want. `orderOnly` never sits on a floor — it is
      * built to order at a shipyard or it is not sold at all. */
-    wren:  { id: 'wren', size: 'S', name: 'Wren Shuttle', price: 18000, mesh: 'shuttle',
+    wren:  { id: 'wren', size: 'S', name: 'Wren Shuttle', price: 23000, mesh: 'shuttle',
              dryMass: 24, thrustKN: 960, thrusterCap: 10, fuelCap: 14,
              cargoCap: 30, hullMax: 60,
              /* NO HARDPOINT. "Everything flies armed EXCEPT SHUTTLES" is
@@ -1291,7 +1291,7 @@
                'to run. It carries no gun because it was never meant to be ' +
                'anywhere a gun would help. Ideal for a pilot rebuilding ' +
                'after a bad loss, or one who would rather not be noticed.' },
-    bollard: { id: 'bollard', size: 'S', name: 'Bollard Tug', price: 44000, mesh: 'tug',
+    bollard: { id: 'bollard', size: 'S', name: 'Bollard Tug', price: 55000, mesh: 'tug',
              dryMass: 50, thrustKN: 1300, thrusterCap: 22, fuelCap: 20,
              cargoCap: 20, hullMax: 140,
              slots: { hardpoint: 1, utility: 4, internal: 2 },
@@ -1308,7 +1308,7 @@
                'being leaned on, and the thruster tanks are enormous for ' +
                'the same reason. The hold is a locker. Ideal for salvage, ' +
                'towing work, and anyone who expects to be rammed.' },
-    samaritan: { id: 'samaritan', size: 'M', name: 'Samaritan Tender', price: 88000, mesh: 'tender',
+    samaritan: { id: 'samaritan', size: 'M', name: 'Samaritan Tender', price: 110000, mesh: 'tender',
              dryMass: 55, thrustKN: 1750, thrusterCap: 18, fuelCap: 26,
              cargoCap: 50, hullMax: 150,
              slots: { hardpoint: 1, utility: 3, internal: 5 },
@@ -1322,7 +1322,7 @@
                'alive — habitat, medical, scanners — and a frame that takes ' +
                'a beating while it does. One gun, as an apology. Ideal for ' +
                'a captain who answers maydays, and means to keep doing it.' },
-    sump:  { id: 'sump', size: 'M', name: 'Sump Waste Hauler', price: 70000, mesh: 'hauler',
+    sump:  { id: 'sump', size: 'M', name: 'Sump Waste Hauler', price: 88000, mesh: 'hauler',
              dryMass: 70, thrustKN: 3800, thrusterCap: 20, fuelCap: 56,
              cargoCap: 180, hullMax: 150,
              slots: { hardpoint: 1, utility: 4, internal: 4 },
@@ -1336,7 +1336,7 @@
                'price reflects how few people want one. Scrub her out and ' +
                'she carries anything. Ideal for bulk trade on a budget, ' +
                'and for the waste contracts nobody else will touch.' },
-    longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 250000, /* 165,000 before 2026-11-04 */ mesh: 'freighter',
+    longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 315000, /* 165,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 140, thrustKN: 6800, thrusterCap: 30, fuelCap: 100,
              cargoCap: 320, hullMax: 260,
              slots: { hardpoint: 2, utility: 6, internal: 6 },
@@ -1350,7 +1350,7 @@
                'see a pad, though she can. Twelve slots and a reactor with ' +
                'room in it make her whatever her owner needs. Ideal for a ' +
                'trader who has outgrown medium hulls and wants a fleet.' },
-    tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 220000, /* 150,000 before 2026-11-04 */ mesh: 'tanker',
+    tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 275000, /* 150,000 before 2026-11-04 */ mesh: 'tanker',
              dryMass: 150, thrustKN: 6800, thrusterCap: 30, fuelCap: 130,
              cargoCap: 280, hullMax: 240,
              slots: { hardpoint: 2, utility: 5, internal: 6 },
@@ -1364,7 +1364,7 @@
                'little smaller than the Longhaul\'s and the hull a little ' +
                'softer, because tanks take the room. Ideal for the lonely ' +
                'end of the cluster, and for running fuel where it is short.' },
-    cutter: { id: 'cutter', size: 'L', name: 'Naval Cutter', price: 380000, mesh: 'navy',
+    cutter: { id: 'cutter', size: 'L', name: 'Naval Cutter', price: 475000, mesh: 'navy',
              dryMass: 110, thrustKN: 2800, thrusterCap: 30, fuelCap: 40,
              cargoCap: 40, hullMax: 320,
              slots: { hardpoint: 4, utility: 5, internal: 5 },
@@ -1382,7 +1382,7 @@
                'word to captains it already counts as allies. Ideal for ' +
                'the hunter, the escort, and anyone who wants to be left ' +
                'alone and has earned the means.' },
-    meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 500000, /* 420,000 before 2026-11-04 */ mesh: 'liner',
+    meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 625000, /* 420,000 before 2026-11-04 */ mesh: 'liner',
              dryMass: 260, thrustKN: 4600, thrusterCap: 40, fuelCap: 90,
              cargoCap: 120, hullMax: 300,
              slots: { hardpoint: 2, utility: 6, internal: 8 },
@@ -1397,7 +1397,7 @@
                'size: a shipyard, a highport, a fleet carrier. Built to ' +
                'order and never sold off a floor. Ideal for passenger work ' +
                'on the settled runs, at a scale nothing smaller can touch.' },
-    leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 780000, /* 600,000 before 2026-11-04 */ mesh: 'bulk',
+    leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 975000, /* 600,000 before 2026-11-04 */ mesh: 'bulk',
              dryMass: 420, thrustKN: 9000, thrusterCap: 50, fuelCap: 280,
              cargoCap: 900, hullMax: 420,
              slots: { hardpoint: 2, utility: 6, internal: 8 },
@@ -1412,7 +1412,7 @@
                'beyond anything else you can buy; she docks only at ' +
                'shipyards, highports and fleet carriers. Built to order. ' +
                'Ideal for supplying your own holdings, or a market, alone.' },
-    capital: { id: 'capital', size: 'XL', name: 'Capital Ship', price: 4500000, mesh: 'capital',
+    capital: { id: 'capital', size: 'XL', name: 'Capital Ship', price: 5625000, mesh: 'capital',
              dryMass: 900, thrustKN: 14000, thrusterCap: 80, fuelCap: 250,
              cargoCap: 200, hullMax: 1500,
              slots: { hardpoint: 8, utility: 8, internal: 10, capital: 2 },
@@ -1439,7 +1439,7 @@
      * cubes as freight, and construction.js shrinks it by the cubes crates
      * take. About 478 m long (Astra's 2026-10-20 re-export) — the biggest hull in the game — so XL and
      * commission-only. Price and stats are Claude's first numbers. */
-    crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 560000, /* 450,000 before 2026-11-04 */ mesh: 'crawler',
+    crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 700000, /* 450,000 before 2026-11-04 */ mesh: 'crawler',
              dryMass: 640, thrustKN: 9500, thrusterCap: 60, fuelCap: 300,
              cargoCap: 600, hullMax: 520,
              slots: { hardpoint: 1, utility: 6, internal: 6 },
@@ -1476,7 +1476,7 @@
      *
      * Stats are Claude's first numbers, held to the same two rules as every
      * hull above (laden range, and thrust to leave the heaviest pad). */
-    heavytug: { id: 'heavytug', size: 'M', name: 'Hawser Heavy Tug', price: 66000, mesh: 'tug_heavy',
+    heavytug: { id: 'heavytug', size: 'M', name: 'Hawser Heavy Tug', price: 83000, mesh: 'tug_heavy',
              dryMass: 75, thrustKN: 2300, thrusterCap: 26, fuelCap: 30,
              cargoCap: 30, hullMax: 220,
              slots: { hardpoint: 1, utility: 4, internal: 3 },
@@ -1492,7 +1492,7 @@
                'close on whatever you are towing. The plating is the ' +
                'thickest of any civilian M hull. Ideal for salvage, ' +
                'heavy towing and station building.' },
-    heavyshuttle: { id: 'heavyshuttle', size: 'M', name: 'Heron Heavy Shuttle', price: 60000, mesh: 'shuttle_heavy',
+    heavyshuttle: { id: 'heavyshuttle', size: 'M', name: 'Heron Heavy Shuttle', price: 75000, mesh: 'shuttle_heavy',
              dryMass: 40, thrustKN: 1900, thrusterCap: 12, fuelCap: 26,
              cargoCap: 80, hullMax: 90,
              /* Unarmed, like every shuttle: the one class that flies without
@@ -1508,7 +1508,7 @@
                'cheap to run. Builders ferry station crates down to surface ' +
                'sites in her. Ideal for ground work, crew rotations and ' +
                'short heavy hops.' },
-    trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 110000, /* 72,000 before 2026-11-04 */ mesh: 'trade',
+    trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 138000, /* 72,000 before 2026-11-04 */ mesh: 'trade',
              dryMass: 60, thrustKN: 4200, thrusterCap: 18, fuelCap: 40,
              cargoCap: 110, hullMax: 120,
              slots: { hardpoint: 2, utility: 3, internal: 4 },
@@ -1522,7 +1522,7 @@
                'in one port. Ardwick builds her the way they build the ' +
                'Talon: nothing clever, nothing a dockside mechanic has not ' +
                'seen. Ideal for a trader outgrowing courier work.' },
-    runner: { id: 'runner', size: 'M', name: 'Corsair Runner', price: 68000, mesh: 'pirate',
+    runner: { id: 'runner', size: 'M', name: 'Corsair Runner', price: 85000, mesh: 'pirate',
              dryMass: 34, thrustKN: 3600, thrusterCap: 15, fuelCap: 30,
              cargoCap: 40, hullMax: 85,
              slots: { hardpoint: 3, utility: 2, internal: 2 },
@@ -1538,7 +1538,7 @@
                'not engine or gun, sold out of the back of yards in ports ' +
                'where the law can be bought. The armour is thin. Ideal for ' +
                'a captain who wants to arrive first, and leave first.' },
-    enforcer: { id: 'enforcer', size: 'M', name: 'Syndicate Enforcer', price: 110000, mesh: 'enforcer',
+    enforcer: { id: 'enforcer', size: 'M', name: 'Syndicate Enforcer', price: 138000, mesh: 'enforcer',
              dryMass: 45, thrustKN: 3900, thrusterCap: 16, fuelCap: 32,
              cargoCap: 30, hullMax: 140,
              slots: { hardpoint: 3, utility: 3, internal: 3 },
@@ -1553,7 +1553,7 @@
                'ports it holds, and only to captains it already counts as ' +
                'friends. Ideal for anyone who works for the Syndicate, or ' +
                'wants to be mistaken for someone who does.' },
-    enforcerheavy: { id: 'enforcerheavy', size: 'M', name: 'Syndicate Heavy', price: 175000, mesh: 'enforcer_heavy',
+    enforcerheavy: { id: 'enforcerheavy', size: 'M', name: 'Syndicate Heavy', price: 220000, mesh: 'enforcer_heavy',
              dryMass: 70, thrustKN: 4600, thrusterCap: 20, fuelCap: 40,
              cargoCap: 30, hullMax: 240,
              slots: { hardpoint: 4, utility: 3, internal: 4 },
@@ -1568,7 +1568,7 @@
                'Syndicate keeps her for its own: only a captain it trusts ' +
                'as one of its own can buy one. Ideal for the work the ' +
                'enforcer is too light for.' },
-    fighter: { id: 'fighter', size: 'S', name: 'Lance Fighter', price: 48000, mesh: 'lance',
+    fighter: { id: 'fighter', size: 'S', name: 'Lance Fighter', price: 60000, mesh: 'lance',
              dryMass: 18, thrustKN: 2200, thrusterCap: 10, fuelCap: 14,
              cargoCap: 4, hullMax: 60,
              slots: { hardpoint: 2, utility: 2, internal: 1 },
@@ -1583,7 +1583,7 @@
                'room for anything else. A navy builds one for a captain it ' +
                'already counts as an ally. Ideal for escort work and for ' +
                'pilots who fly for the joy of it.' },
-    carrier: { id: 'carrier', size: 'XL', name: 'Fleet Carrier', price: 18000000, mesh: 'carrier',
+    carrier: { id: 'carrier', size: 'XL', name: 'Fleet Carrier', price: 22500000, mesh: 'carrier',
              dryMass: 3000, thrustKN: 12000, thrusterCap: 120, fuelCap: 1100,
              cargoCap: 2000, hullMax: 4000,
              slots: { hardpoint: 10, utility: 10, internal: 14, capital: 2 },

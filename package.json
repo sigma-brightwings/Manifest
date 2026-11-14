@@ -1,8 +1,8 @@
 {
   "name": "manifest",
   "productName": "Manifest",
-  "version": "1.4.0",
-  "releaseName": "Dodecahedron",
+  "version": "1.5.0",
+  "releaseName": "Icosahedron",
   "_comment_release": "Every release is named as well as numbered (pigeons from the rescue). src/release.js repeats both for the game, which cannot read this file; test/release.test.js fails if they drift. Bump all three together, and give the release its section in CHANGELOG.md.",
   "description": "Gravity, clockwork, cockpit and cargo.",
   "private": true,

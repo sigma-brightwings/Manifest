@@ -231,6 +231,37 @@
     tugM:    { name: 'Heavy tug',     size: 'M', hull: 'heavytug', price: 66000, unpack: 2.25, ferry: 0,
                blurb: 'Half again a Bollard\'s rate for half again its price, on the pad an S tug would otherwise be loafing on.' }
   };
+  /* ---- ONE COPY OF THE PRICE ---------------------------------------------
+   *
+   * A craft IS a hull you can also fly, so its price is that hull’s price.
+   * It used to be typed out a second time in the table above, with
+   * test/construction.test.js standing guard over the two copies — and on
+   * 2026-11-13, when every hull was repriced, the guard duly went off: four
+   * craft were still quoting the old numbers.
+   *
+   * The test did its job, but a fact that needs a guard is a fact stored in
+   * the wrong number of places. The price now RESOLVES FROM Combat.HULLS
+   * when it is read, so the two cannot disagree. Lazily, because
+   * construction.js is loaded after combat.js in the browser but a test may
+   * require either first; reading at access time means the answer is right
+   * whenever it is asked for.
+   *
+   * `size` is left written out. It did not drift, and a craft’s size is a
+   * fact about which PAD it occupies in the Crawler’s bay rather than about
+   * the hull — the test still checks the two agree, which is the right
+   * relationship for a number that is genuinely its own. */
+  Object.keys(CRAFT).forEach(function (k) {
+    var hullId = CRAFT[k].hull;
+    delete CRAFT[k].price;
+    Object.defineProperty(CRAFT[k], 'price', {
+      enumerable: true,
+      get: function () {
+        var H = global.Combat && global.Combat.HULLS;
+        return (H && H[hullId]) ? H[hullId].price : 0;
+      }
+    });
+  });
+
   /* Which pad each craft sits on, or null if the list doesn't fit: M craft
    * on the M pad, S craft on the S pads first, then the M pad. */
   function padsFor(craft) {

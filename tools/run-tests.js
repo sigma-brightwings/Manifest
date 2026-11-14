@@ -87,7 +87,7 @@ var GROUPS = {
     'test/growth.test.js', 'test/construction.test.js', 'test/stations.test.js',
     'test/city-sites.test.js', 'test/upkeep.test.js', 'test/parcel.test.js',
     'test/tradeanalyser.test.js', 'test/tradingfirm.test.js',
-    'test/catalogue.test.js'
+    'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
     'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',

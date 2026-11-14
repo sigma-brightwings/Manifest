@@ -2,14 +2,20 @@
  *
  * EVERY RELEASE HAS A NAME AS WELL AS A NUMBER (Astra, 2026-10-15: "why
  * don't we give each release its own name, instead of just a number. Like
- * linux distros."). The names are pigeons from the rescue, in no fixed
- * order -- the name says what a build meant, the number says where it sits.
+ * linux distros."). The name says what a build meant, the number says
+ * where it sits.
  *
- * 1.4 IS NOT A PIGEON, and that is allowed (Astra, 2026-11-13: "a break
- * from the bird names; but that's okay"). The convention is a convention,
- * not a rule, and "Dodecahedron" says what the build meant better than any
- * bird would have: it is the release where the galaxy stopped being a
- * sheet of paper and became a solid.
+ * THE NAMES ARE POLYTOPES (Astra, 2026-11-14: "our new naming convention
+ * is polytopes"). They were pigeons from the rescue up to 1.3.1
+ * "Clementine"; 1.4.0 "Dodecahedron" looked at the time like a one-off
+ * break from the birds, and turned out to be the start of the new series
+ * rather than an exception to the old one.
+ *
+ * It suits what the releases have become. A polytope is a thing with many
+ * faces that is nonetheless one solid, which is a fair description of
+ * where the game is: 1.4 was the release that gave the galaxy its third
+ * dimension, and 1.5 is the one that put every face of it in a reference
+ * a player can read.
  *
  * THE NUMBER STILL DOES THE WORK. electron-builder's latest.yml and the
  * save checks compare versions, and a word does not sort. So the name rides
@@ -24,10 +30,10 @@
 (function (global) {
   var Release = {
     /* Three parts because electron-builder's latest.yml sorts on semver
-     * and "1.4" does not parse as one. 1.4.0 IS v1.4. */
-    version: '1.4.0',
-    name: 'Dodecahedron',
-    /* 'Manifest 1.4.0 "Dodecahedron"' -- the one way it is written out. */
+     * and a two-part number does not parse as one. */
+    version: '1.5.0',
+    name: 'Icosahedron',
+    /* 'Manifest 1.5.0 "Icosahedron"' -- the one way it is written out. */
     label: function () { return 'Manifest ' + Release.version + ' \u201c' + Release.name + '\u201d'; }
   };
   if (typeof document !== 'undefined' && document.title) document.title = Release.label();
