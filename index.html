@@ -75,7 +75,15 @@
 <script src="src/kepler.js"></script>
 <script src="src/rings.js"></script>
 <script src="src/survey.js"></script>
+<!-- Weighing a world from the inside (2026-11-12): the gravimeter's
+     planar slice. After survey.js, whose ground map and hashes it reads. -->
+<script src="src/gravity.js"></script>
 <script src="src/claims.js"></script>
+    <!-- THE CARTOGRAPHERS (2026-11-13): the second buyer for one survey
+         flight - the sheet rather than the assay. After survey.js, whose
+         records and deposits it prices, and galaxy.js, whose control and
+         capital distances tell it how charted a place already is. -->
+    <script src="src/charts.js"></script>
 <script src="src/wars.js"></script>
 <script src="src/mining.js"></script>
 <script src="src/economy.js"></script>
@@ -93,6 +101,10 @@
 <!-- The people aboard. Before fleet.js, which asks whether a parked
      ship has anyone on it. -->
 <script src="src/crew.js"></script>
+<!-- Somebody out on the hull (2026-11-13): EVA repairs, the oxygen
+     candle, and what it costs to burn with them unclipped. After
+     crew.js, whose records it moves between the ship and the dark. -->
+<script src="src/outside.js"></script>
 <script src="src/fleet.js"></script>
 <script src="src/construction.js"></script>
 <script src="src/dressing.js"></script>
@@ -173,6 +185,10 @@
      item card, and the guns hung on every hull. Optional: without it the
      card shows a wireframe and the guns are left off. -->
 <script src="src/itemmodels.js"></script>
+<!-- The catalogue page (2026-11-12): every purchasable thing, read from
+     the live tables. After combat.js, economy.js and construction.js,
+     which own those tables; before render.js, which draws the icons. -->
+<script src="src/catalogue.js"></script>
 <script src="src/render.js"></script>
 <!-- The weather field, on the CPU. Before gl.js, which reads its own
      shader constants out of it so the picture and the forecast cannot

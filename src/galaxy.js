@@ -68,7 +68,24 @@
   var MAX_HOP_LY = 8.8;          // no star further than this from its nearest neighbour
   var BORDER_GAP_LY = 4;         // no empire claims a star this close to another empire's
   var RIM_CAPITAL = 0.8;         // the other empires' capitals, this far out of the disc's reach
-  var CLUSTER_THICKNESS = 7;     // ly, half-height — a squashed disc, not a ball
+  /* THE DISC GOT THICKER (2026-11-13, Astra’s call: "very well with 18").
+   *
+   * It was 7 ly of half-height against a 72.75 ly radius — an aspect ratio
+   * of about 10:1, which is a sheet of paper rather than a cluster. Every
+   * star has always had a z and the chart threw it away, so nothing in the
+   * game ever asked whether the third axis was worth having; the moment the
+   * chart could be turned it was plain there was nothing out there to see.
+   *
+   * Swept over seven values. At 18 the cluster reads 4.1:1, two stars in
+   * three have a genuinely three-dimensional nearest neighbour rather than
+   * a flat-projection one, and the median jump is 36% longer — which is
+   * the cost of the decision and the reason it is one.
+   *
+   * THIS REBUILDS THE GALAXY. Every seed grows a different arrangement of
+   * stars, because the separation rejection and the max-hop nudge both read
+   * positions, so old saves and fingerprints do not survive it. Astra
+   * approved that explicitly before it was applied. */
+  var CLUSTER_THICKNESS = 18;    // ly, half-height — a squashed disc, not a ball
   var MIN_SEPARATION = 1.1;      // ly; two stars closer than this are one star
 
   /* Jump economics.
@@ -90,6 +107,10 @@
     opts = opts || {};
     var count = opts.count || DEFAULT_STARS;
     var radius = opts.radius || CLUSTER_RADIUS;
+    /* Overridable so a tool can sweep the shape of the cluster without
+     * editing the file and rebuilding (Claude outputs/fit-thickness.cjs).
+     * Defaults to the constant, so nothing moves unless somebody asks. */
+    var thickness = opts.thickness || CLUSTER_THICKNESS;
     var rng = new RNG('galaxy|' + rootSeed);
 
     var stars = [];
@@ -107,8 +128,8 @@
        * read as a cluster with an interior rather than a scatter plot. */
       var r = radius * Math.pow(rng.next(), 0.62);
       var th = rng.angle();
-      var z = rng.gauss(0, CLUSTER_THICKNESS * 0.45);
-      if (Math.abs(z) > CLUSTER_THICKNESS) z = rng.range(-CLUSTER_THICKNESS, CLUSTER_THICKNESS);
+      var z = rng.gauss(0, thickness * 0.45);
+      if (Math.abs(z) > thickness) z = rng.range(-thickness, thickness);
       var x = r * Math.cos(th), y = r * Math.sin(th);
 
       var tooClose = false;

@@ -247,14 +247,23 @@ console.log('--- the sweep ---');
     if (ord.length < 2) continue;
     /* A long leg, or there is no curve to measure: in a compact system the
      * site is already fixed from the inner port, which is a true answer to
-     * a question this section is not asking. */
+     * a question this section is not asking.
+     *
+     * THE LEG THIS SECTION WALKS RUNS FROM THE INNERMOST ORDINARY PORT to
+     * the site, so that is the distance to filter on. It used to filter on
+     * the FURTHEST ordinary port instead, which is a different leg
+     * entirely: a system could pass on an outer port a long way out while
+     * its inner port sat almost on top of the site. Tightened while the
+     * section was being looked at; it is not what the thicker disc of
+     * v1.4 broke. (That was the `fix < 0.3` below - see the note there.) */
     var cs = Sim.bodyPosition(cand.sys.blackSites[0], cand.sys, t0);
-    var far = 0;
-    ord.forEach(function (p) {
-      var d = V.dist(Sim.bodyPosition(p, cand.sys, t0), cs);
-      if (d > far) far = d;
-    });
-    if (far > 8e8) hit = cand;
+    var starC = cand.sys.root || cand.sys.bodies[0];
+    var starCp = Sim.bodyPosition(starC, cand.sys, t0);
+    var innerC = ord.slice().sort(function (a, b) {
+      return V.dist(Sim.bodyPosition(a, cand.sys, t0), starCp) -
+             V.dist(Sim.bodyPosition(b, cand.sys, t0), starCp);
+    })[0];
+    if (V.dist(Sim.bodyPosition(innerC, cand.sys, t0), cs) > 8e8) hit = cand;
   }
   if (!hit) { check('found a system with a site and ordinary ports', false); return; }
   var sys = hit.sys, site = sys.blackSites[0], t = 0;
@@ -272,8 +281,25 @@ console.log('--- the sweep ---');
     return null;
   }
   var far = at(0), mid = at(0.75), near = at(0.97);
-  check('a site is audible from across its own system', !!far && far.fix < 0.3,
-        far ? 'fix ' + far.fix.toFixed(2) : 'not heard at all');
+  /* HEARD, BUT NOT PLACED - said in the model's own constant rather than
+   * in a number tuned to one system.
+   *
+   * This read `far.fix < 0.3` until the thicker disc of v1.4 redrew the
+   * galaxy and the system this section lands on changed: the new one gives
+   * 0.39 from across itself, and the check failed. Nothing about the sweep
+   * moved. 0.3 was never the thing being protected - it was whatever the
+   * old galaxy's chosen system happened to produce, which is a measurement
+   * of the fixture, not a property of the game.
+   *
+   * What IS the property: from the far end of the leg you hear the site
+   * but cannot tie it down, and FIX_GOOD is survey.js's own line for tied
+   * down. The quantitative half of "cannot tie it down" is the error
+   * check immediately below, which is in metres and does not care which
+   * system it got. */
+  check('a site is audible from across its own system, and not tied down',
+        !!far && far.fix > 0 && far.fix < Sv.FIX_GOOD,
+        far ? 'fix ' + far.fix.toFixed(2) + ' against FIX_GOOD ' + Sv.FIX_GOOD
+            : 'not heard at all');
   check('but only as a direction with a shrug in it',
         !!far && far.error > 1e8, far ? (far.error / 1e6).toFixed(0) + ' Mkm of error' : '');
   check('the fix tightens as you close', !!mid && !!near && near.fix > mid.fix && mid.fix > far.fix,

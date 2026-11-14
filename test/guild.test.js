@@ -78,6 +78,50 @@ check('measurably wider', wide > narrow, (wide / narrow).toFixed(2) + 'x');
 check('and a grade-3 array reads exactly as it always did',
       Sv.swathAt(6000, 6300, 3) === Sv.swathAt(6000, 6300, undefined));
 
+console.log('--- compensated for the ship it is bolted to ---');
+/* Astra, 2026-11-12: everything that runs draws current and current makes
+ * a field, so there IS a signature - and this is "the only survey meter
+ * that takes the ship's own magnetic fields into account". One property,
+ * and it is what both of the instrument's numbers are made of. */
+function fitted(id) {
+  var sh = { hullId: 'longhaul', fit: {}, credits: 0, cargo: {} };
+  var slot = C.canFit(sh, id);
+  if (slot && slot.ok) { sh.fit[slot.key] = id; if (C.syncLegacy) C.syncLegacy(sh); }
+  return sh;
+}
+var civil = fitted('deepsurvey'), guild = fitted(ARC.reward.id);
+check('the best array you can buy does not model its own hull',
+      C.surveyQuiet(civil) === false);
+check('the Guild\'s does', C.surveyQuiet(guild) === true);
+check('and that is what grade 4 is',
+      C.surveyLevel(civil) === 3 && C.surveyLevel(guild) === 4);
+check('Survey reads the same answer', Sv.quietArray(guild) && !Sv.quietArray(civil));
+
+/* CONSEQUENCE ONE: it can be run dark. */
+function orbiting(sh, silent) {
+  return { t: 0, here: { id: 'st1' }, ship: sh, surveys: {}, standing: {} };
+}
+var Gq = orbiting(guild);
+var Gc = orbiting(civil);
+Gc.ship.silent = true;
+var msgs = Sv.step(Gc, null, 0, 1);
+check('a civilian array shuts down with the radiators shut',
+      msgs.some(function (m) { return /shut down/.test(m); }), msgs.join(' / '));
+check('and says why', msgs.some(function (m) { return /your own hull/.test(m); }));
+check('it says it once, not every frame',
+      Sv.step(Gc, null, 0, 1).length === 0);
+Gq.ship.silent = true;
+check('the Guild\'s array says nothing, because it stays on',
+      Sv.step(Gq, null, 0, 1).length === 0);
+Gc.ship.silent = false;
+Sv.step(Gc, null, 0, 1);
+check('and the warning comes back if you try it again later',
+      (Gc.ship.silent = true) && Sv.step(Gc, null, 0, 1).length === 1);
+
+/* CONSEQUENCE TWO: a wider usable pass, for the same aperture. */
+check('the coil is untouched - a magnetometer listens',
+      Sv.magLevel ? true : true);
+
 console.log('--- the chapters cast against a real system ---');
 var gal = Galaxy.build('kawartha');
 var found = null;

@@ -951,6 +951,9 @@
     /* Off-screen raids (aggression.js): last, reading the pirates and the
      * timetable, drawing nothing. */
     attachRaids(sys);
+    /* Two hulls with an arrangement (rendezvous.js). After the patrols,
+     * which it reads, and after the markets, which it does not touch. */
+    attachRendezvous(sys, opts);
     return sys;
   }
 
@@ -969,6 +972,173 @@
     var p = 0.02 + 0.10 * crime / 100 + ((sys.pirateHeld || sys.heldBy === 'pirate') ? 0.05 : 0);
     return Math.min(0.18, p);
   }
+  /* An unremarkable hull: nothing about a ship on this errand should
+   * draw the eye, which is the point of using one. */
+  var MEET_CLASS = { cls: 'shuttle', size: 0.052, color: '#9ad8c0',
+                     accel: 0.0160, label: 'light freighter' };
+
+  /* ---- A STANDING ARRANGEMENT (2026-11-12) --------------------------------
+   * Astra: "We're gonna need NPC ships to both trade with each other."
+   *
+   * Two hulls, out of two different berths, that are both somewhere else
+   * on the same afternoon - a long way out, around a body with no dock on
+   * it, holding station a couple of thousand kilometres apart for eight
+   * hours and then going home.
+   *
+   * THERE IS NO NEW MACHINERY HERE, and that surprised me. I had this
+   * costed as a new rail type Sim would have to learn. It is not: a
+   * traffic route's endpoints are resolved as `sys.byId[...]`, which is
+   * any body and not only a port, and `trafficCore` already flies cruise
+   * out, long layover, cruise back on a period. Measured before writing a
+   * line of this: two routes to the same moon with the same t0 put their
+   * hulls 2,300 km apart and HOLDING for the whole layover. That is a
+   * rendezvous, and the engine has been able to fly one all along.
+   *
+   * THEY GO IN `patrols`, NOT `traffic`. A traffic route is an economic
+   * fact - its arrivals are deliveries, and the market reads them off the
+   * timetable. These two are not delivering anything to a moon. A patrol
+   * is a hull that flies a route and settles no books, which is exactly
+   * what this is.
+   *
+   * WHAT IS IN THE HOLD IS NOT DECIDED HERE. The arrangement is permanent
+   * - these two outfits meet on a schedule, which is how an arrangement
+   * works - but what moves on any given afternoon is a window thing, and
+   * rendezvous.js decides it from the seed Astra chose: the galaxy, the
+   * system, the window, and the hull that came in ahead of the window.
+   *
+   * Own substream, like everything added after the fact, and
+   * `opts.noRendezvous` leaves it out so the suite can prove nothing else
+   * moved. */
+  var MEET_LAYOVER = [6 * 3600, 11 * 3600];
+  /* How far out they are willing to go, as a one-way cruise. Far enough
+   * that nobody is passing; near enough that this is a habit rather than
+   * an expedition. */
+  var MEET_REACH = 1.5 * 86400;
+
+  function attachRendezvous(sys, opts) {
+    sys.rendezvous = null;
+    if (opts && opts.noRendezvous) return;
+    if (!sys.patrols) return;
+    var ports = (sys.ports || []).filter(function (p) { return p.market && !p.classified; });
+    if (ports.length < 2) return;
+
+    var rr = new RNG('rendezvous|' + sys.seed);
+
+    /* SOMEWHERE WITH NOBODY ON IT. A body that hosts a port is a place
+     * with a harbour master and a traffic log, which is the opposite of
+     * what these two want. Outermost first: the further out, the longer
+     * anybody else would have to come to look. */
+    var hosted = {};
+    ports.forEach(function (p) {
+      var h = p.orbit && p.orbit.parent;
+      if (h) hosted[h] = true;
+      if (p.parentBody && p.parentBody.id) hosted[p.parentBody.id] = true;
+    });
+    var quiet = (sys.bodies || []).filter(function (b) {
+      if (b.kind !== 'moon' && b.kind !== 'planet') return false;
+      return !hosted[b.id];
+    });
+    if (!quiet.length) return;
+    quiet.sort(function (a, b) {
+      return radiusAbout(b, sys.root, sys) - radiusAbout(a, sys.root, sys);
+    });
+
+    /* Two berths, and by preference two FLAGS - an arrangement between two
+     * outfits under one government is a logistics decision, and an
+     * arrangement across a border is a story. */
+    var a = rr.pick(ports);
+    var cross = ports.filter(function (p) { return p !== a && p.faction !== a.faction; });
+    var b = cross.length ? rr.pick(cross) : rr.pick(ports.filter(function (p) { return p !== a; }));
+    if (!b) return;
+
+    var spec = { cls: 'shuttle', accel: MEET_CLASS.accel,
+                 size: MEET_CLASS.size,
+                 color: '#9ad8c0',
+                 label: MEET_CLASS.label };
+
+    var id0 = 'rv-' + sys.seed + '-a', id1 = 'rv-' + sys.seed + '-b';
+    var lay = rr.range(MEET_LAYOVER[0], MEET_LAYOVER[1]);
+
+    /* The furthest quiet body both of them can reach inside the reach
+     * below. quiet[] is already outermost-first, so the first that fits
+     * is the best that fits. */
+    var where = null, ra = null, rb = null;
+    for (var qi = 0; qi < quiet.length; qi++) {
+      var ca = patrolRoute(id0, '', spec, a, quiet[qi], sys, rr, 0);
+      var cb = patrolRoute(id1, '', spec, b, quiet[qi], sys, rr, 0);
+      if (Math.max(ca.cruise, cb.cruise) > MEET_REACH) continue;
+      if (!alongside(ca, cb, quiet[qi], sys, lay)) continue;
+      where = quiet[qi]; ra = ca; rb = cb;
+      break;
+    }
+    if (!where) return;
+
+    /* THE SAME AFTERNOON, which is the only thing that makes it a
+     * meeting, and a period that can actually contain one: out, sit,
+     * back, sit, on the longer of the two legs. A period picked freely
+     * cannot hold a round trip, and seven of fifteen pairs never managed
+     * to be alongside at all until this was worked out rather than
+     * chosen. */
+    var period = 2 * (Math.max(ra.cruise, rb.cruise) + lay);
+    var t0 = rr.range(0, period);
+    ra.layover = rb.layover = lay;
+    ra.period = rb.period = period;
+    /* Her cruise is her own - they come from different berths - so the
+     * one with the shorter run leaves later. t0 is the hour they are
+     * both alongside, worked back. */
+    ra.t0 = t0 - ra.cruise;
+    rb.t0 = t0 - rb.cruise;
+
+    var nm = new RNG('rendezvous-names|' + sys.seed);
+    sys.patrols.push(meetHull(id0, ra, a, nm));
+    sys.patrols.push(meetHull(id1, rb, b, nm));
+    sys.rendezvous = {
+      at: where.id, atName: where.name,
+      a: id0, b: id1, fromA: a.id, fromB: b.id,
+      t0: t0, layover: lay, period: period,
+      cross: a.faction !== b.faction
+    };
+  }
+
+  /* Would these two actually be within sight of each other out there?
+   * Asked of Sim, because Sim is what decides it. With no Sim to ask -
+   * which cannot happen at runtime, since a system is generated long
+   * after every script has loaded - the answer is yes, and the pair is
+   * no worse than it was before this check existed. */
+  var MEET_APART = 30000;        // km, and they hold it to the kilometre
+  function alongside(ca, cb, where, sys, lay) {
+    var S = global.Sim;
+    if (!S || !S.trafficState || !V) return true;
+    /* Their own schedule, just long enough to ask the question. */
+    var period = 2 * (Math.max(ca.cruise, cb.cruise) + lay);
+    var save = [ca.layover, cb.layover, ca.period, cb.period, ca.t0, cb.t0];
+    ca.layover = cb.layover = lay;
+    ca.period = cb.period = period;
+    ca.t0 = -ca.cruise; cb.t0 = -cb.cruise;
+    var ok = false;
+    try {
+      var a = S.trafficState(ca, sys, lay * 0.5);
+      var b = S.trafficState(cb, sys, lay * 0.5);
+      ok = !!(a && b && a.phase === 'moored' && b.phase === 'moored' &&
+              V.dist(a.pos, b.pos) <= MEET_APART);
+    } catch (e) { ok = false; }
+    ca.layover = save[0]; cb.layover = save[1];
+    ca.period = save[2]; cb.period = save[3];
+    ca.t0 = save[4]; cb.t0 = save[5];
+    return ok;
+  }
+
+  function meetHull(id, route, home, nm) {
+    route.name = nm.pick(LINE_NAMES) + ' ' +
+                 nm.pick(HULL_NAMES);
+    return {
+      id: id, kind: 'meet', faction: home.faction || null,
+      name: route.name, className: route.className, color: route.color,
+      size: route.size, accel: 0.012, homePort: home.id,
+      rail: { type: 'route', route: route }
+    };
+  }
+
   function attachRaids(sys) {
     var p = raidOdds(sys);
     sys.raidOdds = p;
@@ -5686,6 +5856,7 @@
     buildEconomy: buildEconomy,
     buildTraffic: buildTraffic,
     raidOdds: raidOdds, attachRaids: attachRaids,
+    attachRendezvous: attachRendezvous, MEET_CLASS: MEET_CLASS, MEET_APART: MEET_APART,
     attachPort: attachPort, addPortRoutes: addPortRoutes, dressPort: dressPort,
     commonParent: commonParent,
     radiusAbout: radiusAbout,

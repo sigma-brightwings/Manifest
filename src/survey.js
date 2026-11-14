@@ -213,6 +213,68 @@
   var GROUND_CACHE = new WeakMap();
   var ORE_FLOOR = 0.12, RARE_FLOOR = 0.03, FISSILE_FLOOR = 0.02, DAMP_FLOOR = 0.08;
 
+  /* ---- HOW DEEP IT IS (2026-11-12) ---------------------------------------
+   * A radius fraction: 1.0 is the surface, 0 the centre. Three bands, and
+   * which band a body is in decides who can ever have it:
+   *
+   *   SHALLOW  0.93-0.99  a drone or a pair of hands can reach it. Every
+   *                       province that shows on the surface map is here,
+   *                       because something is already mining it.
+   *   MID      0.85-0.93  a drilling team's job (see
+   *                       claude/drilling-and-ground-ports.md). Reads on a
+   *                       gravimeter; nothing else can see it.
+   *   DEEP     0.60-0.85  visible as mass and nothing more. Not reachable
+   *                       by anything in the game, and meant not to be.
+   *
+   * The deep population is seeded off its own substream ('grav'), so adding
+   * it moves no province, no port, no latitude and no ore. */
+  /* Overburden, in km: what you would have to get through to reach it. */
+  var COVER_SHALLOW = [0.2, 4], COVER_MID = [4, 30], COVER_DEEP = [30, 300];
+  var BAND_REACH = { shallow: 'drone', mid: 'drill', deep: 'none' };
+
+  function bandOf(coverKm) {
+    if (coverKm <= COVER_SHALLOW[1]) return 'shallow';
+    return coverKm <= COVER_MID[1] ? 'mid' : 'deep';
+  }
+  function spanAt(span, h) { return span[0] + (span[1] - span[0]) * h; }
+
+  /* Mass concentrations with NO surface expression - the gravimeter's own
+   * quarry. Nought to three per world, each with its own rare-metal share,
+   * and a size in radius fractions rather than an angle, because a buried
+   * body is a lump rather than a patch of ground. */
+  function deepBodies(body, sys, tag) {
+    if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return [];
+    var gt = tag + 'grav:';
+    var n = Math.floor(hash01(gt + 'n') * 3.6);          // 0..3, 0 about 28% of the time
+    var R = body.radius || 1;
+    var out = [];
+    for (var i = 0; i < n; i++) {
+      var bt = gt + 'b' + i + ':';
+      var c = sphereDir(bt + 'c');
+      /* Two in three are drillable; the rest are the ones that hurt. A deep
+       * body on a small moon is capped so it stays inside the moon. */
+      var hb = hash01(bt + 'band');
+      var cover = hb < 0.66 ? spanAt(COVER_MID, hash01(bt + 'dm'))
+                            : spanAt(COVER_DEEP, hash01(bt + 'dd'));
+      cover = Math.min(cover, 0.30 * R);
+      var radKm = 4 + 45 * hash01(bt + 'rad');
+      var share = hash01(bt + 'share');
+      out.push({ c: c, cover: cover, band: bandOf(cover),
+                 radKm: radKm,
+                 /* Depth to the body's CENTRE - what the field falls off
+                  * with - and the same as a radius fraction, for the slice. */
+                 zKm: cover + radKm,
+                 d: Math.max(0.05, 1 - (cover + radKm) / R),
+                 /* How much denser than the rock around it. Iron runs about
+                  * 7.9, the platinum group past 21, so a rare-rich body
+                  * pulls harder for its size - which is what makes an
+                  * unexplained anomaly worth the trip. */
+                 w: 0.35 + 0.65 * hash01(bt + 'w'),
+                 share: share * share });
+    }
+    return out;
+  }
+
   function sphereDir(tag) {
     var z = 2 * hash01(tag + 'z') - 1, a = 2 * Math.PI * hash01(tag + 'a');
     var s = Math.sqrt(Math.max(0, 1 - z * z));
@@ -365,7 +427,12 @@
       var fullDry = !headOnLand && j === metalHeads.length && landCells.length > 0;
       prov.push({ c: c, r: 0.16 + 0.38 * hash01(pt + 'r'),
                   w: (j === 0 || isHead || fullDry) ? 1 : 0.45 + 0.5 * hash01(pt + 'w'),
-                  share: share });
+                  share: share,
+                  /* Shallow by construction: it shows on the surface map, so
+                   * it outcrops. A mine's own province is shallowest of all -
+                   * somebody is standing on it. */
+                  cover: isHead ? COVER_SHALLOW[0]
+                                : spanAt(COVER_SHALLOW, hash01(pt + 'depth')) });
     }
     if (g.ores) {
       var of = bumps(prov, ORE_FLOOR);
@@ -376,8 +443,30 @@
                      RARE_FLOOR);
       out.grade.rare = scaleBy(rf, g.rare, terr, 0.75);
     }
-    out.provinces = prov.map(function (p) { return { lat: Math.asin(p.c[2]), lon: Math.atan2(p.c[1], p.c[0]),
-                                                     r: p.r, share: p.share }; });
+    var RK = body.radius || 1;
+    out.provinces = prov.map(function (p) {
+      /* AN ORE PROVINCE IS NOT A BALL OF METAL. The patch can be continental
+       * - 0.16 to 0.54 radians is 1,500 to 5,200 km on a big world - but the
+       * ore in it is dispersed through a few kilometres of crust, not welded
+       * into a sphere the width of the patch. Sizing the lump off the patch
+       * put "1,157 km across" on the readout and made every province
+       * outshout the buried bodies the instrument exists to find. So: an
+       * ore-body scale, a little larger in a larger province, capped. */
+      var radKm = Math.max(2, Math.min(25, 4 + p.r * 30));
+      return { lat: Math.asin(p.c[2]), lon: Math.atan2(p.c[1], p.c[0]),
+               r: p.r, share: p.share, c: [p.c[0], p.c[1], p.c[2]], w: p.w,
+               cover: p.cover, radKm: radKm, zKm: p.cover + radKm,
+               d: Math.max(0.05, 1 - (p.cover + radKm) / RK),
+               band: bandOf(p.cover), reach: BAND_REACH[bandOf(p.cover)] };
+    });
+    /* Buried mass the surface map knows nothing about. Read by gravity.js;
+     * out.grade is deliberately untouched by it. */
+    out.deep = deepBodies(body, sys, tag).map(function (b) {
+      return { lat: Math.asin(b.c[2]), lon: Math.atan2(b.c[1], b.c[0]),
+               c: b.c, d: b.d, band: b.band, reach: BAND_REACH[b.band],
+               cover: b.cover, radKm: b.radKm, zKm: b.zKm,
+               w: b.w, share: b.share };
+    });
     /* FISSILE HOTSPOTS. */
     if (g.fissile) {
       var fisHeads = heads.filter(function (h) { return h.cid === 'fissile'; });
@@ -388,6 +477,17 @@
                     w: (k === 0 || k < fisHeads.length) ? 1 : 0.4 + 0.6 * hash01(tag + 'hot' + k + ':w') });
       }
       out.grade.fissile = scaleBy(bumps(hots, FISSILE_FLOOR), g.fissile, terr, 0.5);
+      var RH = body.radius || 1;
+      out.hotspots = hots.map(function (h, hi) {
+        var hc = hi < fisHeads.length ? COVER_SHALLOW[0]
+                                      : spanAt(COVER_SHALLOW, hash01(tag + 'hot' + hi + ':depth'));
+        var hr = Math.max(1.5, Math.min(12, 2 + h.r * 25));
+        return { lat: Math.asin(h.c[2]), lon: Math.atan2(h.c[1], h.c[0]),
+                 c: [h.c[0], h.c[1], h.c[2]], r: h.r, w: h.w,
+                 cover: hc, radKm: hr, zKm: hc + hr,
+                 d: Math.max(0.05, 1 - (hc + hr) / RH),
+                 band: bandOf(hc), reach: BAND_REACH[bandOf(hc)] };
+      });
     }
     /* WATER, where the picture has it. */
     if (g.water) {
@@ -711,15 +811,23 @@
     return C && C.surveyLevel ? C.surveyLevel(ship) : 0;
   }
 
+  /* Does the fitted array model its own ship's field (Combat.surveyQuiet)?
+   * Only the Guild's does, and it is the whole of what grade 4 means. */
+  function quietArray(ship) {
+    var C = global.Combat;
+    return !!(C && C.surveyQuiet && C.surveyQuiet(ship));
+  }
+
   /* RANGE: within three radii of a world's centre is "in orbit about it"
    * for surveying. The swath is half the angle to the horizon - wide from
    * high up, narrow down low - and never more than about 35 degrees. */
   var RANGE_R = 3.0;
-  /* GRADE 4 READS WIDER (2026-11-11). The Guild's shielded array is the
-   * only instrument above the civilian three, and what the extra buys is
-   * the one thing a surveyor actually wants: a pass that covers more
-   * ground. A third again, which over a whole world is the difference
-   * between three orbits and two. */
+  /* GRADE 4 READS WIDER (2026-11-11), and 2026-11-12 is when it got a
+   * reason. Not a bigger aperture - the same aperture, compensated for
+   * the ship's own field (Combat.surveyQuiet), so the cells nearest the
+   * edge of a pass are usable instead of being thrown away as noise.
+   * A third again, which over a whole world is the difference between
+   * three orbits and two. */
   var WIDE_GRADE = 4, WIDE_MUL = 1.33;
   function swathAt(R, rad, lvl) {
     var horizon = Math.acos(Math.max(-1, Math.min(1, R / Math.max(rad, R * 1.0001))));
@@ -744,6 +852,25 @@
   function step(G, sys, t, dt) {
     var msgs = [];
     var lvl = level(G.ship), hasMag = magLevel(G.ship);
+    /* RUNNING DARK (2026-11-12). An array that cannot account for its
+     * own hull cannot be run with the radiators shut: it is a powered
+     * instrument and the power is the part you cannot hide. The Guild's
+     * shielded array already models its own emission, so it is the one
+     * that stays on - which is what its grade 4 is for, and it needs
+     * the shroud suite before it means anything.
+     *
+     * THE MAGNETOMETER IS UNTOUCHED, and that is the point Astra was
+     * making: the coil listens. Its draw is small and it transmits
+     * nothing, so mapping a field while dark tells nobody anything. */
+    if (lvl && G.ship.silent && !quietArray(G.ship)) {
+      if (!G._surveyHush) {
+        G._surveyHush = true;
+        msgs.push('Array shut down - it cannot see past your own hull with the radiators shut');
+      }
+      lvl = 0;
+    } else if (G._surveyHush && !G.ship.silent) {
+      G._surveyHush = false;
+    }
     if ((!lvl && !hasMag) || !sys || !G.ship || G.ship.docked || G.ship.landed) { G._surveyPrev = null; return msgs; }
     var Sim = global.Sim, V = global.V;
     if (!Sim || !V) return msgs;
@@ -1250,7 +1377,7 @@
   var Survey = {
     CIDS: CIDS, NAMES: NAMES, TABLE: TABLE, LAT_BINS: LAT_BINS, LON_BINS: LON_BINS, RANGE_R: RANGE_R,
     hash01: hash01, deposits: deposits, remaining: remaining,
-    step: step, level: level, keyOf: keyOf, targetFor: targetFor,
+    step: step, level: level, quietArray: quietArray, keyOf: keyOf, targetFor: targetFor,
     cellsOf: cellsOf, coverageOf: coverageOf, packCells: packCells, markAt: markAt, spinFrame: spinFrame,
     swathAt: swathAt, WIDE_GRADE: WIDE_GRADE, WIDE_MUL: WIDE_MUL,
     value: value, saleable: saleable, sell: sell, ageFactor: ageFactor,
@@ -1264,7 +1391,9 @@
     sourceField: sourceField, sweepContacts: sweepContacts, runSweep: runSweep, foundPort: foundPort,
     guildCredit: guildCredit, GUILD_PER: GUILD_PER, GUILD_MAX_PER_SALE: GUILD_MAX_PER_SALE,
     SWEEP_SECONDS: SWEEP_SECONDS, SWEEP_POWER: SWEEP_POWER, SWEEP_FLOOR: SWEEP_FLOOR,
-    FIX_GOOD: FIX_GOOD, FIX_SPAN: FIX_SPAN, REF_KM: REF_KM
+    FIX_GOOD: FIX_GOOD, FIX_SPAN: FIX_SPAN, REF_KM: REF_KM,
+    COVER_SHALLOW: COVER_SHALLOW, COVER_MID: COVER_MID, COVER_DEEP: COVER_DEEP,
+    BAND_REACH: BAND_REACH, bandOf: bandOf, deepBodies: deepBodies
   };
   global.Survey = Survey;
   if (typeof module !== 'undefined' && module.exports) module.exports = Survey;

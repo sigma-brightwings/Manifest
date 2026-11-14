@@ -86,13 +86,33 @@ console.log('--- the fitting ---');
   Combat.fitItem(s, 'portanalyser');
   check('fitted, hasPortAnalyser says so and hasTradeAnalyser does not',
         Combat.hasPortAnalyser(s) && !Combat.hasTradeAnalyser(s));
-  /* A Talon that has put the survey array in that second slot has no room
-   * for the analyser, and has to be told why. (This was the normal trade
-   * start until 2026-11-03; Astra moved it to the analyser, checked below.) */
+  /* A Talon with every utility slot taken has no room for the analyser,
+   * and has to be told why. (The survey array was the normal trade start
+   * until 2026-11-03; Astra moved it to the analyser, checked below.)
+   *
+   * FILLED FROM THE HULL'S OWN SLOT COUNT rather than from a list written
+   * here. This check used to fit exactly three things and assume that was
+   * the lot, which was true while a Talon had two utility slots; the
+   * accessory-slot bump of 2026-11-13 gave her a third and the test failed
+   * for a reason that has nothing to do with trade analysers. What is
+   * being protected is the refusal and its wording, not the number - so
+   * the test now asks the hull how many slots there are and fills them. */
   var n = talon();
-  ['phpulse', 'tradescan', 'shield'].forEach(function (id) { Combat.fitItem(n, id); });
+  Combat.fitItem(n, 'phpulse');                     // a hardpoint, not a utility slot
+  var util = Combat.HULLS.talon.slots.utility;
+  var filler = Object.keys(Combat.EQUIPMENT).filter(function (id) {
+    return Combat.EQUIPMENT[id].slot === 'utility' && id !== 'portanalyser';
+  });
+  var packed = 0;
+  for (var fi = 0; fi < filler.length && Combat.canFit(n, 'portanalyser').ok; fi++) {
+    if (Combat.canFit(n, filler[fi]).ok) { Combat.fitItem(n, filler[fi]); packed++; }
+  }
   var fn = Combat.canFit(n, 'portanalyser');
-  check('a Talon carrying the survey array has no utility slot left, and is told so', !fn.ok && /utility/.test(fn.why), fn.why);
+  check('a Talon with every utility slot taken has no room for the analyser, and is told so',
+        !fn.ok && /utility/.test(fn.why), fn.why);
+  check('and it took filling the hull\u2019s own slot count to get there',
+        packed > 0 && packed < util + 1,
+        packed + ' fitted into ' + util + ' slots (one is the scoop she comes with)');
   /* Astra, 2026-11-03: "for trader start, it gets the analyser, mining
    * start gets the survey scanner". Both trade starts, both mining starts. */
   var St = require('../src/start.js');

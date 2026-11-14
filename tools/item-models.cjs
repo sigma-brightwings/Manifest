@@ -46,7 +46,10 @@ var OUT = path.join(ROOT, 'src', 'itemmodels.js');
 var GRID = 4;                 // a decal triangle becomes GRID*GRID cells
 
 function readGlb(file) {
+  /* Stored gzipped (ref/icons/eq_foo.glb.gz) unless somebody has just
+   * dropped a fresh export in. Either reads. */
   var b = fs.readFileSync(file);
+  if (/\.gz$/.test(file)) b = require('zlib').gunzipSync(b);
   var jl = b.readUInt32LE(12);
   var json = JSON.parse(b.slice(20, 20 + jl).toString('utf8'));
   var off = 20 + jl, bl = b.readUInt32LE(off);
@@ -281,10 +284,22 @@ async function convert(file, opts) {
 }
 
 async function main() {
-  var files = fs.readdirSync(IN).filter(function (f) { return /^(eq|con|good|mod)_.+\.glb$/.test(f); }).sort();
+  /* .glb or .glb.gz; a loose export wins over the stored copy of the same
+   * item, so dropping a new one in and re-running does what you expect. */
+  var seen = {};
+  var files = fs.readdirSync(IN)
+    .filter(function (f) { return /^(eq|con|good|mod)_.+\.glb(\.gz)?$/.test(f); })
+    .sort()
+    .filter(function (f) {
+      var id = f.replace(/\.glb(\.gz)?$/, '');
+      if (!/\.gz$/.test(f)) { seen[id] = 1; return true; }
+      return !fs.existsSync(path.join(IN, id + '.glb'));
+    });
+  if (!files.length) throw new Error('no icon models found in ' + IN +
+    ' - refusing to write an empty itemmodels.js');
   var models = {}, tris = 0;
   for (var i = 0; i < files.length; i++) {
-    var id = files[i].replace(/\.glb$/, '');
+    var id = files[i].replace(/\.glb(\.gz)?$/, '');
     models[id] = await convert(path.join(IN, files[i]));
     tris += models[id].f.length / 3;
     /* A gun is also drawn on hulls, many at once: it gets a lighter copy

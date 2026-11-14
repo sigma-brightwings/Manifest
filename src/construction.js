@@ -216,16 +216,20 @@
    * (a surface station needs both — unpacked up top, then ferried). */
   var PADS = ['S', 'S', 'M'];
   var CRAFT = {
-    tug:     { name: 'Bollard tug',   size: 'S', hull: 'bollard', price: 44000, unpack: 1.5, ferry: 0 },
-    shuttle: { name: 'Wren shuttle',  size: 'S', hull: 'wren',    price: 18000, unpack: 0,   ferry: 1.0 },
-    shuttleM:{ name: 'Heavy shuttle', size: 'M', hull: 'heavyshuttle', price: 60000, unpack: 0, ferry: 2.5 },
+    tug:     { name: 'Bollard tug',   size: 'S', hull: 'bollard', price: 44000, unpack: 1.5, ferry: 0,
+               blurb: 'A pusher with no hold worth the name. It takes crates off the Crawler and stands them up where the station is going to be, and it will not carry a soul anywhere.' },
+    shuttle: { name: 'Wren shuttle',  size: 'S', hull: 'wren',    price: 18000, unpack: 0,   ferry: 1.0,
+               blurb: 'People, not girders. The cheapest way to get a work crew off the Crawler and onto the thing they are building.' },
+    shuttleM:{ name: 'Heavy shuttle', size: 'M', hull: 'heavyshuttle', price: 60000, unpack: 0, ferry: 2.5,
+               blurb: 'Two and a half times the Wren\'s lift for three times the money, and it wants the M pad. Worth it when the crew is the bottleneck and not before.' },
     /* Astra, 2026-10-20: "there's also an M size tug in the models we
      * currently have, and one of those unloads it a higher speed, but not
      * double." The art is tug-m (the hauler flies it). Half again an S
      * tug's rate. With the pads it earns its place on the M pad, where it
      * out-works the S tug that would otherwise sit there; priced at half
      * again an S tug, like its rate. */
-    tugM:    { name: 'Heavy tug',     size: 'M', hull: 'heavytug', price: 66000, unpack: 2.25, ferry: 0 }
+    tugM:    { name: 'Heavy tug',     size: 'M', hull: 'heavytug', price: 66000, unpack: 2.25, ferry: 0,
+               blurb: 'Half again a Bollard\'s rate for half again its price, on the pad an S tug would otherwise be loafing on.' }
   };
   /* Which pad each craft sits on, or null if the list doesn't fit: M craft
    * on the M pad, S craft on the S pads first, then the M pad. */

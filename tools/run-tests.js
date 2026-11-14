@@ -63,6 +63,7 @@ var GROUPS = {
   ],
   berths: ['test/berths.test.js', 'test/interiors.test.js'],
   ships: [
+    'test/outside.test.js',
     'test/ships.test.js', 'test/shipyard.test.js', 'test/start.test.js',
     'test/crew.test.js', 'test/fleet.test.js', 'test/shipdeck.test.js',
     'test/nosecockpit.test.js', 'test/walk.test.js', 'test/npc.test.js',
@@ -75,7 +76,7 @@ var GROUPS = {
   combat: [
     'test/combat.test.js', 'test/gunnery.test.js', 'test/massdriver.test.js',
     'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/band.test.js',
-    'test/hunters.test.js',
+    'test/rendezvous.test.js', 'test/hunters.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
     'test/wars.test.js'
@@ -85,15 +86,16 @@ var GROUPS = {
     'test/shiptrade.test.js', 'test/analysers.test.js', 'test/farms.test.js',
     'test/growth.test.js', 'test/construction.test.js', 'test/stations.test.js',
     'test/city-sites.test.js', 'test/upkeep.test.js', 'test/parcel.test.js',
-    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js'
+    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js',
+    'test/catalogue.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/claims.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [
     'test/arcs.test.js', 'test/patronage.test.js', 'test/fieldwork.test.js',
-    'test/guild.test.js',
+    'test/guild.test.js', 'test/dawdle.test.js', 'test/poaching.test.js',
     'test/captains.test.js', 'test/captain-stories.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',
     'test/journal.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',

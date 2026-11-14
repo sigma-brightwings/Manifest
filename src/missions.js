@@ -33,6 +33,48 @@
   var COURIER_DEADLINE = 10 * 86400;
   var STANDING_WIN = { haul: 3, courier: 5, disposal: 4, passage: 4 };
   var STANDING_LOSS = 7;
+
+  /* ---- DAWDLING (2026-11-13) --------------------------------------------
+   * Past LATE_FROM of the window you signed for, arriving starts to cost
+   * standing, rising to the full figure at the deadline itself. Freight
+   * dawdled on cancels what the job earned you; people dawdled on costs
+   * nearly what failing would, because they were sitting in a cabin the
+   * whole time and they will say so.
+   *
+   * It is deliberately generous. Most windows are days wide for trips that
+   * take hours, so 70% of one is not "a bit slow" - it is a contract you
+   * forgot about. A pilot who flies the job when he takes it will never
+   * see this, which is the point. */
+  var LATE_FROM = 0.70;
+  var LATE_FREIGHT = 3, LATE_SOULS = 6;
+
+  /* 0 when the delivery was timely, rising to 1 at the deadline. */
+  function dawdle(m, t) {
+    if (!m || !(m.took >= 0) || !(m.deadline > m.took)) return 0;
+    var used = (t - m.took) / (m.deadline - m.took);
+    if (!(used > LATE_FROM)) return 0;
+    return Math.max(0, Math.min(1, (used - LATE_FROM) / (1 - LATE_FROM)));
+  }
+
+  /* Charge for it, and SAY so - a penalty the player cannot see coming is
+   * just a bug with a reason. Returns what it cost, 0 for a timely run. */
+  function chargeDawdle(G, m, t, hooks) {
+    var f = dawdle(m, t);
+    if (!(f > 0)) return 0;
+    var souls = (m.souls || 0) > 0;
+    var cost = Math.round(f * (souls ? LATE_SOULS : LATE_FREIGHT));
+    if (!(cost > 0)) return 0;
+    bumpStanding(G, m.faction, -cost);
+    var days = Math.floor((t - m.took) / 86400);
+    var how = souls
+      ? (m.souls === 1 ? 'Your passenger was aboard' : 'Your passengers were aboard') +
+        ' ' + (days >= 1 ? days + (days === 1 ? ' day' : ' days') : 'most of the window') +
+        ' - they have said so'
+      : 'Delivered with the window nearly out';
+    if (hooks && hooks.say) hooks.say(how + '  ·  standing -' + cost, 6);
+    jot(G, 'mission', how + ' (' + (m.toName || 'destination') + '): standing -' + cost);
+    return cost;
+  }
   var FINE_FRACTION = 0.5;
   /* WHAT A CARGO CONTRACT PAYS, against what the market pays (2026-11-04).
    * The fees below are flat tables, not prices, so the economy retune
@@ -147,6 +189,76 @@
                      'The seal is their word, not yours.'];
 
   function windowIndex(t) { return Math.floor(t / WINDOW); }
+
+  /* ---- WHAT A LEG IS WORTH (2026-11-12) ----------------------------------
+   * Astra: "missions pay far less than a typical cargo run and piracy
+   * would be incentivized for this reason ... make the least just under
+   * 1000 cr and the average around 1700 - less than a thousand for a
+   * mission which can be completed by travelling less than 10,000 km?"
+   *
+   * WHAT THE MEASUREMENT FOUND, across 4,495 offers off 350 boards: the
+   * board was not uniformly cheap. Couriers ran a median of 2,484,
+   * passage 2,515, the new short hops 2,989 - and HAULS a median of 528,
+   * a fifth of everything else, while being 1,688 of the 4,495 offers.
+   * So a board looks cheap because the commonest thing on it is.
+   *
+   * And the reason was the same bug the short hops had this morning,
+   * which I should have seen was general: a haul was priced on TONNAGE
+   * ALONE. Six decades of leg length, and the median fee went DOWN:
+   *
+   *     0-10k km   1930      1-10M km    882
+   *     10-100k    1282      10-100M     828
+   *     100k-1M     880      100M+       838
+   *
+   * Three hundred million kilometres paid less than thirty thousand.
+   *
+   * SO: a call-out fee, the tonnage, and a term in the leg - sublinear,
+   * because you would be crossing the system anyway and the cruise drive
+   * eats the long ones, so a hundred million km is not worth ten times a
+   * ten million km leg. Fitted against every port pair in twenty-six
+   * systems to land on her numbers: a floor of 950 and a median of 1,684.
+   *
+   * THE DISTANCE IS TAKEN AT THE WINDOW'S OPENING, not at the hour you
+   * happen to be reading the board. The bodies are moving; a fee that
+   * drifted while you looked at it would make the board a thing you
+   * cannot come back to, which is the one property it has always had. */
+  var LEG_BASE = 680;            // for turning up at all
+  var LEG_PER_T = 28;            // for the hold it costs you
+  var LEG_DIST = 52;             // per root-hour of the round trip
+  var LEG_FLOOR = 950;           // Astra's "just under 1000"
+  var LEG_SHORT_KM = 10000;      // ... and the only place allowed below it
+  var LEG_SPEED_KM_S = 420;      // a loaded hull, cruising, as a planner
+
+  function legHours(km) {
+    if (!(km > 0)) return 2;
+    return Math.max(2, (km / LEG_SPEED_KM_S) / 3600 * 2 + 2);
+  }
+
+  function legKm(from, to, sys, t) {
+    var Sim = global.Sim, V = global.V;
+    if (!Sim || !V || !from || !to) return 0;
+    /* The window's opening, so the number does not move while you read. */
+    var at = t - (t % WINDOW);
+    try {
+      return V.dist(Sim.bodyPosition(from, sys, at), Sim.bodyPosition(to, sys, at));
+    } catch (e) { return 0; }
+  }
+
+  /* A fare that is not a short hop still has to be worth untying for. */
+  function legFloor(pay, from, to, sys, t) {
+    var km = legKm(from, to, sys, t);
+    return Math.round(km < LEG_SHORT_KM ? pay : Math.max(LEG_FLOOR, pay));
+  }
+
+  function legFee(from, to, sys, t, tonnes, rng, perT) {
+    var km = legKm(from, to, sys, t);
+    var raw = LEG_BASE + tonnes * (perT === undefined ? LEG_PER_T : perT) +
+              LEG_DIST * Math.sqrt(legHours(km));
+    raw *= rng ? rng.range(0.92, 1.12) : 1;
+    /* Under ten thousand kilometres is the one errand that may pay less
+     * than the floor, because it is barely a trip. */
+    return Math.round(km < LEG_SHORT_KM ? raw : Math.max(LEG_FLOOR, raw));
+  }
 
   /* Ports in this system that will take waste — the disposal mission needs
    * a legal destination before it can be offered. */
@@ -561,7 +673,7 @@
           from: port.id, fromName: port.name,
           toPortId: dst.id, toName: dst.name,
           faction: port.faction || null,
-          pay: Math.round((tonnes * rng.range(28, 55) + 250) * CARGO_PAY),
+          pay: legFee(port, dst, sys, t, tonnes, rng),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
           core: tonnes + 't ' + (Eco.BY_ID[cid] ? Eco.BY_ID[cid].name : cid) +
                 ' to ' + dst.name
@@ -597,7 +709,9 @@
           from: port.id, fromName: port.name,
           toPortId: tk.id, toName: tk.name,
           faction: port.faction || null,
-          pay: Math.round(wt * rng.range(60, 95) * CARGO_PAY),
+          /* Waste pays by the tonne over the odds - nobody wants it -
+           * but it is still a leg, and the leg is what it costs you. */
+          pay: legFee(port, tk, sys, t, wt, rng, 62),
           deadline: t - (t % WINDOW) + HAUL_DEADLINE,
           core: wt + 't reactor waste to ' + tk.name
         });
@@ -707,7 +821,7 @@
         from: port.id, fromName: port.name,
         toPortId: dst.id, toName: dst.name,
         faction: port.faction || null,
-        pay: souls * per,
+        pay: legFloor(souls * per, port, dst, sys, t),
         deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
         core: souls + ' aboard — ' + who + ' for ' + dst.name
       });
@@ -774,7 +888,7 @@
         from: port.id, fromName: port.name,
         toPortId: dst.id, toName: dst.name,
         faction: port.faction || null,
-        pay: souls * Math.round(rng.range(600, 1150)),
+        pay: legFloor(souls * Math.round(rng.range(600, 1150)), port, dst, sys, t),
         deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
         core: souls + ' aboard — a crew rotation for ' + dst.name
       });
@@ -1107,6 +1221,12 @@
       fromName: offer.fromName, toPortId: offer.toPortId || null,
       toStarId: offer.toStarId || null, toName: offer.toName,
       faction: offer.faction, pay: offer.pay, deadline: offer.deadline,
+      /* When YOU signed, which is what the dawdling clock runs from. A
+       * contract taken late in its own window is not the same as one taken
+       * fresh and then sat on. Absent on contracts signed before
+       * 2026-11-13; dawdle() reads that as timely, so old saves are
+       * unaffected. */
+      took: G.t,
       text: offer.text,
       /* Carried, not regenerated. A contract you signed a week ago has to
        * still say what it said when you signed it. */
@@ -1290,6 +1410,7 @@
       G.ship.credits += m.pay;
       /* Captain Halloway's last lesson is a delivery (tutorial.js). */
       if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: m.pay });
+      chargeDawdle(G, m, t, hooks);
       bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);
@@ -1584,7 +1705,9 @@
     passengersUnderFire: passengersUnderFire, passengersWalkOff: passengersWalkOff,
     completeAtDock: completeAtDock, update: update,
     standing: standing,
-    patronage: patronage, patronageOf: patronageOf,
+    patronage: patronage,
+    dawdle: dawdle, LATE_FROM: LATE_FROM,
+    LATE_FREIGHT: LATE_FREIGHT, LATE_SOULS: LATE_SOULS, patronageOf: patronageOf,
     PATRON_PER: PATRON_PER, PATRON_STEP: PATRON_STEP, PATRON_CAP: PATRON_CAP, bumpStanding: bumpStanding, standingLabel: standingLabel,
     alreadyHave: alreadyHave,
     bondedTonnes: bondedTonnes, sellableTonnes: sellableTonnes, onSabotage: onSabotage,
@@ -1592,6 +1715,9 @@
     carriedBy: carriedBy, loadRefusal: loadRefusal, loadOnto: loadOnto,
     unloadRefusal: unloadRefusal, unloadFrom: unloadFrom,
     deliverByCarrier: deliverByCarrier,
+    LEG_BASE: LEG_BASE, LEG_PER_T: LEG_PER_T, LEG_DIST: LEG_DIST,
+    LEG_FLOOR: LEG_FLOOR, LEG_SHORT_KM: LEG_SHORT_KM,
+    legFee: legFee, legKm: legKm, legHours: legHours,
     TEXT_MAX: TEXT_MAX, describe: describe, finish: finish,
     parcelOdds: parcelOdds, parcelContents: parcelContents,
     parcelsAboard: parcelsAboard, sealedParcelsAboard: sealedParcelsAboard,

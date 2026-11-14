@@ -1254,6 +1254,16 @@
       s.credits -= poachFee(ctx);
       (s.crew = (CrewM && CrewM.aboard ? CrewM.aboard(s) : (s.crew || [])).slice()).push(rec);
       record(ctx.G, ctx.p.key, 'hired', ctx.t);
+      /* AND HER CAPTAIN FINDS OUT (2026-11-13). The hand asks you not to
+       * tell her until they are off the ship, and you do not have to - she
+       * notices the empty bunk. Recorded against the captain rather than
+       * against the hand, because the hand is pleased; it is the captain
+       * who is short a crew member on the next run. captains.js spreads it
+       * to her friend and her rival by itself. */
+      var cap = captainOf(ctx), Cp = Cap();
+      if (cap && Cp && Cp.record) {
+        Cp.record(ctx.G, ctx.sys, cap.contact, 'poached', ctx.t, { f: rec.name });
+      }
       ctx.state.hired = true;
       ctx.state.end = true;
       return sayLine(ctx, ['I will get my kit. Do not tell the captain until I am off.', 'About time somebody asked.',

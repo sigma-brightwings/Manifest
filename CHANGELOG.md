@@ -38,7 +38,468 @@ before they update.
 
 ---
 
-## Unreleased
+## 1.4.0 "Dodecahedron" (2026-11-13)
+
+Not a pigeon. Astra: *"a break from the bird names; but that’s okay"* — and
+a dodecahedron is the right thing to name it after, because this is the
+release where the galaxy stopped being a sheet of paper and became a solid.
+
+> ### Saves do not survive this one.
+>
+> **Save VERSION 5 — 6 (epoch 6).** The cluster was redrawn with real
+> thickness, so every seed grows a different arrangement of stars. A career
+> from 1.3.1 is sitting in a system whose neighbours, jump distances and fuel
+> costs have all moved. A version bump does not migrate a save, it discards
+> it — which is the honest outcome here, because the alternative is a career
+> that loads into coordinates that no longer mean what they meant. Astra
+> chose this knowingly: *"we can break existing saves."*
+>
+> The deprecation shelf was empty, so nothing else goes with the bump.
+
+### Changed (2026-11-13, the galaxy got thicker)
+
+- **THE CLUSTER IS 18 LY OF HALF-HEIGHT, NOT 7.** It was a 72.75 ly disc
+  7 ly thick — about **10:1**, which is a sheet of paper rather than a
+  cluster. Every star has always carried a z and the chart threw it away, so
+  nothing in the game ever had to ask whether the third axis was worth
+  having. The moment the chart could be turned it was plain there was
+  nothing out there to see.
+- **At 18 the cluster reads 4.1:1.** Measured on kawartha: median |z| 5.33 ly,
+  p95 14.88, max 17.57 against a 72.56 ly radius. **Two stars in three now
+  have a genuinely three-dimensional nearest neighbour** rather than one that
+  only looked nearest in a flat projection — which is the thing that makes
+  rotating the chart a navigational act rather than a toy.
+- **The median jump is 36% longer.** That is the cost, and it is the reason
+  this was a decision rather than a tweak: range matters more, fuel matters
+  more, and a hull that could just reach the next system may no longer.
+  Swept over seven values before the number was picked.
+- It is one constant, `CLUSTER_THICKNESS`, and `Galaxy.build` already took an
+  override for it so the sweep never had to edit the file.
+
+### Added (2026-11-13, the Cartographers, and what a dead rock is worth)
+
+Astra: *"Maybe we should have a cartographer’s guild? For the survey
+stuff?"* And then, correcting the first design I put up: *"I don’t think
+that the mining guild would have a problem if you publish a survey of a
+world that is of zero interest to them."* And: *"All factions should be
+trying to expand outward."* (`src/charts.js`, new.)
+
+**ONE SURVEY FLIGHT MAKES TWO DIFFERENT GOODS, and until today the game
+only bought one of them.**
+
+- **THE ASSAY** is what is in the ground. The Mining Guild has always
+  bought it, priced on the ore, and it goes stale. A barren world’s assay
+  is worth nothing, correctly: there is nothing in it they want.
+- **THE SHEET** is the chart — where the world is, what the surface does,
+  where a hull can be put down. **The Cartographers buy that, and a world
+  with no ore at all has one.** That was the hole: you could spend a day
+  mapping a dead rock on the frontier and the game had no way to pay you.
+
+The two are priced on nearly opposite things, which is the point. A
+bonanza world in a capital’s own system is a fat assay and a worthless
+sheet — everybody has that sheet. A barren rock eleven light years past
+the last flag is the reverse. Measured over 8,386 worlds: **on 28% of them
+the sheet pays more than the assay, and on 13% there is nothing worth
+digging at all and the chart still pays.**
+
+- **Novelty is most of the price**, and it comes from two things the galaxy
+  already knew: whose writ runs here (`Galaxy.control`) and whether anybody
+  has built a berth. They compound rather than one winning, so a system
+  with a flag *and* a port is better known than one with either.
+- **Reach is the rest.** Distance to the nearest capital of anybody, over
+  the cluster radius. This is the term that makes expanding outward pay,
+  and it is the mechanical form of Astra’s line about the factions.
+- **Coverage counts steeply** — half the ground is well under half the
+  money, because half a chart does not let anyone plan a descent. Below
+  15% of a world there is no sheet to sell, and the row says so.
+- **A SHEET DOES NOT GO OFF.** The assay halves every 180 days because ore
+  gets dug and markets move. A chart has no decay at all, and that is not
+  generosity, it is the physics the rest of the game already runs on: the
+  rotations change, the orbit does not. `Charts.value` takes no clock
+  argument, so there is no route by which age could reach it.
+
+**PUBLISHING IS A SEPARATE ACT, AND THAT IS THE WHOLE DECISION.** Selling
+the Guild an assay is private — they file it. Publishing a sheet puts the
+world in the public record, which is what the Cartographers are paying for.
+
+- On a world of no interest to anybody’s mining concern that is free money
+  and there is nothing to decide. **On a world with real deposits the sheet
+  is a signpost on somebody’s quiet rock, and prospectors follow charts.**
+  So publishing costs you with the Mining Guild in proportion to what is
+  actually down there: **nothing on three worlds in four, and up to −4 on
+  the real prizes** (23 worlds of 8,386 are minded about in full).
+- Note what the Guild is *not* objecting to. You have not leaked their
+  assay. You have told the galaxy the place exists and can be landed on —
+  which is why the grievance scales with the ore and not with your
+  coverage, and why a barren world costs exactly zero. Astra’s correction,
+  made mechanical.
+- **The row warns you before you press it**: *"Mirven I a at 100% — 620 cr
+  — the Guild will mind (−3)"*. A cost you find out about afterwards is not
+  a decision.
+- **One world at a time**, on the F4 deck list directly under the assay row.
+  The nav lock picks the world, else the best-paying sheet here — the same
+  rule the claim row follows. A desk that published the lot in one click
+  would be taking the decision for you.
+- **Published is published.** The edition is written onto the survey record
+  itself, so the same ground is never paid for twice and a reload cannot
+  launder it. Map more of the world later and you can publish the
+  extension, paid for the new ground only: the two halves come to the
+  whole-world price.
+
+**AND THE FACTIONS NOTICE.** A sheet of a world out past the flags extends
+somebody’s reach whether they asked or not, so publishing one earns **+1
+with whoever’s capital is nearest** — a lawful power, never the Syndicate.
+Capped at 15 a side, because charting is not a career with a government.
+
+**THE BOOKS.** The Cartographers credit **one point per 12,000 cr of sheet,
+capped at five a filing** — and unlike the Guild’s, theirs is a running
+ledger rather than a per-sale rate, so a hundred small sheets are worth one
+big one and nothing is lost to rounding. They sit under the Mining Guild on
+the F7 standing list, and because a career can have filed real work and
+still read zero, the row carries what is in the ledger but not yet a point:
+*"neutral (0)    9.7k to the next"*. **A Guild you have spent now paints
+red**, which nothing else in the game could make it do.
+
+- **Saves:** additive, **no version bump**. `carto` (what they have paid you
+  and which powers charting has pleased) joins the store; the per-sheet
+  record of what is published rides on the survey record, which was already
+  saved field by field. An older career has published nothing, which is
+  exactly true.
+- **Nothing here draws from the seed.** Every input is a pure function of
+  the immutable galaxy or of a body the generator already made, so this file
+  cannot move a star, a world or a deposit. The suite checks the source for
+  an RNG call and checks that publishing leaves the assay worth precisely
+  what it was worth before.
+- **Tests:** `test/charts.test.js` (68 checks, `ground` group), cast against
+  the real kawartha galaxy rather than fixtures. `tools/measure-charts.cjs`
+  is the census the numbers came from; `tools/probe-charts.js` docks at a
+  real desk in the running game, reads the row, publishes a barren world and
+  a rich one, and photographs the F7 list going red.
+
+### Fixed (2026-11-13, found by measuring before tuning)
+
+Four faults in the first cut of `charts.js`, every one of them found by the
+census rather than by the unit tests — which is the argument for writing the
+census first.
+
+- **Nobody ever minded about anything.** The thresholds for the Guild’s
+  grievance were set by arithmetic on a guess, at 900 and 7,000. The real
+  distribution of ore interest over 8,386 worlds runs min 11, median 64,
+  p95 359, **max 992** — so the floor sat above the entire galaxy and every
+  world in the game was free to publish. Astra’s distinction did not exist.
+  Now 200 and 650, measured.
+- **Novelty was bimodal: 0.05 or 1.0, with nothing in between.** Port count
+  added a flat 0.16 each, and with systems holding up to eighteen berths,
+  every busy system pinned at the ceiling. A premium nobody can feel is not
+  a premium. It saturates now — the twelfth port means very little more
+  than the sixth.
+- **Every world in the galaxy measured exactly one Earth.** `sizeOf` read
+  `target.rad`; a body’s radius field is `target.radius`, so the term read
+  undefined, fell to the reference, and did nothing at all. 8,386 worlds
+  with an identical size factor is the sort of thing a unit test happily
+  agrees with and a histogram cannot hide.
+- **The top sheet in the galaxy paid 20,570 cr** — a *barren* rim gas giant
+  matching the richest assay anywhere, with a whole system of them behind
+  it. The balance rule is that a survey pays well and never beats active
+  hauling. A fully mapped Earth on the far rim is now about 4,700 and the
+  best sheet anywhere about 8,400, against the 16,000 a fully mapped rich
+  world’s assay pays.
+
+And one the suite caught on its own:
+
+- **`SIZE_LO` was a floor that could never bind.** `clamp(0.6 + 0.4 * x,
+  0.6, ...)` with x never negative: the clamp was dead code dressed as a
+  constant. Rewritten so the constant is the intercept and means what it
+  says. A number in the source that cannot do anything is a lie about how
+  the thing works.
+
+### Added (2026-11-13, the gravimeters have faces now)
+
+- **ALL FOUR GRAVIMETER RUNGS HAVE THEIR OWN MODEL** (Astra’s art). They
+  shipped on the 12th with no icon at all, which was the one red line in the
+  suite: `guns.test.js` checks that every item of equipment has something to
+  turn in its card, and named all four.
+- **Four distinct models, not one with a fallback.** `Render.itemKey` falls a
+  higher rung back to tier I’s art when it has none of its own, so one file
+  would have cleared the check — but each grade now has its own, and the
+  catalogue shows a different instrument as you climb the ladder rather than
+  the same box four times.
+- They arrived named `eq_gravimeter1..4` and went in as **`eq_gravI..IV`**,
+  because `src/itemmodels.js` is keyed by file stem against the equipment id
+  and the ids are `gravI..gravIV`. A model whose name does not match its item
+  is a model nothing will ever ask for.
+- **Saves:** unaffected. Art only; nothing about a fitting is stored.
+
+### Added (2026-11-13, a chart you can lean over)
+
+- **THE GALAXY MAP TURNS.** The star chart was always three-dimensional data
+  drawn flat: every star has always had a z, and the camera threw it away.
+  The view now carries a yaw and an elevation and the chart is drawn through
+  a camera (`chartCam`, `chartProj`, `chartUnproj` in `src/screens.js`).
+  **Drag with the mouse to turn it**; shift-drag or right-drag still pans,
+  decided once at the press so a drag never changes its mind halfway.
+  **L** snaps back to the plan view you had yesterday, straight down with
+  north up.
+
+- **A STEM TO THE FLOOR, SO THAT HEIGHT READS.** Every star drops a hairline
+  to the z = 0 plane. Without it a tilted chart is ambiguous — a star drawn
+  high on the screen could be above the disc or merely far across it — and
+  with it the eye takes the height off the stem the way it takes a bar off an
+  axis. Reach circles tilt with the disc and project as ellipses, which is
+  what a circle on the galactic plane actually looks like from an angle.
+
+- **K EXAGGERATES DEPTH** through 1×, 2×, 3× and 5×. The cluster is a thin thing,
+  so at true scale a tilt barely shows. The multiplier stretches the z axis
+  **on the display only**: it changes nothing about where a star is, what a
+  jump costs, or what the seed grows. It is a lens over the map, not an edit
+  to it.
+
+- **The camera is remembered per chart**, so yaw, elevation, zoom, pan and the
+  depth multiplier all survive leaving the screen and coming back.
+
+### Fixed (2026-11-13, the chart’s third pass)
+
+- **Zooming on a turned chart drifted 6.7 ly.** `chartZoomAt` still assumed
+  the old flat projection, so zooming toward the cursor on a tilted view
+  walked the point under the cursor away from itself. It now solves for the
+  centre in the view plane and unprojects back to the galaxy: **1.9e-14 ly**,
+  which is double precision saying zero. (`test/galaxyzoom.test.js`, 31
+  checks.)
+
+- **The planetary scanner’s header advertised keys the screen had lost.** A
+  second, stale copy of `scannerKey` further down `src/screens.js` shadowed
+  the real one, so S, T, the zoom keys, the arrows and D all silently did
+  nothing while the header listed every one of them. The stale copy is gone.
+
+### Added (2026-11-13, somebody on the hull, and a captain who took my crew)
+
+- **EVA REPAIRS — the only in-flight repair in the game** (`src/outside.js`,
+  `test/outside.test.js`, 52 checks). A yard charges 9 cr a hull point and
+  needs you docked; an engineer on a line charges nothing and needs you
+  drifting. A rating-3 hand mends about 11 hull an hour off the line, 6 on
+  it. Refused from a berth, from the ground, without an engineer aboard, on
+  a sound hull, and on one so far gone it is a yard job — and the refusal
+  says which.
+
+- **THE TETHER IS THE WHOLE DECISION.** Clipped on, a burn drags them along.
+  Clipped off, they reach more of the hull — and if you light the engine
+  they are not coming with you. They keep the velocity they were cast off
+  at, so they fall behind rather than vanishing.
+
+- **TWELVE HOURS OF AIR, AND A BEACON WITH YOUR SHIP'S NAME ON IT.** The
+  candle runs on the sim clock, so time warp is the thing that kills them.
+  The beacon carries the ship's name and registration, which is the whole
+  reason leaving somebody costs anything. A hand adrift shows at the top of
+  the nav list under the distress mark — the one mark allowed to shout —
+  with their air where the range usually goes.
+
+- **FLYING TO THEM IS PICKING THEM UP.** No button: at the moment you are
+  finally alongside somebody you nearly killed, hunting for a control is the
+  wrong thing to be doing. Within 350 m with the engine cold and they are
+  aboard. Not while it is lit — you do not collect a person at speed.
+
+- **LEAVING THEM IS NOT A BOUNTY, BECAUSE NOBODY SAW IT.** It costs the only
+  thing it can: hands will not sign with you. One death and the good ones
+  start saying no (the hall's rating ceiling drops to 3), the rest want
+  about 38% more to sign, and there are fewer berths on the board. A habit
+  of it and the ceiling falls to 2 with *"They know what you did."* The
+  hiring draw is untouched, so this removes people rather than replacing
+  them — the same hall, minus those who will not have you. Going back
+  promptly costs nothing; going back with hours to spare costs a little.
+
+- **Shooting somebody in a suit is now the heaviest killing in the game**
+  (`killSuited` 16,000, above the rescue tender's 14,000). The tender at
+  least has a hull. A person on a beacon has a visor, and the only thing
+  between them and you is that everybody agreed not to.
+
+- **HIRING A HAND OFF SOMEBODY'S SHIP NOW MAKES AN ENEMY**
+  (`test/poaching.test.js`, 14 checks). It lands on the **captain**, not
+  the hand — the hand is pleased; it is the captain who sails short next
+  run. **-4** on her feeling: worse than lying to her about your cargo
+  (-2), not as bad as holing her hull (-5). No honesty hit, because you
+  outbid her rather than deceiving her. She greets you with it by name
+  ("You took {who} off my ship"), and captains.js spreads it to her friend
+  and her rival on its own.
+
+### Fixed (2026-11-13, the second pass)
+
+- **The air warning fired on state rather than on crossing**, so under time
+  warp — where a single step is hours long — the step that should have
+  warned you jumped from six hours of air straight to dead. **No warning at
+  all, in exactly the case where warp is what kills them.** Every threshold
+  a step passes over now fires, so the warp that kills them is also the warp
+  that tells you.
+
+- **A new captain-memory tag with no row in the TAGS table threw.**
+  `TAGS[ev.tag].rank` on a tag that was not there would have crashed the
+  first time you poached from a captain you had already traded with — an
+  ordinary path. Caught by the test before it shipped.
+
+### Changed (2026-11-13, a contract has a clock, and a hull has room for the kit)
+
+- **DELIVERING AT THE LAST POSSIBLE MOMENT NOW COSTS STANDING.** Past 70% of
+  the window you signed for, arriving starts to cost, rising to the full
+  figure at the deadline: up to **3** for freight, which cancels what the job
+  earned, and up to **6** with people aboard, which is nearly what failing
+  outright costs — because they were sitting in a cabin the whole time and
+  they say so at the desk.
+  - **The clock runs from when YOU signed**, not from when the offer was
+    posted. Taking a contract late in its own window and flying it at once is
+    not the same sin as taking one fresh and forgetting about it.
+  - Deliberately generous: most windows are days wide for trips that take
+    hours, so 70% of one is not "a bit slow", it is a contract you forgot. A
+    pilot who flies the job when he takes it will never see this.
+  - Contracts signed before today carry no timestamp and read as **timely**,
+    so loading an old save fines nobody.
+  - The exploit originally described — padding distance to run the clock —
+    was checked and cannot pay: a fee is fixed when the offer is written,
+    from the direct leg at the window opening, and never reads where you
+    actually flew.
+
+- **MORE ACCESSORY SLOTS: +1 on S and M hulls, +2 on L and XL.** The
+  gravimeter broke the utility budget the morning it landed — a Talon carries
+  a survey scanner and a magnetometer and that is both her slots gone, so the
+  new instrument did not fit on the starting ship at all. Measured over all
+  23 hulls: the surveyor's kit could be flown by **12 of 23**, the full
+  prospector's outfit by **6**. Now 18 and 16. The Talon goes 2 → 3 and can
+  take survey work; the big haulers become proper survey platforms.
+
+- **The top two grades of each instrument are hungry.** Before this, *nothing
+  but the slot count* limited a utility loadout: the whole surveyor's kit is
+  2.9 MW against a Wren Shuttle's 4 MW cap, so every hull in the game could
+  already afford every instrument, and adding slots alone would have handed
+  the kit out free. Grades 1 and 2 are instruments a courier hangs off her
+  bus and are unchanged; grades 3 and 4 are a cold baseline and a cloud of
+  falling atoms, and now draw like it.
+  - Deep survey array 2.0 → **6.0 MW**, shielded deep array 2.4 → **7.0**,
+    cryogenic gradiometer 1.3 → **4.0**, atom interferometer 1.8 → **6.0**.
+  - A Talon can fly the grade-2 surveyor's kit outright, and the grade-3 kit
+    only with an auxiliary reactor in an internal slot. That is the trade.
+  - Nothing breaks on an old save: a ship over budget browns out — guns
+    cycle slow, and the SHIP page says **OVER — guns slow** in red — and a
+    field sweep takes longer rather than failing.
+
+### Fixed (2026-11-13)
+
+- `test/combat.test.js` pinned the Talon's slot count at nine and the drive
+  and slipspace bays at positions 7 and 8. The invariant it exists to protect
+  is that those two come **last**, so that adding a slot in front moves no
+  older key — which is precisely what happened, and the test failed for it.
+  Rewritten against the invariant and against the hull's own table, so a hull
+  retune cannot leave it lying.
+
+- **And the same fault again, in another file.** `test/tradeanalyser.test.js`
+  fitted a Talon with exactly three things and assumed that filled her, which
+  was true while she had two utility slots. The bump gave her a third, so the
+  analyser fitted and a check about trade analysers failed for a reason that
+  has nothing to do with trade analysers. It now asks the hull how many slots
+  there are and fills them. **Both failures were the same mistake made twice**
+  — a test pinning a number when what it meant to protect was a behaviour —
+  and the second one only surfaced when the `economy` group ran, which is the
+  argument for running the whole suite rather than the group that looks
+  relevant.
+
+### Added (2026-11-12, the catalogue, the gravimeter and what is under the ground)
+
+- **THE CATALOGUE (Shift+C)** — a reference page for every purchasable thing
+  in the game, 141 entries over nine groups, each with its turning 3D icon,
+  its numbers and its copy. Reached from the controls card (H) and from
+  Options → REFERENCE. Astra: *"My wife wants a sort of gameopedia; and
+  that's something I think players will want also."*
+  - Read **from the live tables**, never a copy, so adding a gun to
+    `Combat.GUNS` puts it in the book with nobody remembering to come back.
+    Equipment numbers go through the yard's own `itemSpecs()`, so the
+    catalogue cannot quietly disagree with the shop.
+  - **No gates.** A market shows what this port stocks and what your standing
+    and the local development allow, which is right for a market and useless
+    for a reference.
+  - **`unlisted` items stay out until you own one** (fitted, on a parked
+    ship, or seen before). Three of them; a new career sees 138 of 141.
+  - Hulls turn through `Render.drawHullPortrait`, everything else through
+    `drawItemPortrait`, with the wireframe stand-in where no model exists.
+
+- **GRAVIMETERS, four grades** (`gravI`..`gravIV`: Gravimeter 5,200 /
+  Gravity gradiometer 12,400 / Cryogenic gradiometer 27,000 / Atom
+  interferometer 58,000). Utility slot, one group. The one instrument that
+  reads **through** rock: a spectrometer sees the surface, gravity does not
+  care how deep a thing is buried. The grade buys **resolution**, not range —
+  grade 1 tells you a hemisphere is heavy, grade 4 separates two bodies lying
+  together and reads one that is dense for its size. Sensitivity is in
+  **milligals**, absolute, so a grade means the same thing over a moon and
+  over a world nine thousand kilometres across (450 / 220 / 70 / 12 mGal,
+  set from 2,107 measured sources over 403 worlds).
+
+- **THE GRAVITY SLICE** — a fourth layer on the planetary scanner (G, or the
+  GRAVITY button), a cut through the middle of the world on a selectable
+  **XY / YZ / ZX** plane (1 / 2 / 3). The well in blues, the ore anomaly in
+  heat over it, the core boundary dashed, and every mass the instrument can
+  pick out listed beside it with its depth, its size and what it would take
+  to reach it. **g falls to zero at the centre** and peaks at the
+  core-mantle boundary, because only the mass below you pulls — the profile
+  integrates to the mass the body already has, so the slice can never
+  disagree with the orbit it is flying.
+
+- **DEPTH IS REAL, and it gates reachability.** Three bands of overburden:
+  **shallow 0.2–4 km** (a drone or a pair of hands), **mid 4–30 km** (a
+  drilling team), **deep 30–300 km** (visible as mass and nothing more).
+  Every province that shows on the surface map is shallow, because something
+  is already mining it. **Additive**: the surface ore map is byte-identical
+  over 919 worlds (hash `34a51161` with and without). What is new is a
+  second population that never touches it — 1,187 buried bodies on 650 of
+  919 worlds, which no spectrometer at any grade can see.
+
+- **Descriptions for 28 things that had none.** The 24 trade goods carried
+  only an id, a name, a tier and a price; so did the three contraband goods
+  and the four bay craft. One line each.
+
+### Fixed (2026-11-12)
+
+- **A second `scannerKey` was shadowing the real one.** `screens.js`
+  declared the function twice, and in JavaScript the later declaration wins —
+  so on the planetary scanner **S** (style), **T** (sweep), **+/-** and **z**
+  (zoom), the **arrow keys** (pan) and **D** (deploy a drone) all silently
+  did nothing, while the page's own header advertised every one of them. The
+  stale five-key copy is gone.
+
+- **`tools/item-models.cjs` would silently empty `itemmodels.js`.** The
+  icon models are stored gzipped (`eq_foo.glb.gz`) but the packer only ever
+  matched plain `.glb`, so running it against the repo as it stands found
+  zero models and rewrote a 3.9 MB file down to 1 KB. It now reads either,
+  prefers a loose export over the stored copy, and **refuses to write an
+  empty file**.
+
+- **Local passage fares** could be 680 cr for carrying two people between
+  berths. Floored like the haul fees, unless the leg is a short hop.
+
+- A fitting whose id ends in a Roman numeral now falls back to tier I's model
+  until it has one of its own, so a new ladder does not need four pieces of
+  art before it can ship.
+
+### Added (2026-11-12, two hulls with an arrangement)
+
+Astra: *"We're gonna need NPC ships to both trade with each other ... something that the player can come across in the local system chatter and attempt to render aid or even pirate their ship."* And, on how to seed it: *"why don't we build it on a seed which uses the last ship's ID that showed up in system before you, plus a time variant, plus the game seed?"*
+
+**The arrangement is in the seed** (`attachRendezvous`, `src/generate.js`). Two hulls, out of two different berths and by preference two different flags, both somewhere else on the same afternoon: a long way out, around a body with no dock on it, holding station a few hundred to a few thousand kilometres apart for eight or ten hours, then going home. Same galaxy, same two ships, same rock, same hours, forever — because that is what an arrangement is. About a third of the systems that could support one have one.
+
+**There is no new machinery in it, and that was a surprise.** I had this costed as a new rail type Sim would have to learn. It is not: a traffic route's endpoints resolve through `sys.byId`, which is any body and not only a port, and `trafficCore` already flies cruise out, long layover, cruise back on a period. Measured before a line of it was written: two routes to the same moon with the same `t0` put their hulls 2,300 km apart and **holding**. The engine has been able to fly a rendezvous all along. The pair goes in `patrols` rather than `traffic`, because a traffic route's arrivals are deliveries and the market reads them off the timetable — these two are not delivering anything to a moon.
+
+**What moves on any given afternoon is Astra's seed**, and the last term is the good part: the galaxy, the system, the window, **and the hull that came in ahead of the window**. The ship that arrived before the meeting is the one who set it up, so "whose idea was this" is a thing you can go and look at on an arrivals board rather than a number the game kept to itself.
+
+> **The one change I made to her design.** She had it as the last hull in before *you*. That is derivable — traffic is a closed-form function of the timetable and the clock — but keyed to your arrival it is a re-roll button: jump out, jump back, different last ship, different cargo, shop until the hold is worth stealing. It would also quietly break the thing this game is built on, which is that the same seed is the same universe; a meeting that changes because you blinked is not a fact about the world. So the last hull is taken **at the window's opening** rather than at your arrival. Re-entering during the same window gives the same meeting; you can still get a different one by waiting the window out, which costs days. A price rather than a re-roll, and the hook survives whole.
+
+**Four things you can do about it**, and the fourth needed no code — watch, and do nothing, which is what anybody does the first time.
+
+- **Ask what they are moving.** They will let it go at 55–78% of list, no paperwork and no berth fee, which is the whole reason they are out here.
+- **Take it off them.** Two light freighters, matched, a long way from anybody: the best moment there will ever be to rob somebody, and exactly why they did not want to be found. It costs you 14 standing with **both** flags and the hold is hot.
+- **Tell somebody.** The new verb. You are not taking anything and not buying anything; you are selling the fact that this happens, to a flag that would like it to stop. A third of list as a finder's fee, better than double that when what is moving is contraband — and they lie low for four meetings afterwards.
+- Each shuts the other two for that window, and all of it is saved.
+
+Measured so the choice is a real one rather than a trap: on clean cargo it is about **2,500 / 7,700 / 2,700** credits for buying, taking and telling; on contraband, about **14,300 / 43,500 / 33,500**. Taking it always pays most and always costs the most; telling needs no hold space and gains standing instead of losing it.
+
+- **It goes on the open band** as a RENDEZVOUS, so you can hear about one you are too far away to reach — which is the point of the band.
+- **Two numbers the measurements changed.** The first cut paid a finder's fee of **513 cr** for flying a day out and informing on two outfits, which is not a choice but a trap: the meetings were too small (six tonnes is a boot sale, not an arrangement) and the cut was priced like a tip. And two hulls *moored at the same body* are not necessarily alongside — the pose a ship gets off a body with no berths put some pairs **a third of a million kilometres apart**, which the probe found in the running game. The generator now asks Sim where the two of them would actually be, and only picks a body where they end up within 30,000 km. Across four galaxy seeds the tail at 112,000 km is gone and every pair sits inside 25,000.
+- **Saves:** additive, **no version bump**.
+- **Tests:** `test/rendezvous.test.js` (47 checks, `combat` group): it is in the seed and the same seed gives the same arrangement; the additive rule, with exactly two more hulls in the sky and every other one unchanged; they are alongside for the whole window and the meeting is *off* once they have gone home; the deal does not move inside a window and the next one is its own thing; and each of the three actions, including that an unarmed hull is not robbing anybody and that both of them work out who was alongside after you tell. `tools/probe-rendezvous.js` winds the clock to the hour, puts the ship between them and photographs the channel.
 
 ### Changed (2026-11-12, you can tell what a row is without reading it)
 

@@ -14780,18 +14780,27 @@
    * copy, the one hung on ships. */
   var ITEM_MESH = {};
   var ITEM_FILL = 2.8;               // camera distance, in model reaches
-  var ICON_STAND_IN = {
-    magnetometer: 'surveyscan',     // TODO: ref/icons/eq_magnetometer.glb
-    shieldsurvey: 'deepsurvey'      // TODO: ref/icons/eq_shieldsurvey.glb
-  };
+  /* TIERED FITTINGS SHARE ART UNTIL THEY DON'T (2026-11-12). A ladder whose
+   * rungs are the same instrument built better - gravI..gravIV - wears tier
+   * I's model on every rung until its own .glb is in ref/icons. Dropping
+   * eq_gravIII.glb in is all it takes to give that rung its own look; no
+   * code changes, and nothing to remember to delete. Anchors and baffles
+   * already carry four models each, so this only fills the gap. */
+  var TIER_RE = /^(.*?)(IV|III|II|I)$/;
+  function tierBase(id) {
+    var m = TIER_RE.exec(id);
+    return m && m[2] !== 'I' ? m[1] + 'I' : null;
+  }
 
   function itemKey(id) {
     var M = global.ItemModels;
     if (!M || !id) return null;
     if (M[id]) return id;
-    if (ICON_STAND_IN[id] && !M['eq_' + id]) id = ICON_STAND_IN[id];
-    var pre = ['eq_', 'con_', 'good_', 'mod_'];
-    for (var i = 0; i < pre.length; i++) if (M[pre[i] + id]) return pre[i] + id;
+    var pre = ['eq_', 'con_', 'good_', 'mod_'], i;
+    for (i = 0; i < pre.length; i++) if (M[pre[i] + id]) return pre[i] + id;
+    /* Nothing of its own: a higher rung falls back to tier I's art. */
+    var tb = tierBase(id);
+    if (tb && M['eq_' + tb]) return 'eq_' + tb;
     return null;
   }
   function itemMesh(id, hull) {

@@ -756,6 +756,13 @@
       ctx.lineTo(cx, cy + 4.2); ctx.lineTo(cx - 4.2, cy);
       ctx.closePath();
       if (e.help) ctx.fill(); else ctx.stroke();
+    } else if (kind === 'meet') {
+      ctx.beginPath();
+      ctx.moveTo(cx - 4.4, cy - 3); ctx.lineTo(cx - 0.8, cy); ctx.lineTo(cx - 4.4, cy + 3);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(cx + 4.4, cy - 3); ctx.lineTo(cx + 0.8, cy); ctx.lineTo(cx + 4.4, cy + 3);
+      ctx.closePath(); ctx.fill();
     } else if (kind === 'contact') {
       /* A ring with nothing in it - a bearing, not a thing. */
       ctx.beginPath(); ctx.arc(cx, cy, 3.6, 0, Math.PI * 2); ctx.stroke();
@@ -849,6 +856,26 @@
      * to her own crew is where a station is founded; with a station of
      * yours going up here, it is where her crew says how it is going. A
      * frequency, so range 0. */
+    /* A HAND ON A BEACON (outside.js, 2026-11-13). Top of the list, with
+     * the distress mark - the one mark that is allowed to shout - and the
+     * air remaining where the range usually goes, because that is the
+     * number you are actually flying against. Fly to them with the engine
+     * cold and they come aboard; there is no button for it. */
+    var Outs = global.Outside;
+    if (Outs && Outs.liveHere) {
+      var adrift = Outs.liveHere(G);
+      for (var ai = 0; ai < adrift.length; ai++) {
+        var ad = adrift[ai];
+        var km = (V && G.ship && G.ship.pos && ad.pos) ? V.dist(G.ship.pos, ad.pos) : 0;
+        out.push({
+          kind: 'distress', obj: null, adrift: ad,
+          name: ad.name + ' - SUIT BEACON',
+          range: km,
+          who: Outs.hoursWord(ad.o2) + ' of air  ·  off ' + (ad.shipName || 'your ship'),
+          color: ad.o2 < 2 * 3600 ? '#ff5a5a' : '#ffb86b'
+        });
+      }
+    }
     var Sts = global.Stations, Cn0 = global.Construction;
     var building = Sts ? Sts.workHere(G, G.sys, G.t) : [];
     if (Sts && Cn0 && (Cn0.isCrawler(G.ship) || building.length)) {
@@ -904,6 +931,24 @@
       out.push({ kind: 'station', obj: b, name: b.name, range: range,
                  who: b.market ? b.market.roleName : 'Station',
                  color: fac ? fac.color : '#7dffb0' });
+    }
+    /* A quiet transfer you are close enough to be part of
+     * (rendezvous.js). Range 0, above the hulls, because the one time you
+     * want this row is the one time you are alongside and deciding. */
+    var Rv = global.Rendezvous;
+    var meet = Rv ? Rv.atScene(G, G.sys, G.t) : null;
+    if (meet) {
+      var did = Rv.doneAt(G, G.sys, G.t);
+      var nearer = (meet.a.state && meet.b.state && V.dist(meet.a.state.pos, G.ship.pos) <=
+                    V.dist(meet.b.state.pos, G.ship.pos)) ? meet.a.state : meet.b.state;
+      out.push({ kind: 'meet', obj: nearer, meet: meet,
+                 name: meet.a.spec.name + '  +  ' + meet.b.spec.name,
+                 range: 0, sortAway: meet.range,
+                 who: did ? ('you already ' + did + ' this one')
+                    : (meet.deal && !meet.deal.quiet)
+                      ? ('a transfer at ' + meet.atName)
+                      : ('two hulls alongside at ' + meet.atName),
+                 color: '#7dffb0' });
     }
     var ships = Sim.shipsAll(G.sys, G.t);
     for (i = 0; i < ships.length; i++) {
@@ -1677,6 +1722,52 @@
       return opts;
     }
 
+    if (c.kind === 'meet') {
+      var RvS = global.Rendezvous, m = c.meet;
+      var d = m.deal, did = RvS.doneAt(G, G.sys, G.t);
+      var why = RvS.refusal(G, G.sys, G.t);
+      var what = (d && !d.quiet)
+        ? (d.tonnes + ' t of ' + ((global.Economy && global.Economy.BY_ID[d.cid] &&
+             global.Economy.BY_ID[d.cid].name) || d.cid) +
+           (d.contraband ? '  -  and it is not on any manifest' : ''))
+        : 'nothing is moving between them';
+      opts.push({ label: 'Watch them', enabled: false,
+                  note: what + (d && d.who ? '  -  ' + d.who.name + ' came in ahead of them' : '') });
+      opts.push({
+        label: 'Ask what they are moving',
+        enabled: !did && !why,
+        note: did ? ('you already ' + did + ' this one')
+            : why ? why
+            : (d.ask + ' cr a tonne, which is under the counter'),
+        fn: function () {
+          var r = RvS.buy(G, G.sys, G.t, hooksFor());
+          if (!r.ok) say(r.why, 5);
+        }
+      });
+      opts.push({
+        label: 'Take it off them',
+        enabled: !did && !why,
+        note: did ? ('you already ' + did + ' this one')
+            : why ? why
+            : 'both flags will know, and the hold will be hot',
+        fn: function () {
+          var r = RvS.rob(G, G.sys, G.t, hooksFor());
+          if (!r.ok) say(r.why, 5);
+        }
+      });
+      opts.push({
+        label: 'Tell somebody',
+        enabled: !did && !why,
+        note: did ? ('you already ' + did + ' this one')
+            : why ? why
+            : 'a finder\'s fee, and they will not be back for a while',
+        fn: function () {
+          var r = RvS.tell(G, G.sys, G.t, hooksFor());
+          if (!r.ok) say(r.why, 5);
+        }
+      });
+    }
+
     if (c.kind === 'collector') {
       /* Pay, haggle, refuse: Astra's three answers. Paying stays on the
        * list after a refusal, late and dearer, because that is the way
@@ -2090,6 +2181,38 @@
               ' on file. ' + got.total + ' credits."', 6);
         }
       });
+      /* THE CARTOGRAPHERS BUY THE OTHER HALF OF THE SAME FLIGHT (charts.js,
+       * 2026-11-13). The row above buys the ASSAY - what is in the ground,
+       * which on a barren world is nothing. This buys the SHEET, and every
+       * world has one.
+       *
+       * ONE WORLD AT A TIME, deliberately, and this is the whole feature:
+       * publishing a rich world puts a signpost on somebody's quiet rock
+       * and costs you with the Guild, while publishing a dead one costs
+       * nothing at all. A desk that published the lot in one click would be
+       * taking that decision for you. Same rule as the claim row below for
+       * WHICH world: the one your nav is locked to, else the best-paying
+       * sheet here. */
+      var Ch = global.Charts;
+      if (Ch) {
+        var sheet1 = Ch.pick(G, G.sys, G.galaxy);
+        opts.push({
+          label: 'Publish a world chart',
+          enabled: !!(docked && sheet1),
+          note: !docked ? 'filed on the deck'
+              : !sheet1 ? Ch.why(G, G.sys, G.galaxy)
+              : sheet1.name + ' at ' + Math.round(sheet1.cov * 100) + '% - ' +
+                sheet1.price + ' cr' +
+                (sheet1.was > 0.01 ? ' for the ground they have not got' : '') +
+                (sheet1.guild > 0
+                  ? '  -  the Guild will mind (-' + sheet1.guild + ')' : ''),
+          fn: function () {
+            if (!sheet1) return;
+            var got = Ch.publish(G, G.sys, G.galaxy, sheet1.key, { say: say });
+            if (!got.ok) say('They will not take it: ' + got.why, 5);
+          }
+        });
+      }
       /* A LOCATION NOBODY IS SUPPOSED TO HAVE (intel.js, 2026-11-10).
        * Astra: "you can sell the location". Only to somebody who wants
        * it - a rival of whoever built it, or the Syndicate, who will buy
@@ -4953,6 +5076,289 @@
     }
   }
 
+
+  /* ---- THE CATALOGUE (2026-11-12) ----------------------------------------
+   * Astra: "can you launch the game with the market screen open and every
+   * single item selectable and with its description in place, and the icon,
+   * rotating as it is designed to do? My wife wants a sort of gameopedia;
+   * and that's something I think players will want also." Then: "let's do
+   * the full catalogue and tie it in to the help screen."
+   *
+   * A reference page, not a shop. Every purchasable thing in the game -
+   * 141 entries over nine groups - with its turning 3D icon, its numbers
+   * and its copy, whatever world you are in and whatever is in your purse.
+   * No gates: a market shows what this port stocks and what your standing
+   * and the local development will let you buy, which is right for a market
+   * and useless for a reference. The one thing held back is an `unlisted`
+   * item, which is one you are not supposed to know exists yet
+   * (catalogue.js owns that rule).
+   *
+   * It draws the numbers through the same itemSpecs() the yard's item card
+   * uses, so the catalogue cannot quietly disagree with the shop.
+   */
+  var CAT_TURN = 9;                   // seconds per revolution, as the yard
+  var CAT_ROW = 17;                   // list row height
+  var CAT_TABS_H = 54;
+
+  function catState() {
+    if (!G.catalogue) G.catalogue = { group: 0, sel: 0, scroll: 0 };
+    return G.catalogue;
+  }
+
+  function catGroups() {
+    var Cat = global.Catalogue;
+    return Cat ? Cat.groups(G) : [];
+  }
+
+  /* Clamp the selection and keep it on screen. `rows` is how many fit. */
+  function catClamp(st, gs, rows) {
+    if (!gs.length) return null;
+    st.group = Math.max(0, Math.min(gs.length - 1, st.group | 0));
+    var list = gs[st.group].items;
+    st.sel = Math.max(0, Math.min(list.length - 1, st.sel | 0));
+    if (rows > 0) {
+      if (st.sel < st.scroll) st.scroll = st.sel;
+      if (st.sel >= st.scroll + rows) st.scroll = st.sel - rows + 1;
+      st.scroll = Math.max(0, Math.min(Math.max(0, list.length - rows), st.scroll));
+    }
+    return list[st.sel] || null;
+  }
+
+  /* Keys, routed from main.js. Returns true when it took the key. */
+  function catalogueKey(k, shift) {
+    var st = catState(), gs = catGroups();
+    if (!gs.length) return false;
+    var list = gs[st.group].items;
+    if (k === 'arrowdown' || k === 'j') { st.sel++; if (st.sel >= list.length) st.sel = list.length - 1; return true; }
+    if (k === 'arrowup' || k === 'k') { st.sel--; if (st.sel < 0) st.sel = 0; return true; }
+    if (k === 'pagedown') { st.sel = Math.min(list.length - 1, st.sel + 12); return true; }
+    if (k === 'pageup') { st.sel = Math.max(0, st.sel - 12); return true; }
+    if (k === 'home') { st.sel = 0; return true; }
+    if (k === 'end') { st.sel = list.length - 1; return true; }
+    if (k === 'arrowright' || k === 'tab' && !shift) {
+      st.group = (st.group + 1) % gs.length; st.sel = 0; st.scroll = 0; return true;
+    }
+    if (k === 'arrowleft' || k === 'tab' && shift) {
+      st.group = (st.group + gs.length - 1) % gs.length; st.sel = 0; st.scroll = 0; return true;
+    }
+    return false;
+  }
+
+  function catalogueWheel(dy) {
+    var st = catState(), gs = catGroups();
+    if (!gs.length) return;
+    st.sel = Math.max(0, Math.min(gs[st.group].items.length - 1, st.sel + (dy > 0 ? 3 : -3)));
+  }
+
+  function drawCatalogue(ctx, w, h) {
+    var Cat = global.Catalogue;
+    var gs = catGroups();
+    var st = catState();
+
+    /* The whole screen, because this is a page you read. */
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,6,9,0.93)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+    hot(0, 0, w, h, function () {}, null);
+
+    var m = 16;
+    var x0 = m, y0 = m, pw = w - m * 2, ph = h - m * 2;
+    panel(ctx, x0, y0, pw, ph, true);
+
+    if (!gs.length) {
+      ctx.save();
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('The catalogue is empty - no tables loaded.', x0 + 20, y0 + 40);
+      ctx.restore();
+      return;
+    }
+
+    /* ---- HEAD ---- */
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText('CATALOGUE', x0 + 18, y0 + 26);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    var total = Cat ? Cat.count(G) : 0;
+    var foot = total + ' entries  ·  arrows move  ·  Shift+C or Esc closes';
+    ctx.textAlign = 'right';
+    ctx.fillText(foot, x0 + pw - 18, y0 + 26);
+    ctx.textAlign = 'left';
+    ctx.restore();
+
+    /* ---- GROUP TABS ---- */
+    var tx = x0 + 18, ty = y0 + 40, tabH = 20, gap = 7;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    for (var gi = 0; gi < gs.length; gi++) {
+      var lbl = gs[gi].label;
+      var tw = (ctx.measureText ? ctx.measureText(lbl).width : lbl.length * 7) + 18;
+      if (tx + tw > x0 + pw - 18) { tx = x0 + 18; ty += tabH + 5; }
+      var on = gi === st.group;
+      ctx.fillStyle = on ? 'rgba(127,214,255,0.18)' : 'rgba(255,255,255,0.04)';
+      ctx.fillRect(tx, ty, tw, tabH);
+      ctx.strokeStyle = on ? MFD_HOT : 'rgba(74,151,176,0.35)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(tx + 0.5, ty + 0.5, tw - 1, tabH - 1);
+      ctx.fillStyle = on ? '#b4f0ff' : MFD_DIM;
+      ctx.fillText(lbl, tx + 9, ty + 14);
+      hot(tx, ty, tw, tabH,
+          (function (n) { return function () { var s = catState(); s.group = n; s.sel = 0; s.scroll = 0; }; })(gi),
+          'pick');
+      tx += tw + gap;
+    }
+    ctx.restore();
+    var bodyY = ty + tabH + 12;
+
+    /* ---- THE TWO COLUMNS ---- */
+    var listW = Math.max(220, Math.min(320, Math.round(pw * 0.26)));
+    var listX = x0 + 18, listY = bodyY;
+    var listH = y0 + ph - 18 - listY;
+    var rows = Math.max(1, Math.floor((listH - 24) / CAT_ROW));
+    var entry = catClamp(st, gs, rows);
+    var group = gs[st.group];
+
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(group.note.toUpperCase(), listX, listY + 2);
+    ctx.restore();
+
+    var ly = listY + 18;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    var shown = Math.min(rows, group.items.length - st.scroll);
+    for (var r = 0; r < shown; r++) {
+      var idx = st.scroll + r, e = group.items[idx];
+      var ry = ly + r * CAT_ROW;
+      if (idx === st.sel) {
+        ctx.fillStyle = 'rgba(127,214,255,0.14)';
+        ctx.fillRect(listX - 4, ry - 11, listW, CAT_ROW);
+      }
+      ctx.fillStyle = idx === st.sel ? '#b4f0ff' : MFD_INK;
+      ctx.fillText(clipText(e.name, Math.floor((listW - 72) / 6.6)), listX, ry);
+      ctx.fillStyle = idx === st.sel ? '#ffe6a8' : MFD_DIM;
+      ctx.textAlign = 'right';
+      ctx.fillText(e.price < 0 ? '(' + fmtCredits(-e.price) + ')' : fmtCredits(e.price),
+                   listX + listW - 10, ry);
+      ctx.textAlign = 'left';
+      hot(listX - 4, ry - 11, listW, CAT_ROW,
+          (function (n) { return function () { catState().sel = n; }; })(idx), 'pick');
+    }
+    /* How much more there is, when the list runs past the window. */
+    if (group.items.length > rows) {
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText((st.scroll + 1) + '-' + (st.scroll + shown) + ' of ' + group.items.length,
+                   listX, listY + 18 + rows * CAT_ROW + 8);
+    }
+    ctx.restore();
+
+    /* A rule between the list and the card. */
+    var cx0 = listX + listW + 18;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(74,151,176,0.3)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx0 - 10, listY - 6);
+    ctx.lineTo(cx0 - 10, y0 + ph - 18);
+    ctx.stroke();
+    ctx.restore();
+
+    if (!entry) return;
+
+    /* ---- THE CARD: portrait, numbers, copy ---- */
+    var cw = x0 + pw - 18 - cx0;
+    /* THE ICON IS THE POINT OF THE PAGE, so it takes the room it can get:
+     * the first cut capped it at 240 px and left two thirds of a 1080-high
+     * window empty under it. Bounded by the card's width and by the height
+     * left after the copy, so the prose is never pushed off the foot. */
+    var cardH = y0 + ph - 18 - (listY + 16);
+    var pic = Math.round(Math.max(140, Math.min(430, cw * 0.42, cardH * 0.62)));
+    var px = cx0, py = listY + 16;
+
+    ctx.save();
+    ctx.fillStyle = '#030a0f';
+    ctx.fillRect(px, py, pic, pic);
+    ctx.strokeStyle = 'rgba(74,151,176,0.45)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(px + 0.5, py + 0.5, pic - 1, pic - 1);
+    ctx.restore();
+
+    var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+    var spin = (now / CAT_TURN) * Math.PI * 2;
+    var drew = false;
+    if (entry.kind === 'hull') {
+      drew = Render.drawHullPortrait
+        ? Render.drawHullPortrait(ctx, px, py, pic, pic, entry.id, spin) : false;
+    } else {
+      drew = Render.drawItemPortrait
+        ? Render.drawItemPortrait(ctx, px, py, pic, entry.id, spin) : false;
+    }
+    if (!drew) drawItemStandIn(ctx, px, py, pic, entry.eq || entry, spin);
+
+    /* NAME, price, what it is. */
+    var tx2 = px + pic + 18, tw2 = cx0 + cw - tx2;
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText(clipText(entry.name, Math.floor(tw2 / 9.2)), tx2, py + 16);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    var money = entry.price < 0
+      ? 'pays ' + fmtCredits(-entry.price) + ' to haul'
+      : fmtCredits(entry.price) + (entry.group === 'goods' ? ' / t base' : '');
+    var tagBits = [];
+    if (entry.grey) tagBits.push('grey market');
+    if (entry.contraband) tagBits.push('contraband');
+    if (entry.unlisted) tagBits.push('not for sale');
+    ctx.fillText(money + (tagBits.length ? '   ·   ' + tagBits.join(' · ') : ''), tx2, py + 36);
+    ctx.restore();
+
+    /* THE NUMBERS. Equipment goes through the yard's own itemSpecs so the
+     * two pages can never drift; everything else brought its own. */
+    var specs = entry.eq ? itemSpecs(entry.eq) : (entry.specs || []);
+    ctx.save();
+    ctx.font = '11px ui-monospace, monospace';
+    var sy = py + 60, col2 = Math.min(150, Math.round(tw2 * 0.42));
+    for (var si = 0; si < specs.length && sy < py + pic + 4; si++, sy += 15) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(specs[si][0], tx2, sy);
+      ctx.fillStyle = MFD_INK;
+      var val = String(specs[si][1]), room = tw2 - col2 - 4;
+      while (val.length > 2 && ctx.measureText && ctx.measureText(val).width > room) val = val.slice(0, -2) + '…';
+      ctx.fillText(val, tx2 + col2, sy);
+    }
+    ctx.restore();
+
+    /* THE COPY, full width under both, all of it. */
+    var qy = Math.max(py + pic + 24, sy + 10);
+    ctx.save();
+    ctx.font = 'italic 12px ui-monospace, monospace';
+    ctx.fillStyle = '#c9d8e6';
+    var prose = entry.prose || '';
+    var lines = wrapText(prose ? '“' + prose + '”' : '', Math.floor(cw / 7.2));
+    for (var qi = 0; qi < lines.length && qy + qi * 16 < y0 + ph - 26; qi++) {
+      ctx.fillText(lines[qi], cx0, qy + qi * 16);
+    }
+    ctx.restore();
+
+    /* Where you would actually get one, when the game can say. */
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    var where = entry.kind === 'hull' ? 'A shipyard, docked (F5)'
+      : entry.group === 'goods' ? 'Any market (F4 while docked)'
+      : entry.group === 'modules' ? 'Built at a shipyard, carried by a Crawler'
+      : entry.unlisted ? 'Not stocked anywhere, at any price'
+      : 'An outfitter, docked (F5)';
+    ctx.fillText(where, cx0, y0 + ph - 26);
+    ctx.restore();
+  }
+
   /* ---- THE ITEM CARD (2026-11-09) ----------------------------------------
    * A sub-window over the yard: a square portrait of the item turning, its
    * name, price and slot, what it draws and weighs, the numbers that matter
@@ -5764,7 +6170,7 @@
   function drawGalaxyScreen(ctx, w, bottom) {
     if (!G.starMap) G.starMap = { sel: 0, list: jumpCandidates() };
     modeFrame(ctx, w, bottom, 'GALAXY MAP & COURSE PLOTTER',
-              'Enter lays in the course   ·   F8 engages');
+              'drag turns it   ·   shift-drag pans   ·   L levels   ·   K height   ·   Enter lays in the course   ·   F8 engages');
     drawStarMap(ctx, w, bottom);
   }
 
@@ -5986,18 +6392,50 @@
      * space, so it is in nobody's faction list - and the surveyor's
      * chain is gated on exactly this number. Shown only once you have
      * sold them something, because before that there is nothing to say. */
-    var guildSt = (G.standing || {}).guild || 0;
-    if (guildSt) {
-      var gy = sy + 20 + facs.length * 17;
-      if (gy <= top + pad + colH - 12) {
-        ctx.save();
-        ctx.font = 'bold 12px ui-monospace, monospace';
-        ctx.fillStyle = '#9ce89c';
-        ctx.fillText('Mining Guild', pad + 14, gy);
-        ctx.fillStyle = guildSt > 9 ? '#7dffb0' : MFD_DIM;
-        ctx.fillText(Missions.standingLabel(guildSt) + ' (' + guildSt + ')', pad + leftW * 0.55, gy);
-        ctx.restore();
+    var Chs = global.Charts;
+    var tradeBodies = [
+      { key: 'guild', name: 'Mining Guild' },
+      { key: 'carto', name: 'Cartographers', always: function () {
+          /* They are on the list the moment they have paid you anything,
+           * not the moment they have thought well of you for it. */
+          return !!(G.carto && G.carto.paid > 0);
+        }, ledger: function () {
+          if (!Chs || !G.carto || !(G.carto.paid > 0)) return '';
+          var per = Chs.CARTO_PER;
+          var toNext = per - (G.carto.paid % per);
+          return (G.carto.given || 0) >= 0 && toNext < per
+            ? Math.round(toNext / 100) / 10 + 'k to the next'
+            : '';
+        } }
+    ];
+    var gy = sy + 20 + facs.length * 17;
+    for (var tbI = 0; tbI < tradeBodies.length; tbI++) {
+      var tbSt = (G.standing || {})[tradeBodies[tbI].key] || 0;
+      if (!tbSt && !(tradeBodies[tbI].always && tradeBodies[tbI].always())) continue;
+      if (gy > top + pad + colH - 12) break;
+      ctx.save();
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = '#9ce89c';
+      ctx.fillText(tradeBodies[tbI].name, pad + 14, gy);
+      /* A body can be COLD on you, which the Guild now can be: publishing
+       * rich worlds is the one thing in the game that spends their good
+       * opinion rather than earning it. Red, so it reads as a cost. */
+      ctx.fillStyle = tbSt < 0 ? '#ff8c8c' : tbSt > 9 ? '#7dffb0' : MFD_DIM;
+      ctx.fillText(Missions.standingLabel(tbSt) + ' (' + tbSt + ')', pad + leftW * 0.55, gy);
+      /* WHAT IS IN THE LEDGER BUT NOT YET A POINT. The Cartographers pay
+       * per sheet and credit per 12,000 cr of it, so a career can have
+       * filed real work and still read zero - which looked, on this
+       * screen, exactly like having done nothing. Shown the way patronage
+       * is shown, beside the number it is working towards. */
+      if (tradeBodies[tbI].ledger) {
+        var led = tradeBodies[tbI].ledger();
+        if (led) {
+          ctx.fillStyle = '#4f7d8e';
+          ctx.fillText(led, pad + leftW * 0.80, gy);
+        }
       }
+      ctx.restore();
+      gy += 17;
     }
 
     /* --- the board, right --- */
@@ -6672,7 +7110,7 @@
   }
 
   function scanUI() {
-    if (!G.scanUI) G.scanUI = { layer: 'res', filter: 0, lines: true, style: 0, sweep: 1, zoom: 0 };
+    if (!G.scanUI) G.scanUI = { layer: 'res', filter: 0, lines: true, style: 0, sweep: 1, zoom: 0, plane: 'xy' };
     return G.scanUI;
   }
   function magRamp(f) {
@@ -6896,12 +7334,339 @@
   }
   function scanSY(vw, mapY, mapH, dr) { return mapY + (dr - vw.row0) * (mapH / vw.vr); }
 
+
+  /* ---- THE GRAVITY SLICE (2026-11-12) ------------------------------------
+   * Astra: "the spectrographic scanner should map the gravity well too;
+   * please model this as an XY / YZ / ZX selectable planar slice through the
+   * center of the planet... Regions of higher gravity would correspond to
+   * minerals that aren't detectable by your level 2 scanner as well as just
+   * the planet's mass."
+   *
+   * A fourth layer on the planetary scanner rather than a page of its own,
+   * because it IS a planetary scan - same target, same header, same panel.
+   * What it cannot share is the projection: the other layers are a lat/lon
+   * map of the surface and this is a cut through the middle, so it draws a
+   * disc where they draw a rectangle.
+   *
+   * TWO PICTURES AT ONCE, and they need different scales. The well spans
+   * zero at the centre to g at the surface; an ore body is a few hundred
+   * milligals on top of that, which is about a thousandth of it. Drawn on
+   * one scale the anomalies are invisible - so the well is the ground, in
+   * blues, and the anomaly rides over it in heat, normalised to its own
+   * maximum. That is how a real gravity map is published, and for the same
+   * reason.
+   */
+  var GRAV_CACHE = null;
+
+  /* Blue for the well: dark at the centre where g falls to nothing. */
+  function gravWellInk(f) {
+    f = Math.max(0, Math.min(1, f));
+    var r = Math.round(10 + 40 * f), g2 = Math.round(22 + 110 * f), b = Math.round(38 + 150 * f);
+    return [r, g2, b];
+  }
+
+  /* Build (or reuse) the slice bitmap. Keyed so panning and turning the
+   * page does not recompute a field that has not changed. */
+  function gravBitmap(body, sys, plane, lvl, px) {
+    var Gr = global.Gravity;
+    if (!Gr || !Gr.slice) return null;
+    var sig = [body.id, sys && sys.seedTag, plane, lvl, px].join('|');
+    if (GRAV_CACHE && GRAV_CACHE.sig === sig) return GRAV_CACHE;
+    var sl = Gr.slice(body, sys, plane, lvl);
+    if (!sl) return null;
+
+    var cvs = global.document ? global.document.createElement('canvas') : null;
+    if (!cvs) return null;
+    cvs.width = px; cvs.height = px;
+    var c2 = cvs.getContext('2d');
+    var img = c2.createImageData(px, px);
+    var d = img.data, n = sl.n;
+    /* The well's own range, so a small dense world is not all one colour. */
+    var gLo = Infinity, gHi = 0, aHi = 0;
+    for (var i = 0; i < n * n; i++) {
+      if (isNaN(sl.g[i])) continue;
+      if (sl.g[i] < gLo) gLo = sl.g[i];
+      if (sl.g[i] > gHi) gHi = sl.g[i];
+      if (sl.anom[i] > aHi) aHi = sl.anom[i];
+    }
+    if (!(gHi > gLo)) { gLo = 0; gHi = 1; }
+
+    /* ANOMALY MEANS LATERAL VARIATION, not the raw sum of what every body
+     * pulls. Drawn raw, the middle of the disc came out a warm brown: deep
+     * inside a world every ore body is about equally far away, so they add
+     * to a smooth bowl that has nothing to do with where the ore IS - and
+     * it reads as something enormous in the core. A field survey subtracts
+     * a reference for exactly this reason. Here the reference is the mean
+     * at each radius, so what is left is the part that varies AROUND the
+     * world at that depth, which is the part that points at a lump. */
+    var RB = 48, rSum = new Float64Array(RB), rN = new Float64Array(RB);
+    for (var ry = 0; ry < n; ry++) {
+      for (var rx = 0; rx < n; rx++) {
+        var ri = ry * n + rx;
+        if (isNaN(sl.g[ri])) continue;
+        var ru = (rx + 0.5) / n * 2 - 1, rv = (ry + 0.5) / n * 2 - 1;
+        var rb = Math.min(RB - 1, Math.floor(Math.sqrt(ru * ru + rv * rv) * RB));
+        rSum[rb] += sl.anom[ri]; rN[rb]++;
+      }
+    }
+    var lat = new Float64Array(n * n);
+    aHi = 0;
+    for (ry = 0; ry < n; ry++) {
+      for (rx = 0; rx < n; rx++) {
+        ri = ry * n + rx;
+        if (isNaN(sl.g[ri])) { lat[ri] = 0; continue; }
+        ru = (rx + 0.5) / n * 2 - 1; rv = (ry + 0.5) / n * 2 - 1;
+        rb = Math.min(RB - 1, Math.floor(Math.sqrt(ru * ru + rv * rv) * RB));
+        var ref = rN[rb] > 0 ? rSum[rb] / rN[rb] : 0;
+        lat[ri] = Math.max(0, sl.anom[ri] - ref);
+        if (lat[ri] > aHi) aHi = lat[ri];
+      }
+    }
+
+    for (var y = 0; y < px; y++) {
+      for (var x = 0; x < px; x++) {
+        var sxp = Math.min(n - 1, Math.floor(x / px * n));
+        var syp = Math.min(n - 1, Math.floor(y / px * n));
+        var k = syp * n + sxp, o = (y * px + x) * 4;
+        if (isNaN(sl.g[k])) { d[o + 3] = 0; continue; }
+        var ink = gravWellInk((sl.g[k] - gLo) / (gHi - gLo));
+        /* The anomaly, on its own scale, added as heat. */
+        var a = aHi > 0 ? lat[k] / aHi : 0;
+        a = Math.pow(Math.max(0, a), 0.6);
+        d[o]     = Math.min(255, ink[0] + Math.round(230 * a));
+        d[o + 1] = Math.min(255, ink[1] + Math.round(150 * a * a));
+        d[o + 2] = Math.min(255, ink[2] - Math.round(60 * a));
+        d[o + 3] = 255;
+      }
+    }
+    c2.putImageData(img, 0, 0);
+    GRAV_CACHE = { sig: sig, canvas: cvs, slice: sl, gLo: gLo, gHi: gHi, aHi: aHi };
+    return GRAV_CACHE;
+  }
+
+  /* The slice, its marks and its legend. Returns false when there is no
+   * instrument or no world, having said which. */
+  function drawGravityLayer(ctx, w, top, bottom, T) {
+    var Gr = global.Gravity, Cb = global.Combat;
+    var ui = scanUI();
+    var lvl = Cb && Cb.gravLevel ? Cb.gravLevel(G.ship) : 0;
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    if (!lvl) {
+      ctx.fillText('NO GRAVIMETER FITTED — it is the one instrument that reads through rock.', 16, top + 36);
+      ctx.fillText('A spectrometer sees the surface. Gravity does not care how deep a thing is buried.', 16, top + 56);
+      ctx.fillText('Yards sell a grade 1 where development is 0.20 or better.', 16, top + 76);
+      ctx.restore();
+      return true;
+    }
+    if (!T || !T.body) {
+      ctx.fillText('Lock a world, or orbit one.', 16, top + 36);
+      ctx.restore();
+      return true;
+    }
+    ctx.restore();
+
+    var body = T.body, sys = G.sys;
+    var plane = ui.plane || 'xy';
+    var res = Gr.RES[lvl] || Gr.RES[1];
+    var svl = global.Survey && global.Survey.level ? global.Survey.level(G.ship) : 0;
+
+    /* Geometry: the disc on the left, the contacts on the right. */
+    var panelW = 330, pad = 14;
+    var discY = top + 62;
+    /* Room under it for the legend AND the layer buttons: the first cut
+     * took every pixel down to `bottom - 40` and printed the legend
+     * straight through the button row. */
+    var disc = Math.max(240, Math.min(w - panelW - pad * 3 - 44, bottom - discY - 78));
+    var discX = 44;
+    var bm = gravBitmap(body, sys, plane, lvl, Math.min(512, Math.max(128, Math.round(disc))));
+
+    /* header */
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText((body.name || '?').toUpperCase() + '  —  GRAVITY', discX, top + 26);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    var kitName = ['', 'GRAVIMETER', 'GRADIOMETER', 'CRYOGENIC', 'ATOM INTERFEROMETER'][lvl] || '';
+    ctx.fillText('GRADE ' + lvl + ' ' + kitName + '   ·   reads to ' + res.mgal + ' mGal' +
+                 '   ·   resolves ' + Math.round(res.blur * 100) + '% of a radius',
+                 discX, top + 44);
+    ctx.restore();
+
+    if (!bm) {
+      ctx.save();
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = '#5d8fa4';
+      ctx.fillText('This body has no interior to cut.', discX, discY + 20);
+      ctx.restore();
+      return true;
+    }
+    var sl = bm.slice;
+
+    /* THE DISC */
+    ctx.save();
+    ctx.fillStyle = '#02060a';
+    ctx.fillRect(discX, discY, disc, disc);
+    ctx.drawImage(bm.canvas, discX, discY, disc, disc);
+    /* The limb, and the core boundary the profile was built on. */
+    var cxm = discX + disc / 2, cym = discY + disc / 2, Rpx = disc / 2;
+    ctx.strokeStyle = 'rgba(127,214,255,0.5)';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx, 0, Math.PI * 2); ctx.stroke();
+    ctx.strokeStyle = 'rgba(255,214,120,0.35)';
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx * sl.core, 0, Math.PI * 2); ctx.stroke();
+    ctx.setLineDash([]);
+    /* Where g is strongest - the thing a slice is for. */
+    if (sl.peak && sl.peak.x < 0.995) {
+      ctx.strokeStyle = 'rgba(180,240,255,0.30)';
+      ctx.beginPath(); ctx.arc(cxm, cym, Rpx * sl.peak.x, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.restore();
+
+    /* THE AXES, as arrows rather than words (Astra prefers pointers). */
+    var AX = { xy: ['X', 'Y'], yz: ['Y', 'Z'], zx: ['Z', 'X'] }[plane] || ['X', 'Y'];
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    ctx.fillText('→ ' + AX[0], discX + disc - 34, discY + disc / 2 - 6);
+    ctx.fillText('↑ ' + AX[1], discX + disc / 2 + 6, discY + 14);
+    ctx.restore();
+
+    /* THE CONTACTS, placed where they actually are on this cut. One that
+     * lies well off the plane is drawn faint: the slice is barely cutting
+     * it, and saying so is more honest than pretending it is here. */
+    var contacts = Gr.contacts(body, sys, lvl, svl);
+    var ax = Gr.PLANE_AXES[plane] || Gr.PLANE_AXES.xy;
+    ctx.save();
+    for (var ci = 0; ci < contacts.length; ci++) {
+      var c = contacts[ci];
+      var v = [Math.cos(c.lat) * Math.cos(c.lon), Math.cos(c.lat) * Math.sin(c.lon), Math.sin(c.lat)];
+      var depth = c.depthKm != null ? c.depthKm : 2;
+      var rr = Math.max(0.05, 1 - (depth + (c.radKm || 10)) / (sl.R || 1));
+      var off = Math.abs(v[ax[2]]);
+      var mx = cxm + v[ax[0]] * rr * Rpx, my = cym - v[ax[1]] * rr * Rpx;
+      var a2 = Math.max(0.12, 1 - off * 1.35);
+      var hot2 = !c.explained;
+      /* A dark ring under the bright one: most contacts sit near the limb,
+       * which is the brightest part of the picture, and a thin warm circle
+       * drawn straight onto it disappeared. */
+      ctx.strokeStyle = 'rgba(0,0,0,' + (a2 * 0.75).toFixed(2) + ')';
+      ctx.lineWidth = hot2 ? 4.5 : 3.5;
+      ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = hot2 ? 'rgba(255,186,110,' + a2.toFixed(2) + ')'
+                             : 'rgba(190,225,245,' + (a2 * 0.85).toFixed(2) + ')';
+      ctx.lineWidth = hot2 ? 2.2 : 1.5;
+      ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
+      if (hot2) {
+        ctx.beginPath(); ctx.moveTo(mx - 11, my); ctx.lineTo(mx - 8, my);
+        ctx.moveTo(mx + 8, my); ctx.lineTo(mx + 11, my); ctx.stroke();
+      }
+    }
+    ctx.restore();
+
+    /* THE LEGEND under the disc. */
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    var ly2 = discY + disc + 15;
+    ctx.fillText('surface ' + sl.gSurf.toFixed(2) + ' m/s²   ·   peak ' + sl.peak.g.toFixed(2) +
+                 ' at ' + Math.round(sl.peak.x * 100) + '% of the radius   ·   core boundary ' +
+                 Math.round(sl.core * 100) + '%   ·   g is zero at the centre: only what is BELOW you pulls',
+                 discX, ly2);
+    ctx.restore();
+
+    /* ---- THE PANEL: the plane, and what was found ---- */
+    var pxl = discX + disc + pad * 2, pw2 = Math.max(220, w - pxl - pad);
+    var py2 = discY;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('SLICE', pxl, py2);
+    ctx.restore();
+    var bx2 = pxl, by2 = py2 + 8;
+    ['xy', 'yz', 'zx'].forEach(function (p) {
+      btn(ctx, bx2, by2, 52, 22, p.toUpperCase(),
+          function () { scanUI().plane = p; }, { hot: plane === p, bold: true, font: 10 });
+      bx2 += 56;
+    });
+
+    var cy2 = by2 + 38;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    var nUn = contacts.filter(function (c) { return !c.explained; }).length;
+    ctx.fillText(contacts.length + ' MASS' + (contacts.length === 1 ? '' : 'ES') +
+                 '   ·   ' + nUn + ' UNEXPLAINED', pxl, cy2);
+    ctx.restore();
+    cy2 += 8;
+
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    for (var q = 0; q < contacts.length && cy2 < bottom - 56; q++) {
+      var cc = contacts[q];
+      cy2 += 15;
+      ctx.fillStyle = cc.explained ? MFD_DIM : '#ffb978';
+      var head = (cc.explained ? '  ' : '! ') +
+                 (cc.kind === 'buried' ? 'buried' : cc.kind === 'fissile' ? 'hotspot' : 'province');
+      ctx.fillText(head, pxl, cy2);
+      ctx.fillStyle = cc.explained ? 'rgba(140,170,195,0.8)' : '#e8d8b8';
+      var line = Gr.describe(cc);
+      while (line.length > 4 && ctx.measureText && ctx.measureText(line).width > pw2 - 74) line = line.slice(0, -2) + '…';
+      ctx.fillText(line, pxl + 74, cy2);
+      /* What it would take to get at it. */
+      if (cc.reach && cy2 < bottom - 70) {
+        cy2 += 12;
+        ctx.fillStyle = cc.reach === 'drone' ? 'rgba(125,255,176,0.75)'
+                      : cc.reach === 'drill' ? 'rgba(255,214,120,0.75)'
+                      : 'rgba(255,110,110,0.70)';
+        ctx.fillText(cc.reach === 'drone' ? '   a drone can reach it'
+                   : cc.reach === 'drill' ? '   needs a drilling team'
+                   : '   too deep for anything you have', pxl + 74, cy2);
+      }
+    }
+    if (!contacts.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText('Nothing over ' + res.mgal + ' mGal. A finer instrument would', pxl, cy2 + 16);
+      ctx.fillText('read deeper into the same rock.', pxl, cy2 + 30);
+    }
+    ctx.restore();
+
+    /* The one line that says what an unexplained contact MEANS. */
+    ctx.save();
+    ctx.font = 'italic 10px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(255,185,120,0.75)';
+    ctx.fillText('! something heavy your survey kit cannot name', pxl, bottom - 34);
+    ctx.restore();
+    return true;
+  }
+
+  /* The layer row, drawn by the map picture and by the slice alike. */
+  function drawScanLayerButtons(ctx, w, bottom, ui) {
+    var bx = 44, by = bottom - 30;
+    btn(ctx, bx, by, 80, 22, 'RESOURCES', function () { ui.layer = 'res'; }, { hot: ui.layer === 'res', bold: true, font: 10 }); bx += 84;
+    btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
+    btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
+    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 });
+  }
+
   function drawScannerScreen(ctx, w, bottom) {
     var Sv = global.Survey, ui = scanUI();
     var top = modeFrame(ctx, w, bottom, 'PLANETARY SCANNER',
-                        'R/M/B layer  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
+                        'R/M/B/G layer  ·  1/2/3 slice plane  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
     var lvl = Sv ? Sv.level(G.ship) : 0;
     var hasMag = Sv && Sv.magLevel ? Sv.magLevel(G.ship) > 0 : false;
+    /* THE GRAVITY LAYER IS A DIFFERENT PICTURE. The others are a lat/lon map
+     * of the surface; this is a cut through the middle, so it owns the page
+     * while it is up rather than sharing the projection. Asked first,
+     * because a gravimeter is an instrument even with no spectrometer
+     * aboard, and the gate below would turn such a pilot away. */
+    if (ui.layer === 'grav') {
+      var gT = scannerTarget();
+      if (drawGravityLayer(ctx, w, top, bottom, gT)) { drawScanLayerButtons(ctx, w, bottom, ui); return; }
+    }
     var T = Sv && (lvl || hasMag) ? scannerTarget() : null;
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
@@ -6966,6 +7731,7 @@
     btn(ctx, bx, by, 80, 22, 'RESOURCES', function () { ui.layer = 'res'; }, { hot: ui.layer === 'res', bold: true, font: 10 }); bx += 84;
     btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
     btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
+    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 }); bx += 70;
     btn(ctx, bx, by, 86, 22, 'STYLE ' + SCAN_STYLES[ui.style | 0], function () { ui.style = ((ui.style | 0) + 1) % SCAN_STYLES.length; }, { bold: true, font: 10 }); bx += 90;
     btn(ctx, bx, by, 94, 22, 'SWEEP ' + SWEEPS[ui.sweep | 0], function () { ui.sweep = ((ui.sweep | 0) + 1) % SWEEPS.length; }, { bold: true, font: 10 }); bx += 98;
     btn(ctx, bx, by, 58, 22, 'ZOOM ' + vw.z + 'x', function () { scanZoom(1); }, { hot: vw.z > 1, bold: true, font: 10 }); bx += 62;
@@ -7368,6 +8134,12 @@
     if (key === 'r') { ui.layer = 'res'; return true; }
     if (key === 'm') { ui.layer = 'mag'; return true; }
     if (key === 'b') { ui.layer = 'both'; return true; }
+    if (key === 'g') { ui.layer = 'grav'; return true; }
+    /* The three principal cuts, while the slice is the layer showing. */
+    if (ui.layer === 'grav' && (key === '1' || key === '2' || key === '3')) {
+      ui.plane = { '1': 'xy', '2': 'yz', '3': 'zx' }[key];
+      return true;
+    }
     if (key === 'l') { ui.lines = !ui.lines; return true; }
     if (key === 'c') { ui.filter = (ui.filter + 1) % SCAN_FILTERS.length; return true; }
     if (key === 's') { ui.style = ((ui.style | 0) + 1) % SCAN_STYLES.length; return true; }
@@ -7416,17 +8188,6 @@
     }
     ctx.restore();
     return sc2;
-  }
-
-  /* The scanner's own keys, routed from main.js. */
-  function scannerKey(key) {
-    var ui = scanUI();
-    if (key === 'r') { ui.layer = 'res'; return true; }
-    if (key === 'm') { ui.layer = 'mag'; return true; }
-    if (key === 'b') { ui.layer = 'both'; return true; }
-    if (key === 'l') { ui.lines = !ui.lines; return true; }
-    if (key === 'c') { ui.filter = (ui.filter + 1) % SCAN_FILTERS.length; return true; }
-    return false;
   }
 
   /* --- Shift+F2: manoeuvre nodes ------------------------------------------ */
@@ -7800,14 +8561,72 @@
 
   /* The transform: scale in px per ly, and the screen point of the
    * galaxy's origin. Screen y runs down, galaxy y up. */
+  /* ---- THE CAMERA (2026-11-13) ----------------------------------------
+   * Elevation is the angle you are looking down from:
+   *
+   *   CHART_EL_MAX (90 deg)  straight down. A plan view - height is
+   *                          invisible, and this is the map as it was.
+   *   CHART_EL_MIN (10 deg)  nearly edge-on. The disc is a band, and
+   *                          height is most of what you can see.
+   *
+   * Never ALL the way to zero: at exactly edge-on the z = 0 plane is a
+   * line on the screen, screen-to-galaxy stops having an answer, and
+   * panning and the wheel would both divide by nothing.
+   *
+   *   u = x cos a - y sin a                 (across the screen)
+   *   Y = x sin a + y cos a                 (into the tilt)
+   *   v = Y sin e + z k cos e               (up the screen)
+   *
+   * At e = 90 that is v = Y and the height term vanishes; at e = 0 it is
+   * v = z k and the disc has gone edge-on. k is the depth exaggeration,
+   * and it touches NOTHING but this projection. */
+  var CHART_EL_MIN = 10 * Math.PI / 180, CHART_EL_MAX = Math.PI / 2;
+  var CHART_EL_DEFAULT = 68 * Math.PI / 180;
+  var CHART_DEPTHS = [1, 2, 3, 5];
+  var CHART_ROT_PER_PX = 0.0075;        // radians of yaw per pixel dragged
+
+  function chartCam(view) {
+    var a = view.yaw || 0;
+    var e = view.el === undefined ? CHART_EL_DEFAULT : view.el;
+    return { ca: Math.cos(a), sa: Math.sin(a),
+             ce: Math.cos(e), se: Math.sin(e),
+             k: view.depth || 1, el: e, yaw: a };
+  }
+  /* A galaxy point to the view plane: across, up, and how far away (which
+   * only sorting and the stems care about). */
+  function chartProj(cam, x, y, z) {
+    var u = x * cam.ca - y * cam.sa;
+    var Y = x * cam.sa + y * cam.ca;
+    var kz = (z || 0) * cam.k;
+    return { u: u, v: Y * cam.se + kz * cam.ce, w: Y * cam.ce - kz * cam.se };
+  }
+  /* And back again, onto the z = 0 plane - the only inverse that has an
+   * answer, and the only one anything asks for. */
+  function chartUnproj(cam, u, v) {
+    var Y = v / cam.se;                  // z = 0, so v = Y sin e
+    return { x: u * cam.ca + Y * cam.sa, y: -u * cam.sa + Y * cam.ca };
+  }
+
   function chartXf(view, plot) {
     var s = plot.fit * view.z;
-    return { scale: s, ox: plot.cx - view.gx * s, oy: plot.cy + view.gy * s };
+    var cam = chartCam(view);
+    /* The view is centred on a point of the z = 0 plane, so the centre
+     * means the same thing however the camera is turned. */
+    var c = chartProj(cam, view.gx, view.gy, 0);
+    return { scale: s, cam: cam, ox: plot.cx - c.u * s, oy: plot.cy + c.v * s };
   }
-  function chartToScreen(xf, gx, gy) { return { x: xf.ox + gx * xf.scale, y: xf.oy - gy * xf.scale }; }
-  function chartToGalaxy(xf, sx, sy) { return { x: (sx - xf.ox) / xf.scale, y: (xf.oy - sy) / xf.scale }; }
+  function chartToScreen(xf, gx, gy, gz) {
+    var p = chartProj(xf.cam, gx, gy, gz || 0);
+    return { x: xf.ox + p.u * xf.scale, y: xf.oy - p.v * xf.scale };
+  }
+  function chartToGalaxy(xf, sx, sy) {
+    return chartUnproj(xf.cam, (sx - xf.ox) / xf.scale, (xf.oy - sy) / xf.scale);
+  }
   /* Where a star's DOT is drawn: lifted off its floor point by its stem. */
-  function chartDot(xf, s) { return { x: xf.ox + s.x * xf.scale, y: xf.oy - (s.y + s.z) * xf.scale }; }
+  function chartDot(xf, s) { return chartToScreen(xf, s.x, s.y, s.z); }
+  /* And the foot of that stem - the same star with its height taken off,
+   * which is the point on the plane it is actually above. */
+  function chartFloor(xf, s) { return chartToScreen(xf, s.x, s.y, 0); }
 
   /* Zoom between the whole galaxy and the closest; the centre kept where
    * the plot still has galaxy in it. Per axis, so at full zoom-out there is
@@ -7830,20 +8649,63 @@
     var under = chartToGalaxy(chartXf(view, plot), sx, sy);
     view.z = Math.max(1, Math.min(chartMaxZoom(plot), view.z * factor));
     var s = plot.fit * view.z;
-    view.gx = under.x - (sx - plot.cx) / s;
-    view.gy = under.y + (sy - plot.cy) / s;
+    /* SOLVED IN THE VIEW PLANE, not in galaxy x and y (2026-11-13). The old
+     * form subtracted screen pixels straight off the centre's galaxy
+     * coordinates, which is only the same thing while the map is looking
+     * straight down. Turned, it drifted - six or seven light years over
+     * thirty notches of the wheel, which galaxyzoom.test.js caught at once.
+     *
+     * The centre we want is the one that puts `under` back under the
+     * cursor: work in (u, v), where the projection IS a scale and an
+     * offset, then come back to the plane. */
+    var cam = chartCam(view);
+    var pu = chartProj(cam, under.x, under.y, 0);
+    var c = chartUnproj(cam, pu.u - (sx - plot.cx) / s, pu.v + (sy - plot.cy) / s);
+    view.gx = c.x;
+    view.gy = c.y;
     return chartClamp(view, plot);
   }
   function chartPan(view, plot, dxPx, dyPx) {
     var s = plot.fit * view.z;
-    view.gx -= dxPx / s;
-    view.gy += dyPx / s;
+    /* Drag the PLANE, not the axes: the centre moves along whichever way
+     * the camera is facing, so a pan goes where the mouse went however the
+     * map is turned. */
+    var cam = chartCam(view);
+    var now = chartProj(cam, view.gx, view.gy, 0);
+    var to = chartUnproj(cam, now.u - dxPx / s, now.v + dyPx / s);
+    view.gx = to.x;
+    view.gy = to.y;
     return chartClamp(view, plot);
+  }
+
+  /* Turning it. Across the screen spins the disc; up and down tilts it,
+   * and the tilt stops short of edge-on so the plane never becomes a
+   * line. */
+  function chartTurn(view, dxPx, dyPx) {
+    view.yaw = ((view.yaw || 0) + dxPx * CHART_ROT_PER_PX) % (Math.PI * 2);
+    var e = (view.el === undefined ? CHART_EL_DEFAULT : view.el) + dyPx * CHART_ROT_PER_PX;
+    view.el = Math.max(CHART_EL_MIN, Math.min(CHART_EL_MAX, e));
+    return view;
+  }
+  /* Straight down again, facing the way it was built. */
+  function chartLevel(view) {
+    view.yaw = 0; view.el = CHART_EL_MAX;
+    return view;
+  }
+  function chartDepth(view, step) {
+    var i = CHART_DEPTHS.indexOf(view.depth || 1);
+    if (i < 0) i = 0;
+    i = Math.max(0, Math.min(CHART_DEPTHS.length - 1, i + (step || 1)));
+    view.depth = CHART_DEPTHS[i];
+    return view.depth;
   }
   /* Centre on a star's dot, as drawn — its height included, or a star
    * high above the plane would come to rest well off the middle. */
   function chartCentreOn(view, plot, s) {
-    view.gx = s.x; view.gy = s.y + s.z;
+    /* Its floor point, not its dot: the centre is a place on the plane,
+     * and a star high above it should sit above the middle rather than
+     * dragging the middle up to meet it. */
+    view.gx = s.x; view.gy = s.y;
     return chartClamp(view, plot);
   }
   function chartInPlot(plot, x, y, margin) {
@@ -8087,10 +8949,17 @@
     var m = G.starMap;
     if (!m.view) {
       var mem = chartMemory && chartMemory.seed === G.seed ? chartMemory : null;
-      m.view = mem ? { z: mem.z, gx: mem.gx, gy: mem.gy } : { z: 1, gx: 0, gy: 0 };
+      m.view = mem
+        ? { z: mem.z, gx: mem.gx, gy: mem.gy, yaw: mem.yaw || 0,
+            el: mem.el === undefined ? CHART_EL_DEFAULT : mem.el, depth: mem.depth || 1 }
+        : { z: 1, gx: 0, gy: 0, yaw: 0, el: CHART_EL_DEFAULT, depth: 1 };
     }
+    if (m.view.el === undefined) m.view.el = CHART_EL_DEFAULT;
+    if (m.view.yaw === undefined) m.view.yaw = 0;
+    if (!m.view.depth) m.view.depth = 1;
     chartClamp(m.view, plot);
-    chartMemory = { seed: G.seed, z: m.view.z, gx: m.view.gx, gy: m.view.gy };
+    chartMemory = { seed: G.seed, z: m.view.z, gx: m.view.gx, gy: m.view.gy,
+                    yaw: m.view.yaw, el: m.view.el, depth: m.view.depth };
     return m.view;
   }
 
@@ -8121,6 +8990,22 @@
     chartZoomAt(m.view, chartPlot, factor, ax, ay);
     return true;
   }
+  /* Lay the map flat again, and step the depth exaggeration. Both return
+   * true so main.js knows the key was spent on the chart. */
+  function chartLevelKey() {
+    if (!chartLive()) return false;
+    chartLevel(G.starMap.view);
+    say('Star map level — looking straight down', 3);
+    return true;
+  }
+  function chartDepthKey(step) {
+    if (!chartLive()) return false;
+    var d = chartDepth(G.starMap.view, step);
+    say(d > 1 ? 'Star map height exaggerated ×' + d + ' — distances unchanged'
+              : 'Star map height true to scale', 4);
+    return true;
+  }
+
   function chartCentre(which) {
     if (!chartLive()) return false;
     var m = G.starMap;
@@ -8138,10 +9023,14 @@
 
   /* A press on the plot is a click until it moves CHART_DRAG_PX, then it
    * is a pan for the rest of the drag; a click selects the nearest dot. */
-  function chartPointer(kind, x, y) {
+  function chartPointer(kind, x, y, mods) {
     if (kind === 'down') {
       if (!chartLive() || !chartInPlot(chartPlot, x, y)) { chartPress = null; return false; }
-      chartPress = { x: x, y: y, lx: x, ly: y, moved: false };
+      /* WHICH GESTURE THIS IS, decided once at the press and held for the
+       * whole drag - so a shift key let go halfway does not turn a pan
+       * into a barrel roll. */
+      chartPress = { x: x, y: y, lx: x, ly: y, moved: false,
+                     pan: !!(mods && (mods.shift || mods.button === 2)) };
       return true;
     }
     if (!chartPress) return false;
@@ -8150,7 +9039,10 @@
       if (!chartPress.moved && Math.hypot(x - chartPress.x, y - chartPress.y) >= CHART_DRAG_PX) {
         chartPress.moved = true;
       }
-      if (chartPress.moved) chartPan(G.starMap.view, chartPlot, x - chartPress.lx, y - chartPress.ly);
+      if (chartPress.moved) {
+        if (chartPress.pan) chartPan(G.starMap.view, chartPlot, x - chartPress.lx, y - chartPress.ly);
+        else chartTurn(G.starMap.view, x - chartPress.lx, y - chartPress.ly);
+      }
       chartPress.lx = x; chartPress.ly = y;
       return true;
     }
@@ -8202,8 +9094,19 @@
     var scale = xf.scale;
     var zoomed = view.z > 1.0001;
 
+    /* THE FLOOR POINT AND THE STEM (2026-11-13). `x, y` is where the star
+     * stands on the z = 0 plane and `stem` is how far above it the star
+     * itself is drawn — so the dot goes at (x, y - stem) and the line
+     * between them is the depth cue. Both come out of the camera now, so
+     * the stem leans the way the map is turned instead of always standing
+     * straight up; with the map level it is zero, and the chart reads
+     * exactly as it did before there was a camera. */
     function toScreen(s) {
-      return { x: xf.ox + s.x * scale, y: xf.oy - s.y * scale, stem: s.z * scale };
+      /* Height never moves a star sideways — yaw turns the plane, and the
+       * z term only ever lands in the vertical — so the floor point's x
+       * serves for both ends and the stem stays a vertical line. */
+      var f = chartFloor(xf, s), d = chartDot(xf, s);
+      return { x: f.x, y: f.y, stem: f.y - d.y };
     }
 
     var dx = px + plotSize + 56, dw = pw - plotSize - 86;
@@ -8831,8 +9734,8 @@
     ctx.fillText('↑↓ or click a star · PgUp/PgDn ten · Home nearest · ' +
                  'Enter lays in the course · F8 engages',
                  px + 24, py + ph - 24);
-    ctx.fillText('wheel or + / − zoom · drag pans · C centres on you · ' +
-                 'Shift+C on the selection',
+    ctx.fillText('wheel or + / − zoom · drag turns · shift-drag or right-drag pans ' +
+                 '· L levels · K height · C centres on you · Shift+C on the selection',
                  px + 24, py + ph - 10);
     ctx.restore();
     var t1 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
@@ -8892,7 +9795,11 @@
     /* The F6 chart's zoom and pan (2026-11-03): the wheel, the pointer and
      * the keys, routed from main.js; `chart` is the pure transform the
      * tests check, and chartStat what the last frame drew and what it cost. */
+    /* The catalogue page (2026-11-12): the gameopedia off the help card. */
+    drawCatalogue: drawCatalogue, catalogueKey: catalogueKey,
+    catalogueWheel: catalogueWheel, catState: catState, catGroups: catGroups,
     chartWheel: chartWheel, chartPointer: chartPointer, chartKeyZoom: chartKeyZoom,
+    chartLevelKey: chartLevelKey, chartDepthKey: chartDepthKey,
     chartCentre: chartCentre, chartWhole: chartWhole, CHART_KEY_STEP: CHART_KEY_STEP,
     /* A COPY: the frame overwrites the same object, and a test that held
      * the last frame's reading and compared it with this one's was
@@ -8906,6 +9813,11 @@
       fit: chartFit, maxZoom: chartMaxZoom, xf: chartXf, toScreen: chartToScreen,
       toGalaxy: chartToGalaxy, dot: chartDot, clamp: chartClamp, zoomAt: chartZoomAt,
       pan: chartPan, centreOn: chartCentreOn, inPlot: chartInPlot, pick: chartPick,
+      /* The camera (2026-11-13). */
+      cam: chartCam, proj: chartProj, unproj: chartUnproj, floor: chartFloor,
+      turn: chartTurn, level: chartLevel, depth: chartDepth,
+      EL_MIN: CHART_EL_MIN, EL_MAX: CHART_EL_MAX, EL_DEFAULT: CHART_EL_DEFAULT,
+      DEPTHS: CHART_DEPTHS, ROT_PER_PX: CHART_ROT_PER_PX,
       scaleBar: chartScaleBar, edge: chartEdge, labels: chartLabels, edgeCost: chartEdgeCost,
       MAX_PX_PER_LY: CHART_MAX_PX_PER_LY,
       /* The last territory field built, and what it was built from, so a

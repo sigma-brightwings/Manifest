@@ -87,7 +87,21 @@
    * the cluster's centre) RIDE THIS SAME EPOCH — bump once for the
    * programme, not once per stage. The shelf was empty; nothing else goes
    * with it. */
-  var VERSION = 5;
+  /* EPOCH 6 — the disc got thicker (2026-11-13, v1.4 "Dodecahedron").
+   *
+   * CLUSTER_THICKNESS went from 7 ly of half-height to 18, so the cluster
+   * reads 4.1:1 instead of about 10:1. That is not a display change: the
+   * minimum-separation rejection and the max-hop nudge both read positions,
+   * so every seed grows a DIFFERENT ARRANGEMENT of stars. A career from
+   * epoch 5 is in a system whose neighbours, jump distances and fuel costs
+   * have all moved, and whose own coordinates mean something else — the
+   * same case as epoch 3, and there is nothing to migrate it to.
+   *
+   * Astra chose it knowing that: she had already said "we can break
+   * existing saves" when the rotatable chart made the flatness visible, and
+   * then picked the number ("very well with 18"). The shelf was empty;
+   * nothing else goes with it. */
+  var VERSION = 6;
 
   /* Written but no longer read. Delete the lot at the next epoch bump, then
    * empty this list. Each entry says what replaced it, because "why is this
@@ -262,6 +276,22 @@
        * you come to sell it. Additive: an older career has none, which
        * reads as "found nothing yet", and that is exactly true. */
       patron: G.patron || {},
+      /* WHAT THE CARTOGRAPHERS HAVE PAID YOU (charts.js, 2026-11-13), and
+       * which powers charting has already pleased. The per-sheet record of
+       * WHAT is published rides on the survey record itself (pubCov), which
+       * is saved field by field above, so a reload cannot sell the same
+       * sheet twice. Additive: an older career has published nothing, which
+       * is exactly true. */
+      carto: G.carto || null,
+      /* SOMEBODY ON THE HULL, anybody adrift on a beacon, and what hands
+       * have heard about you (outside.js, 2026-11-13). The air runs down
+       * on the clock, so a reload must not hand a dying hand a fresh
+       * candle - nor a captain who left one a clean name. Additive: an
+       * older career has none of these, which reads as nobody outside,
+       * nobody adrift, and a name nothing is known against. */
+      outside: G.outside || null,
+      adrift: G.adrift || [],
+      crewRep: G.crewRep || 0,
       /* WHAT YOU HAVE SOLD, AND TO WHOM (intel.js). The risk model is
        * entirely a function of this, so a reload must not launder it. */
       intel: G.intel || {},
@@ -270,6 +300,11 @@
        * prunes itself on the next read: an entry whose incident is over
        * drops off on its own clock. */
       band: Array.isArray(G.band) ? G.band : [],
+      /* A quiet transfer you bought into, took, or told somebody about
+       * (rendezvous.js), and the systems where they are lying low
+       * because of it. */
+      rvDone: G.rvDone || {},
+      rvBlown: G.rvBlown || {},
       found: G.found || {},
       /* And which latent installations a career has been pointed at, so a
        * reload does not quietly take one back out of the world again. */
@@ -650,10 +685,17 @@
      * before the ledger starts at nothing, which is honest: it was never
      * counted. */
     G.band = Array.isArray(data.band) ? data.band : [];
+    G.rvDone = (data.rvDone && typeof data.rvDone === 'object') ? data.rvDone : {};
+    G.rvBlown = (data.rvBlown && typeof data.rvBlown === 'object') ? data.rvBlown : {};
     G.intel = {};
     if (data.intel) for (var ik in data.intel) {
       if (Object.prototype.hasOwnProperty.call(data.intel, ik)) G.intel[ik] = data.intel[ik];
     }
+    G.carto = (data.carto && typeof data.carto === 'object')
+      ? { paid: data.carto.paid || 0, given: data.carto.given || 0,
+          frontier: (data.carto.frontier && typeof data.carto.frontier === 'object')
+            ? data.carto.frontier : {} }
+      : { paid: 0, given: 0, frontier: {} };
     G.patron = {};
     if (data.patron) for (var pk in data.patron) {
       if (Object.prototype.hasOwnProperty.call(data.patron, pk)) G.patron[pk] = data.patron[pk];

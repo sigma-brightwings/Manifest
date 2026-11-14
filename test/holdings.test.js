@@ -115,18 +115,30 @@ check('and no longer on the market', !r4.ok && r4.mine);
 console.log('--- the desk ---');
 var h = H.list(G)[0], id = target.star.id, base = target.sys.corruption;
 var crimeBefore = H.crimeOf(G, target.sys, id);
-/* A Syndicate hold's score is pinned at 100 rather than worked out from
- * its two axes (generate.js), so the formula only applies off a hold.
- * buildGovernment works the score out from the UNROUNDED axes and stores
+/* buildGovernment works the score out from the UNROUNDED axes and stores
  * them rounded, so in about one system in six the formula on the stored
  * axes is one off. crimeOf (fixed 2026-10-19) adds a holding's shift to the
  * GENERATED score rather than re-running the formula, so the first nudge
- * no longer jumps by that one. */
+ * no longer jumps by that one.
+ *
+ * THE HOLD BRANCH IS GONE (2026-11-13). This used to read "a Syndicate
+ * hold's score is pinned at 100 rather than worked out from its two axes",
+ * and expected exactly 100 on a held system. That stopped being true when
+ * the pirate bands split out of the Syndicate: buildGovernment now works a
+ * held system's score from the same two axes as everybody else and lets
+ * `heldBy` carry whose territory it is. The branch simply never ran, because
+ * the target this file picks is the first system with a holding on the
+ * market and that had never been a held one - until the thicker disc of
+ * v1.4 redrew the galaxy and it was. Checked over the new kawartha: twelve
+ * held systems in the first 120 stars, all twelve within one of their own
+ * axes, none pinned at 100. The game is right and the expectation was
+ * stale, so the formula now applies to every system and there is no
+ * special case left to go out of date. */
 check('an untouched system reads its generated crime score exactly',
       crimeBefore === target.sys.crimeScore &&
-      (target.sys.pirateHeld ? target.sys.crimeScore === 100
-                             : Math.abs(Gen.permissivity(target.sys.violence, base) - target.sys.crimeScore) <= 1),
-      crimeBefore + ' / ' + target.sys.crimeScore + (target.sys.pirateHeld ? ' (hold)' : ''));
+      Math.abs(Gen.permissivity(target.sys.violence, base) - target.sys.crimeScore) <= 1,
+      crimeBefore + ' / ' + target.sys.crimeScore +
+      (target.sys.pirateHeld ? ' (' + (target.sys.heldBy || 'held') + ')' : ''));
 (function () {
   /* The smallest shift moves the score by the formula's own step, never more. */
   var fake = { crimeScore: target.sys.crimeScore, violence: target.sys.violence, corruption: target.sys.corruption };

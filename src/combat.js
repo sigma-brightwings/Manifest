@@ -659,7 +659,7 @@
                    minDev: 0.40, minStanding: -100, minCrime: 0, grey: false,
                    pitch: 'Grade 2. Adds the fissiles - they give themselves away.' },
     deepsurvey: { id: 'deepsurvey', name: 'Deep survey array', slot: 'utility',
-                  kind: 'survey', survey: 3, price: 23500, power: 2.0, mass: 3,
+                  kind: 'survey', survey: 3, price: 23500, power: 6.0, mass: 3,
                   uniqueGroup: 'survey',
                   minDev: 0.55, minStanding: 0, minCrime: 0, grey: false,
                   pitch: 'Grade 3. Rare metals too, and the tonnage. The Guild pays for numbers.' },
@@ -674,10 +674,10 @@
      * advertising the Guild's chain to somebody who has not run it. The
      * price is kept for the trade-in and the insurance line. */
     shieldsurvey: { id: 'shieldsurvey', name: 'Shielded deep array', slot: 'utility',
-                    kind: 'survey', survey: 4, quiet: true, price: 96000, power: 2.4, mass: 4,
+                    kind: 'survey', survey: 4, quiet: true, price: 96000, power: 7.0, mass: 4,
                     uniqueGroup: 'survey', unlisted: true,
                     minDev: 0, minStanding: -100, minCrime: 0, grey: false,
-                    pitch: 'Grade 4, in a housing that does not answer a coil. Guild issue; not sold.' },
+                    pitch: 'Grade 4, and the only one that subtracts your own hull\'s field before it reads the ground. Guild issue; not sold.' },
     /* THE MAGNETOMETER (2026-11-10, Astra: "a magnetic field mapping
      * function on the planetary scanner"; separate instrument, her answer).
      * Reads a world's magnetic field - the planet's own dipole and the
@@ -689,6 +689,42 @@
                     uniqueGroup: 'magnet',
                     minDev: 0.20, minStanding: -100, minCrime: 0, grey: false,
                     pitch: 'Maps a world\'s magnetic field: its dipole, its poles, the anomalies over ore.' },
+
+    /* GRAVIMETERS (2026-11-12). The one instrument that does not care how
+     * much rock is in the way: a spectrometer reads the surface, a
+     * gravimeter weighs everything under it. So this is how you find ore
+     * that no survey grade can see - and how you learn it is forty
+     * kilometres down and nobody is getting it. Own slot, own group; the
+     * tier buys RESOLUTION (Gravity.RES): how fine the slice is, whether
+     * two neighbouring bodies come apart, and how tightly the depth is
+     * pinned. Grade 1 tells you a hemisphere has something heavy in it. */
+    /* THE TOP TWO RUNGS ARE HUNGRY (2026-11-13). Grades 1 and 2 are
+     * instruments a courier can hang off her bus. Grades 3 and 4 are a
+     * cold baseline and a cloud of falling atoms, and they draw like it -
+     * about three times what they used to, so that fitting one is a
+     * decision rather than a formality. Before this, nothing but the slot
+     * count limited a utility loadout: a Wren Shuttle had the power for
+     * every instrument in the catalogue at once. */
+    gravI:   { id: 'gravI', name: 'Gravimeter', slot: 'utility',
+               kind: 'gravity', gravity: 1, price: 5200, power: 0.6, mass: 1,
+               uniqueGroup: 'gravity',
+               minDev: 0.20, minStanding: -100, minCrime: 0, grey: false,
+               pitch: 'Grade 1. A planar slice through a world\'s mass. Coarse: it finds the weight, not the lump.' },
+    gravII:  { id: 'gravII', name: 'Gravity gradiometer', slot: 'utility',
+               kind: 'gravity', gravity: 2, price: 12400, power: 0.9, mass: 2,
+               uniqueGroup: 'gravity',
+               minDev: 0.35, minStanding: -100, minCrime: 0, grey: false,
+               pitch: 'Grade 2. Reads the field\'s gradient across a baseline, and names the depth band.' },
+    gravIII: { id: 'gravIII', name: 'Cryogenic gradiometer', slot: 'utility',
+               kind: 'gravity', gravity: 3, price: 27000, power: 4.0, mass: 3,
+               uniqueGroup: 'gravity',
+               minDev: 0.50, minStanding: 0, minCrime: 0, grey: false,
+               pitch: 'Grade 3. Cold baseline. Separates two bodies lying together, and gives depth to a kilometre.' },
+    gravIV:  { id: 'gravIV', name: 'Atom interferometer', slot: 'utility',
+               kind: 'gravity', gravity: 4, price: 58000, power: 6.0, mass: 4,
+               uniqueGroup: 'gravity',
+               minDev: 0.65, minStanding: 0, minCrime: 0, grey: false,
+               pitch: 'Grade 4. Cold atoms in free fall. Reads a body dense for its size - the sign of the rare metals.' },
 
     /* GAS SKIMMER INTAKE (mining rung 3). Takes hydrogen out of a giant's
      * air as you fly through it - a RAM SCOOP on the nose, a mouth about
@@ -1128,7 +1164,7 @@
     talon: { id: 'talon', size: 'S', name: 'Talon Courier', price: 32000, mesh: 'courier',
              dryMass: 42, thrustKN: 2700, thrusterCap: 16, fuelCap: 37,
              cargoCap: 64, hullMax: 100,
-             slots: { hardpoint: 2, utility: 2, internal: 3 },
+             slots: { hardpoint: 2, utility: 3, internal: 3 },
              /* Two racks: a courier can carry a crate of each and choose. */
              rackSlots: 2,
              powerMW: 9.0, fitMass: 14,
@@ -1166,7 +1202,7 @@
               * 9 t budget, so MASS BINDS BEFORE POWER on this hull and
               * the lockout is unreachable. 7.0 stands. The test is the
               * point: the rule is now enforced rather than believed. */
-             slots: { hardpoint: 2, utility: 1, internal: 2 },
+             slots: { hardpoint: 2, utility: 2, internal: 2 },
              /* ONE. An interceptor is a gun platform with a seat; the space
               * that would be a second crate is why it turns like that. */
              rackSlots: 1,
@@ -1183,7 +1219,7 @@
     kestrel: { id: 'kestrel', size: 'L', name: 'Kestrel Multirole', price: 150000, /* 120,000 before 2026-11-04 */ mesh: 'merc',
              dryMass: 60, thrustKN: 4050, thrusterCap: 19, fuelCap: 45,
              cargoCap: 96, hullMax: 130,
-             slots: { hardpoint: 3, utility: 2, internal: 4 },
+             slots: { hardpoint: 3, utility: 4, internal: 4 },
              /* Two, same as the courier — the extra tonnage went to guns. */
              rackSlots: 2,
              powerMW: 14.0, fitMass: 22,
@@ -1199,7 +1235,7 @@
     mule:  { id: 'mule', size: 'M', name: 'Mule Freighter', price: 135000, /* 78,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 80, thrustKN: 5550, thrusterCap: 21, fuelCap: 48,
              cargoCap: 160, hullMax: 160,
-             slots: { hardpoint: 2, utility: 3, internal: 5 },
+             slots: { hardpoint: 2, utility: 4, internal: 5 },
              /* Three, because a hauler's answer to everything is volume. */
              rackSlots: 3,
              powerMW: 18.0, fitMass: 30,
@@ -1244,7 +1280,7 @@
               * this file's own rule for traffic, and the one you can buy is
               * the same airframe. Trading a gunned ship in for one means
               * selling the gun first, and the yard says so. */
-             slots: { hardpoint: 0, utility: 1, internal: 2 },
+             slots: { hardpoint: 0, utility: 2, internal: 2 },
              rackSlots: 0,
              powerMW: 4.0, fitMass: 6,
              blurb: 'the cheapest way off a planet',
@@ -1258,7 +1294,7 @@
     bollard: { id: 'bollard', size: 'S', name: 'Bollard Tug', price: 44000, mesh: 'tug',
              dryMass: 50, thrustKN: 1300, thrusterCap: 22, fuelCap: 20,
              cargoCap: 20, hullMax: 140,
-             slots: { hardpoint: 1, utility: 3, internal: 2 },
+             slots: { hardpoint: 1, utility: 4, internal: 2 },
              rackSlots: 1,
              powerMW: 10.0, fitMass: 16,
              /* The tug models carry grab arms (grabberArm0L/R); the cockpit
@@ -1275,7 +1311,7 @@
     samaritan: { id: 'samaritan', size: 'M', name: 'Samaritan Tender', price: 88000, mesh: 'tender',
              dryMass: 55, thrustKN: 1750, thrusterCap: 18, fuelCap: 26,
              cargoCap: 50, hullMax: 150,
-             slots: { hardpoint: 1, utility: 2, internal: 5 },
+             slots: { hardpoint: 1, utility: 3, internal: 5 },
              rackSlots: 1,
              powerMW: 15.0, fitMass: 24,
              blurb: 'built to survive somebody else\'s fight',
@@ -1289,7 +1325,7 @@
     sump:  { id: 'sump', size: 'M', name: 'Sump Waste Hauler', price: 70000, mesh: 'hauler',
              dryMass: 70, thrustKN: 3800, thrusterCap: 20, fuelCap: 56,
              cargoCap: 180, hullMax: 150,
-             slots: { hardpoint: 1, utility: 3, internal: 4 },
+             slots: { hardpoint: 1, utility: 4, internal: 4 },
              rackSlots: 1,
              powerMW: 14.0, fitMass: 26,
              blurb: 'cheap hold, because of what usually goes in it',
@@ -1303,7 +1339,7 @@
     longhaul: { id: 'longhaul', size: 'L', name: 'Longhaul Freighter', price: 250000, /* 165,000 before 2026-11-04 */ mesh: 'freighter',
              dryMass: 140, thrustKN: 6800, thrusterCap: 30, fuelCap: 100,
              cargoCap: 320, hullMax: 260,
-             slots: { hardpoint: 2, utility: 4, internal: 6 },
+             slots: { hardpoint: 2, utility: 6, internal: 6 },
              rackSlots: 2,
              powerMW: 26.0, fitMass: 44,
              blurb: 'the freighter on every lane',
@@ -1317,7 +1353,7 @@
     tanker: { id: 'tanker', size: 'L', name: 'Coldwater Tanker', price: 220000, /* 150,000 before 2026-11-04 */ mesh: 'tanker',
              dryMass: 150, thrustKN: 6800, thrusterCap: 30, fuelCap: 130,
              cargoCap: 280, hullMax: 240,
-             slots: { hardpoint: 2, utility: 3, internal: 6 },
+             slots: { hardpoint: 2, utility: 5, internal: 6 },
              rackSlots: 2,
              powerMW: 24.0, fitMass: 40,
              blurb: 'goes further than anything else on the list',
@@ -1331,7 +1367,7 @@
     cutter: { id: 'cutter', size: 'L', name: 'Naval Cutter', price: 380000, mesh: 'navy',
              dryMass: 110, thrustKN: 2800, thrusterCap: 30, fuelCap: 40,
              cargoCap: 40, hullMax: 320,
-             slots: { hardpoint: 4, utility: 3, internal: 5 },
+             slots: { hardpoint: 4, utility: 5, internal: 5 },
              rackSlots: 3,
              powerMW: 34.0, fitMass: 50,
              /* ALLIED, the same line the military slipspace drive draws:
@@ -1349,7 +1385,7 @@
     meridian: { id: 'meridian', size: 'XL', name: 'Meridian Liner', price: 500000, /* 420,000 before 2026-11-04 */ mesh: 'liner',
              dryMass: 260, thrustKN: 4600, thrusterCap: 40, fuelCap: 90,
              cargoCap: 120, hullMax: 300,
-             slots: { hardpoint: 2, utility: 4, internal: 8 },
+             slots: { hardpoint: 2, utility: 6, internal: 8 },
              rackSlots: 2,
              powerMW: 32.0, fitMass: 56,
              orderOnly: true,
@@ -1364,7 +1400,7 @@
     leviathan: { id: 'leviathan', size: 'XL', name: 'Leviathan Bulk Carrier', price: 780000, /* 600,000 before 2026-11-04 */ mesh: 'bulk',
              dryMass: 420, thrustKN: 9000, thrusterCap: 50, fuelCap: 280,
              cargoCap: 900, hullMax: 420,
-             slots: { hardpoint: 2, utility: 4, internal: 8 },
+             slots: { hardpoint: 2, utility: 6, internal: 8 },
              rackSlots: 2,
              powerMW: 40.0, fitMass: 64,
              orderOnly: true,
@@ -1379,7 +1415,7 @@
     capital: { id: 'capital', size: 'XL', name: 'Capital Ship', price: 4500000, mesh: 'capital',
              dryMass: 900, thrustKN: 14000, thrusterCap: 80, fuelCap: 250,
              cargoCap: 200, hullMax: 1500,
-             slots: { hardpoint: 8, utility: 6, internal: 10, capital: 2 },
+             slots: { hardpoint: 8, utility: 8, internal: 10, capital: 2 },
              rackSlots: 6,
              powerMW: 120.0, fitMass: 200,
              orderOnly: true,
@@ -1406,7 +1442,7 @@
     crawler: { id: 'crawler', size: 'XL', name: 'Crawler', price: 560000, /* 450,000 before 2026-11-04 */ mesh: 'crawler',
              dryMass: 640, thrustKN: 9500, thrusterCap: 60, fuelCap: 300,
              cargoCap: 600, hullMax: 520,
-             slots: { hardpoint: 1, utility: 4, internal: 6 },
+             slots: { hardpoint: 1, utility: 6, internal: 6 },
              rackSlots: 1,
              powerMW: 40.0, fitMass: 60,
              orderOnly: true,
@@ -1443,7 +1479,7 @@
     heavytug: { id: 'heavytug', size: 'M', name: 'Hawser Heavy Tug', price: 66000, mesh: 'tug_heavy',
              dryMass: 75, thrustKN: 2300, thrusterCap: 26, fuelCap: 30,
              cargoCap: 30, hullMax: 220,
-             slots: { hardpoint: 1, utility: 3, internal: 3 },
+             slots: { hardpoint: 1, utility: 4, internal: 3 },
              rackSlots: 1,
              powerMW: 14.0, fitMass: 22,
              grabArms: true,
@@ -1461,7 +1497,7 @@
              cargoCap: 80, hullMax: 90,
              /* Unarmed, like every shuttle: the one class that flies without
               * a gun, and the Heron is still a shuttle, only wider. */
-             slots: { hardpoint: 0, utility: 1, internal: 3 },
+             slots: { hardpoint: 0, utility: 2, internal: 3 },
              rackSlots: 0,
              powerMW: 6.0, fitMass: 10,
              blurb: 'a shuttle with a freighter\'s hold',
@@ -1475,7 +1511,7 @@
     trader: { id: 'trader', size: 'M', name: 'Tallyman Trader', price: 110000, /* 72,000 before 2026-11-04 */ mesh: 'trade',
              dryMass: 60, thrustKN: 4200, thrusterCap: 18, fuelCap: 40,
              cargoCap: 110, hullMax: 120,
-             slots: { hardpoint: 2, utility: 2, internal: 4 },
+             slots: { hardpoint: 2, utility: 3, internal: 4 },
              rackSlots: 2,
              powerMW: 14.0, fitMass: 22,
              blurb: 'the merchant on every short run',
@@ -1489,7 +1525,7 @@
     runner: { id: 'runner', size: 'M', name: 'Corsair Runner', price: 68000, mesh: 'pirate',
              dryMass: 34, thrustKN: 3600, thrusterCap: 15, fuelCap: 30,
              cargoCap: 40, hullMax: 85,
-             slots: { hardpoint: 3, utility: 1, internal: 2 },
+             slots: { hardpoint: 3, utility: 2, internal: 2 },
              rackSlots: 1,
              powerMW: 10.0, fitMass: 12,
              /* On a floor only where somebody can be bought — the grey
@@ -1505,7 +1541,7 @@
     enforcer: { id: 'enforcer', size: 'M', name: 'Syndicate Enforcer', price: 110000, mesh: 'enforcer',
              dryMass: 45, thrustKN: 3900, thrusterCap: 16, fuelCap: 32,
              cargoCap: 30, hullMax: 140,
-             slots: { hardpoint: 3, utility: 2, internal: 3 },
+             slots: { hardpoint: 3, utility: 3, internal: 3 },
              rackSlots: 2,
              powerMW: 14.0, fitMass: 16,
              syndicate: { minStanding: 40 },
@@ -1520,7 +1556,7 @@
     enforcerheavy: { id: 'enforcerheavy', size: 'M', name: 'Syndicate Heavy', price: 175000, mesh: 'enforcer_heavy',
              dryMass: 70, thrustKN: 4600, thrusterCap: 20, fuelCap: 40,
              cargoCap: 30, hullMax: 240,
-             slots: { hardpoint: 4, utility: 2, internal: 4 },
+             slots: { hardpoint: 4, utility: 3, internal: 4 },
              rackSlots: 2,
              powerMW: 18.0, fitMass: 26,
              syndicate: { minStanding: 70 },
@@ -1535,7 +1571,7 @@
     fighter: { id: 'fighter', size: 'S', name: 'Lance Fighter', price: 48000, mesh: 'lance',
              dryMass: 18, thrustKN: 2200, thrusterCap: 10, fuelCap: 14,
              cargoCap: 4, hullMax: 60,
-             slots: { hardpoint: 2, utility: 1, internal: 1 },
+             slots: { hardpoint: 2, utility: 2, internal: 1 },
              rackSlots: 1,
              powerMW: 6.0, fitMass: 6,
              /* The navy's own, like the cutter: a carrier's strike wing. */
@@ -1550,7 +1586,7 @@
     carrier: { id: 'carrier', size: 'XL', name: 'Fleet Carrier', price: 18000000, mesh: 'carrier',
              dryMass: 3000, thrustKN: 12000, thrusterCap: 120, fuelCap: 1100,
              cargoCap: 2000, hullMax: 4000,
-             slots: { hardpoint: 10, utility: 8, internal: 14, capital: 2 },
+             slots: { hardpoint: 10, utility: 10, internal: 14, capital: 2 },
              rackSlots: 6,
              powerMW: 200.0, fitMass: 400,
              orderOnly: true,
@@ -3653,8 +3689,15 @@
    * should: a cutter came looking for you, and the tender was on its way
    * to help somebody. It is the one hull in the game whose only defence
    * is that everyone agrees not to. */
+  /* SHOOTING SOMEBODY IN A SUIT (2026-11-13). Astra: "firing on a suited
+   * person with transponder on is one of the heaviest crimes." It belongs
+   * at the top of the killing ladder for the same reason the tender does,
+   * only more so: a rescue tender at least has a hull. A person on a
+   * beacon has a visor, and the only thing between them and you is that
+   * everybody agreed not to. */
   var BOUNTY = { demand: 400, assault: 300, kill: 2800, killPolice: 6000,
                  killNavy: 12000, killLiner: 9000, killTender: 14000,
+                 killSuited: 16000,
                  smuggling: 0, sabotage: 30000,
                  /* FRAMING A TUG (Phase 18, 2026-10-31): planting cargo in
                   * the hold of the boat towing you, and being seen at it.
@@ -3891,6 +3934,54 @@
       if (it.kind === 'survey' && (it.survey || 0) > best) best = it.survey;
     }
     return best;
+  }
+
+  /* COMPENSATED FOR THE SHIP IT IS BOLTED TO (Astra, 2026-11-12).
+   *
+   * I had the shielded array's `quiet` as "a housing that does not
+   * answer a coil", which is a wrong idea about the wrong thing: nothing
+   * is pinging you. Astra put it right in two sentences - everything
+   * that runs draws current and current makes a field, so there IS a
+   * signature, it just should not be much; and this is "the only survey
+   * meter that takes the ship's own magnetic fields into account".
+   *
+   * That second one is the whole instrument, and it is real
+   * magnetometry: an aeromagnetic survey has to model and subtract the
+   * aircraft's own field before the ground underneath means anything.
+   * Every other array in the catalogue reads the world through the
+   * reactor it is sitting next to. This one knows its own noise.
+   *
+   * And knowing its own noise is why it does both of the things it does:
+   *
+   *   - IT CAN BE RUN DARK. A survey array with the radiators shut is a
+   *     powered instrument you cannot account for. One that already
+   *     models its own emission can be run inside the shroud suite's
+   *     silence without breaking it - which means the Guild's reward
+   *     needs the OTHER chain's reward before it means anything, and
+   *     the Guild bars neither.
+   *   - IT READS A THIRD MORE GROUND PER PASS (Survey.swathAt). Not a
+   *     bigger aperture: the same aperture, keeping cells the others
+   *     throw away as contaminated.
+   *
+   * One property, two numbers, and neither of them is stealth of its
+   * own. */
+  /* The best gravimeter fitted, 0 for none. */
+  function gravLevel(ship) {
+    var best = 0, f = ship && ship.fittings;
+    if (!f) return 0;
+    for (var i = 0; i < f.length; i++) {
+      var it = EQUIPMENT[f[i]];
+      if (it && it.gravity > best) best = it.gravity;
+    }
+    return best;
+  }
+
+  function surveyQuiet(ship) {
+    var list = fittedList(ship);
+    for (var i = 0; i < list.length; i++) {
+      if (list[i].item.kind === 'survey' && list[i].item.quiet) return true;
+    }
+    return false;
   }
 
   /* A reading on one ship, or null if you have nothing fitted to read it
@@ -10158,6 +10249,7 @@
     UNARMED_CLASSES: UNARMED_CLASSES,
     DISTRESS_DELAY_ARMED: DISTRESS_DELAY_ARMED,
     DISTRESS_DELAY_CIVIL: DISTRESS_DELAY_CIVIL,
+    surveyQuiet: surveyQuiet, gravLevel: gravLevel,
     isArmedNpc: isArmedNpc, distressDelayFor: distressDelayFor,
     /* Distress: the call as a signal rather than an accounting delay. */
     DISTRESS_LIFE: DISTRESS_LIFE, DISTRESS_MAX: DISTRESS_MAX,

@@ -165,30 +165,50 @@
   var GOLDBUD_TRAITS = { perishable: true, narcotic: true, cultivated: true, potency: 1.0 };
 
   var COMMODITIES = [
-    { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw' },
-    { id: 'grain',    name: 'Grain',            tier: 0, base: 64,   cat: 'agri' },
-    { id: 'livestock',name: 'Livestock',        tier: 0, base: 128,  cat: 'agri' },
-    { id: 'timber',   name: 'Timber',           tier: 0, base: 44,   cat: 'agri' },
-    { id: 'fish',     name: 'Aquaculture',      tier: 0, base: 96,   cat: 'agri' },
+    { id: 'water',    name: 'Water',            tier: 0, base: 18,   cat: 'raw',
+      blurb: "Life support, reaction feedstock, and the one cargo nobody has to be sold on. Cheap wherever there is ice and priceless four days past it." },
+    { id: 'grain',    name: 'Grain',            tier: 0, base: 64,   cat: 'agri',
+      blurb: "Bulk calories that keep in vacuum. Every habitat eats, and almost none of them grow enough." },
+    { id: 'livestock',name: 'Livestock',        tier: 0, base: 128,  cat: 'agri',
+      blurb: "Animals, alive, with everything that implies about air, water and the state of the hold on arrival. Pays well because most captains will not take the job." },
+    { id: 'timber',   name: 'Timber',           tier: 0, base: 44,   cat: 'agri',
+      blurb: "Grown, not milled from rock. Stations buy it for the reason the people in them want it: it is the one surface aboard that was never a machine." },
+    { id: 'fish',     name: 'Aquaculture',      tier: 0, base: 96,   cat: 'agri',
+      blurb: "Tank-raised protein, flash-frozen in the hold. A farm world with water sells it to every dry rock in reach." },
 
-    { id: 'ores',     name: 'Metal ores',       tier: 1, base: 82,   cat: 'raw' },
-    { id: 'rare',     name: 'Rare metals',      tier: 1, base: 640,  cat: 'raw' },
-    { id: 'hydrogen', name: 'Hydrogen fuel',    tier: 1, base: 55,   cat: 'raw', fuel: true },
-    { id: 'fissile',  name: 'Fissiles',         tier: 1, base: FISSILE_BASE, cat: 'raw' },
+    { id: 'ores',     name: 'Metal ores',       tier: 1, base: 82,   cat: 'raw',
+      blurb: "Crushed rock with metal still in it. Low value by the tonne, which is exactly why it moves in tonnes." },
+    { id: 'rare',     name: 'Rare metals',      tier: 1, base: 640,  cat: 'raw',
+      blurb: "The platinum group and what sits beside it. Dense, dull, and worth more than the deck it is standing on." },
+    { id: 'hydrogen', name: 'Hydrogen fuel',    tier: 1, base: 55,   cat: 'raw', fuel: true,
+      blurb: "Jump fuel. A gas giant refinery sells it for pennies and a farming co-op charges what it likes, which is most of what range actually means." },
+    { id: 'fissile',  name: 'Fissiles',         tier: 1, base: FISSILE_BASE, cat: 'raw',
+      blurb: "Enriched heavy metal in shielded flasks. Every station reactor runs on it, and every customs officer wants to know where yours came from." },
 
-    { id: 'chemicals',name: 'Chemicals',        tier: 2, base: 210,  cat: 'industrial' },
-    { id: 'alloys',   name: 'Structural alloys',tier: 2, base: 265,  cat: 'industrial' },
-    { id: 'textiles', name: 'Textiles',         tier: 2, base: 190,  cat: 'industrial' },
-    { id: 'farmmach', name: 'Farm machinery',   tier: 2, base: 480,  cat: 'industrial' },
+    { id: 'chemicals',name: 'Chemicals',        tier: 2, base: 210,  cat: 'industrial',
+      blurb: "Industrial feedstock in drums: solvents, catalysts, the unglamorous middle of every supply chain." },
+    { id: 'alloys',   name: 'Structural alloys',tier: 2, base: 265,  cat: 'industrial',
+      blurb: "Beams, plate and structural section. What a station is made of, and what one being built eats by the shipload." },
+    { id: 'textiles', name: 'Textiles',         tier: 2, base: 190,  cat: 'industrial',
+      blurb: "Woven goods and technical fabric. Unexciting, steady, and the cargo that quietly pays a Mule's berth fees." },
+    { id: 'farmmach', name: 'Farm machinery',   tier: 2, base: 480,  cat: 'industrial',
+      blurb: "Harvesters, pumps and soil plant. An agricultural world buys it, breaks it, and buys it again." },
 
-    { id: 'computers',name: 'Computers',        tier: 3, base: 1150, cat: 'tech' },
-    { id: 'robotics', name: 'Robotics',         tier: 3, base: 1620, cat: 'tech' },
-    { id: 'medical',  name: 'Medical supplies', tier: 3, base: 890,  cat: 'tech' },
-    { id: 'fusion',   name: 'Fusion cells',     tier: 3, base: 1980, cat: 'tech' },
+    { id: 'computers',name: 'Computers',        tier: 3, base: 1150, cat: 'tech',
+      blurb: "General-purpose machines. The tier where a hold starts being worth robbing." },
+    { id: 'robotics', name: 'Robotics',         tier: 3, base: 1620, cat: 'tech',
+      blurb: "Actuators, limbs and the controllers for them. Industry buys it to stop paying people." },
+    { id: 'medical',  name: 'Medical supplies', tier: 3, base: 890,  cat: 'tech',
+      blurb: "Pharmaceuticals, sterile consumables and field kit. The one high-value cargo a port will wave through at any hour." },
+    { id: 'fusion',   name: 'Fusion cells',     tier: 3, base: 1980, cat: 'tech',
+      blurb: "Sealed power cells. Dense energy in a box, and the reason a settlement a long way from a star can keep its lights on." },
 
-    { id: 'aicores',  name: 'AI cores',         tier: 4, base: 4200, cat: 'luxury' },
-    { id: 'genetech', name: 'Gene therapies',   tier: 4, base: 3600, cat: 'luxury' },
-    { id: 'luxuries', name: 'Luxury goods',     tier: 4, base: 2450, cat: 'luxury' },
+    { id: 'aicores',  name: 'AI cores',         tier: 4, base: 4200, cat: 'luxury',
+      blurb: "Inference hardware, crated and sealed. Nobody will tell you what is on them and the manifest says COMPUTERS." },
+    { id: 'genetech', name: 'Gene therapies',   tier: 4, base: 3600, cat: 'luxury',
+      blurb: "Therapies in cold storage, licensed per dose. Legal in most places, and the paperwork is the expensive part." },
+    { id: 'luxuries', name: 'Luxury goods',     tier: 4, base: 2450, cat: 'luxury',
+      blurb: "Whatever the rich on this particular world have decided is scarce. Reliably worth the freight and reliably embarrassing to list." },
 
     /* Wine. Agricultural in origin and luxury in trade, which is why it sits
      * at tier 2 on a tier-0 input: the value is in the growing and the keeping,
@@ -196,7 +216,8 @@
      * from planet type or development — a rich industrial world cannot decide
      * to start producing it — so it is the one cargo whose supply is a place
      * rather than a capability. See vineyardAt(). */
-    { id: 'wine',     name: 'Wine',             tier: 2, base: 340,  cat: 'luxury' },
+    { id: 'wine',     name: 'Wine',             tier: 2, base: 340,  cat: 'luxury',
+      blurb: "Fermented, bottled and shipped upright. It travels worse than anything else aboard and sells for it." },
 
     /* The interesting one. Negative base value: a built-up world will pay
      * to have this taken away, and somewhere with nothing to lose will take
@@ -204,7 +225,8 @@
      * trade, and unlike every other cargo it runs from rich worlds to poor
      * ones — which is exactly why it is worth having in the game. */
     { id: 'waste',    name: 'Radioactive waste',tier: 1, base: -310, cat: 'special',
-      waste: true },
+      waste: true,
+      blurb: "Spent reactor material nobody wants. You are PAID to take it, which tells you most of what you need to know about where it has to go." },
 
     /* The other end of that trade, and the reason the waste run stops being
      * a chore nobody wants and becomes a supply chain.
@@ -238,7 +260,8 @@
        * galaxy, plants made more, and the best single run reached 127,711 cr,
        * past a Kestrel. 18 puts the median run back where it was before them
        * (80,564 cr against 78,780) and the best at 95,783. */
-      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 18 },
+      cat: 'special', milfuel: true, severity: 3, shelfDays: 8, shelfMax: 18,
+      blurb: "Military drive fuel in slugs: what a milfuel cruise drive burns to halve a corridor. Dear, watched, and waste left over from every one you use." },
 
     /* Fruit, off the vines and the orchard rows under a civilian farm's
      * domes — the same farms that make the wine. Appended LAST so no tier or
@@ -246,7 +269,8 @@
      * market through plantFarms, which draws no rng. Perishable, so the
      * shelf is days deep rather than weeks: a farm cannot sit on a harvest. */
     { id: 'fruit',    name: 'Fruit',            tier: 0, base: priceFromTraits('agri', FRUIT_TRAITS),
-      cat: 'agri', traits: FRUIT_TRAITS, shelfDays: 3, shelfMax: 90 }
+      cat: 'agri', traits: FRUIT_TRAITS, shelfDays: 3, shelfMax: 90,
+      blurb: "Fresh produce on a clock. Gets a premium at the far end if it gets there, and is compost if it does not." }
   ];
 
   var BY_ID = {};
@@ -270,8 +294,10 @@
      * materiel. Radioactive waste inside a Syndicate hold is worse than any
      * of them and is not on this ladder — it is a flat fine and an
      * expulsion, in wasteCustoms. */
-    { id: 'narcotics', name: 'Narcotics',        tier: 2, base: 980,  cat: 'contraband', contraband: true, severity: 1 },
-    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true, severity: 2 },
+    { id: 'narcotics', name: 'Narcotics',        tier: 2, base: 980,  cat: 'contraband', contraband: true, severity: 1,
+      blurb: "Refined, packaged and worth more than the hull around it. Severity one: a fine and a black mark, not a cell, which is exactly what makes so many pilots try it once." },
+    { id: 'arms',      name: 'Restricted arms',  tier: 2, base: 1450, cat: 'contraband', contraband: true, severity: 2,
+      blurb: "Military small arms and the ammunition for them. Severity two - the step where being scanned stops being expensive and starts being serious." },
     /* GOLD BUDS. Astra: the Syndicate farm "will be growing gold buds, which
      * are a narcotic." Severity 1 because it is a vice, the same rung as
      * narcotics — a search treats them alike. `grown` keeps it out of
@@ -280,7 +306,8 @@
      * at source. Black markets BUY it, which is where the run goes. */
     { id: 'goldbuds',  name: 'Gold buds',        tier: 2, base: priceFromTraits('contraband', GOLDBUD_TRAITS),
       cat: 'contraband', contraband: true, severity: 1, grown: true, traits: GOLDBUD_TRAITS,
-      shelfDays: 5, shelfMax: 40 }
+      shelfDays: 5, shelfMax: 40,
+      blurb: "A cultivated narcotic that has to arrive fresh, which is the whole problem: the fast route is the patrolled one." }
   ];
   var contrabandRegistered = false;
   function registerContraband() {
@@ -515,7 +542,8 @@
      * hold, a Syndicate) puts there. licenseMilitaryFuel promotes one port
      * per licensed system, downstream of every rng draw, so adding this row
      * changes no seed's generation by itself. */
-    { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true },
+    { id: 'milfuel',      name: 'Milfuel factory',   bias: [], milfuelPlant: true,
+      blurb: "Military drive fuel in slugs: what a milfuel cruise drive burns to halve a corridor. Dear, watched, and waste left over from every one you use." },
     /* A FLEET CARRIER, PARKED. Astra: "the navy runs the carrier, and then
      * there are those carrier shipstations, they're basically floating
      * cities." So this is a port whose building is a warship: it trades

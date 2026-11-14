@@ -279,6 +279,9 @@
     ROBBED_ME:            { rank: 8,  good: false },
     ANSWERED_MY_DISTRESS: { rank: 7,  good: true },
     CAUGHT_IN_DISGUISE:   { rank: 6,  good: false },
+    /* Above a lie and below being seen in a disguise: she sails short
+     * because of you, and she will say so before she says anything else. */
+    TOOK_MY_CREW:         { rank: 6,  good: false },
     LIED_ABOUT_CARGO:     { rank: 5,  good: false },
     IGNORED_MY_DISTRESS:  { rank: 4,  good: false },
     KEPT_YOUR_WORD:       { rank: 3,  good: true },
@@ -304,6 +307,12 @@
      * they can be said back to you. */
     told:     {},
     disguise: { feeling: -2, honesty: -3, tag: 'CAUGHT_IN_DISGUISE' },
+    /* You hired a hand off her ship (2026-11-13). Not a lie - you outbid
+     * her - so honesty does not move; but she is short a crew member on
+     * the next run and it was your doing, which is the same shape of
+     * injury as killing somebody she knew. favours.js spreads this to her
+     * friend and her rival on its own. */
+    poached:  { feeling: -4, tag: 'TOOK_MY_CREW' },
     /* Step 4 — favours (favours.js). Doing her a favour she asked for
      * when you owed her; saying no; her paying you back. */
     repaid:   { feeling: 1, tag: 'KEPT_YOUR_WORD' },
@@ -772,6 +781,9 @@
   var LOG_RANK = {
     exploited: 10, attacked: 9, rescued: 9, robbed: 8, answered: 7, disguise: 6,
     liedCall: 6, lied: 5, cameForYou: 5, killedFriend: 7, wasted: 3, warned: 3,
+    /* Above a lie and below a death: being left short-handed is the kind
+     * of thing a captain brings up unprompted. */
+    poached: 6,
     told: 2, traded: 1, ignored: 4,
     /* step 4 — favours.js */
     friendTold: 6, friendSaved: 5, rivalHelped: 3, rivalHurt: 3,
@@ -891,6 +903,10 @@
                 'Last time we traded, you were straight with me.'],
     ignored:   ['You flew right past when I was calling for help.',
                 'I called for help {when}. You heard it, and you kept going.'],
+    poached:   ['You took {f} off my ship.',
+                'I was short a hand on the last run. Your doing.',
+                'You went through my crew like a shop.',
+                'I had to sail undermanned because of you.'],
     killedFriend: ['You killed a friend of mine.',
                    'I knew the crew you killed.',
                    'You killed {f}. {f} was my friend.',

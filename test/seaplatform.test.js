@@ -108,10 +108,25 @@ console.log('     ' + platforms.length + ' sea platforms in ' + gal.stars.length
 check('every port flagged coastal on water is now a sea platform', notFlagged && wasCoastal === platforms.length,
       wasCoastal + ' flagged without the pass, ' + platforms.length + ' platforms');
 check('none is left flagged coastal', coastalLeft === 0, coastalLeft + ' left');
-/* 229 since stars stage 2 (2026-11-03): the warm chain made ocean worlds
- * common - 78 global-habitable worlds in 40 systems where there were 45 -
- * and with them pads with nowhere dry to go. It was 117. */
-check('the kawartha count is the one the inland pass reported (229)', platforms.length === 229, String(platforms.length));
+/* A CENSUS PIN, not a target: it exists so that a change which quietly
+ * alters how many pads end up at sea cannot pass unnoticed. The number
+ * moves only when something is MEANT to have moved, and each move is
+ * written down here with its reason.
+ *
+ *   117  the original inland pass
+ *   229  stars stage 2 (2026-11-03): the warm chain made ocean worlds
+ *        common - 78 global-habitable worlds in 40 systems where there
+ *        were 45 - and with them pads with nowhere dry to go
+ *   214  v1.4 "Dodecahedron" (2026-11-13): the cluster went from 7 ly of
+ *        half-height to 18. Still 450 stars, but the minimum-separation
+ *        rejection and the max-hop nudge both read positions, so a
+ *        different set of candidates survives and the surviving stars
+ *        carry different seeds — which means different planets around
+ *        them. A 6% drift in a count of this size is the expected shape
+ *        of re-rolling the whole stellar population; the pass itself is
+ *        untouched, and every other check in this file still holds.
+ */
+check('the kawartha count is the one the inland pass reported (214)', platforms.length === 214, String(platforms.length));
 check('only on water, never on lava', waterOnly);
 check('never on a desert: a salt basin is ground, and its ports stay buried', !platforms.some(function (x) { return x.p.parentBody.type === 'desert'; }) &&
       noDesertCoastal, 'desert pads flagged coastal anywhere: ' + (noDesertCoastal ? 0 : 'some'));

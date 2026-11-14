@@ -704,11 +704,33 @@ section('--- slots, power and mass ---');
    * moved. */
   /* Nine since 2026-11-09: the slipspace bay after the drive bay, for
    * the same reason (combat.js THE SLIPSPACE BAY). */
-  check('a Talon has nine slots, the drive bay and then the slipspace bay last',
-        Combat.slotKeys(s).length === 9 && Combat.slotKeys(s)[7] === 'drive0' && Combat.slotKeys(s)[8] === 'core0' &&
-        Combat.slotKeys(s).filter(function (k) {
-          return Combat.slotType(k) === 'hardpoint';
-        }).length === 2, Combat.slotKeys(s).join(','));
+  /* Ten since 2026-11-13: a third utility slot (Astra, "increase the number
+   * of accessory slots in all the ships after the addition of these new
+   * gameplay modes" - the gravimeter made survey + magnetometer + gravimeter
+   * a three-slot kit that did not fit on the starter).
+   *
+   * WRITTEN AGAINST THE INVARIANT, NOT THE INDICES. What matters is that the
+   * drive bay and then the slipspace bay come LAST, so no older key moves
+   * when a slot is added in front of them - which is exactly what just
+   * happened, and the old form of this check failed for it by asserting
+   * positions 7 and 8 rather than "the last two". The counts come off the
+   * hull's own table, so a hull retune cannot leave this test lying. */
+  (function () {
+    var keys = Combat.slotKeys(s);
+    var hull = Combat.HULLS[s.hullId] || Combat.HULLS.talon;
+    var want = hull.slots || {};
+    function n(t) { return keys.filter(function (k) { return Combat.slotType(k) === t; }).length; }
+    check('the drive bay and then the slipspace bay are the last two slots',
+          keys[keys.length - 2] === 'drive0' && keys[keys.length - 1] === 'core0',
+          keys.join(','));
+    check('a Talon has every slot her hull table says she has',
+          n('hardpoint') === (want.hardpoint || 0) &&
+          n('utility') === (want.utility || 0) &&
+          n('internal') === (want.internal || 0) &&
+          keys.length === (want.hardpoint || 0) + (want.utility || 0) + (want.internal || 0) + 2,
+          n('hardpoint') + ' hard, ' + n('utility') + ' util, ' + n('internal') +
+          ' int, ' + keys.length + ' in all');
+  })();
 
   var sum = Combat.fitSummary(s);
   check('the starting fit draws its listed power',

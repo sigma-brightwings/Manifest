@@ -99,6 +99,14 @@
     var C = global.Combat;
     if (C && C.effectiveDev && global.Game) dev = C.effectiveDev(global.Game, port);
     var n = HALL_MIN + rng.int(0, Math.round((HALL_MAX - HALL_MIN) * (0.4 + dev)));
+    /* AND WHAT THEY HAVE HEARD ABOUT YOU (outside.js, 2026-11-13). Leaving
+     * a hand on a beacon is not an offence the law charges, because nobody
+     * saw it - it costs you the only thing it can cost you here. A hall is
+     * a village: fewer berths on the board, and the good hands stay in
+     * their seats. The draw is unchanged so the SAME people are offered,
+     * minus the ones who will not have you. */
+    var Out = global.Outside, hall = Out && Out.hallEffect ? Out.hallEffect(global.Game) : null;
+    if (hall && hall.fewer) n = Math.max(1, n - hall.fewer);
     var out = [];
     for (var i = 0; i < n; i++) {
       var role = rng.pick(ROLE_IDS);
@@ -111,7 +119,15 @@
        * somebody rather than a word nothing ever is. */
       var base = 1 + rng.int(0, 2) + (rng.chance(0.25 + dev * 0.4) ? 1 : 0) +
                  (rng.chance(0.05 + dev * 0.09) ? 1 : 0);
-      out.push(make(personName(rng), role, Math.max(1, Math.min(5, base)),
+      /* A hand with somewhere else to be does not sign with a captain who
+       * left one on a beacon. The ceiling bites the GOOD ones, which is
+       * the right way round: the people with options are the ones who can
+       * afford to be choosy, and a desperate hand will still take the
+       * berth. The draw is untouched, so this removes people rather than
+       * replacing them with different people. */
+      var rate = Math.max(1, Math.min(5, base));
+      if (hall && rate > hall.maxRating) rate = hall.maxRating;
+      out.push(make(personName(rng), role, rate,
                     port.id + '|' + win + '|' + i));
     }
     return out;
@@ -131,7 +147,13 @@
    * than no crew, which makes hiring a decision with only one side. */
   var SIGN_BASE = 900, WAGE_BASE = 42;      // credits, and credits per day
   function signingFee(person) {
-    return Math.round(SIGN_BASE * (0.55 + person.rating * 0.36));
+    /* And a premium for flying with you, if they have heard (outside.js).
+     * A hand who signs anyway wants paying for the risk that you are the
+     * sort who burns with somebody unclipped. */
+    var Out = global.Outside;
+    var hall = Out && Out.hallEffect ? Out.hallEffect(global.Game) : null;
+    var mul = hall && hall.feeMul ? hall.feeMul : 1;
+    return Math.round(mul * SIGN_BASE * (0.55 + person.rating * 0.36));
   }
   function dailyWage(person) {
     /* `wageMul` is a deal struck with one person (favours.js): a captain

@@ -62,6 +62,12 @@
     showPrediction: true,
     showGrid: true,
     showHelp: false,
+    /* The catalogue page (2026-11-12): Shift+C, or the row on the controls
+     * card. Not a career property - it is a reference book, so it does not
+     * belong in a save - but it lives on G like showHelp so one flag
+     * closes everything an Esc should close. */
+    showCatalogue: false,
+    catalogue: null,
     /* Resolution the world layer is drawn at, as a fraction of the screen.
      * Set from storage at boot (see loadRenderScale) and cycled with ` —
      * a property of this machine's GPU, so it is not part of a career. */
@@ -324,6 +330,8 @@
     G.found = {};
     G.intel = {};
     G.band = [];
+    G.rvDone = {};
+    G.rvBlown = {};
     /* And the latent ones a career has been pointed at (generate.js
      * opts.reveal). Keyed by the site's id, as galaxy.js allocated it. */
     G.revealed = {};
@@ -1450,6 +1458,13 @@
     var Scr = global.Screens;
     if (Scr && (key === '=' || key === '+')) { Scr.chartKeyZoom(Scr.CHART_KEY_STEP); return true; }
     if (Scr && (key === '-' || key === '_')) { Scr.chartKeyZoom(1 / Scr.CHART_KEY_STEP); return true; }
+    /* THE CAMERA (2026-11-13). L lays the map flat again — straight down,
+     * facing the way it was built, which is where you go when a drag has
+     * left you looking at the cluster from somewhere unhelpful. K steps
+     * the depth exaggeration, which stretches the picture's height and
+     * nothing else: every distance the game computes stays true. */
+    if (Scr && Scr.chartLevelKey && key === 'l') { return Scr.chartLevelKey(); }
+    if (Scr && Scr.chartDepthKey && key === 'k') { return Scr.chartDepthKey(e && e.shiftKey ? -1 : 1); }
     /* C centres on where you are, Shift+C on the selection. Except while
      * somebody is holding you up: then C is compliance everywhere, the
      * demand panel says so, and a chart that ate it would be a screen you
@@ -1684,6 +1699,19 @@
        * cannot see. They are answered before the F-keys for that reason. */
       if (G.title) { handleTitleKey(e); return; }
       if (G.menu) { handleMenuKey(e); return; }
+
+      /* THE CATALOGUE sits in front of the flight controls while it is open
+       * (2026-11-12). It has to: the arrow keys walk its list, and the same
+       * four keys pitch and yaw the ship. It takes only what it uses, so
+       * Esc still closes it, Shift+C still toggles it, and every other key
+       * falls through to the game underneath. */
+      if (G.showCatalogue && global.Screens && global.Screens.catalogueKey) {
+        var ck = e.key.toLowerCase();
+        if (ck !== 'escape' && ck !== 'c' && global.Screens.catalogueKey(ck, e.shiftKey)) {
+          e.preventDefault();
+          return;
+        }
+      }
 
       /* A text field takes the WHOLE keyboard, and it has to be asked here
        * rather than down in modeKey: the function keys and the number row
@@ -1958,12 +1986,14 @@
         case 'h':
           if (e.shiftKey) { Combat.hushWitness(G.sys, G, G.t, HOOKS); break; }
           G.showHelp = !G.showHelp;
+          if (G.showHelp) G.showCatalogue = false;
           break;
         /* Escape means "out of this" everywhere, and it already meant it on
          * every mode screen (modeKey sends you back to flight). In flight
          * there was nothing left to back out to, which is exactly where a
          * pause menu belongs. The help card counts as something to leave. */
         case 'escape':
+          if (G.showCatalogue) { G.showCatalogue = false; break; }
           if (G.showHelp) { G.showHelp = false; break; }
           openMenu();
           break;
@@ -1971,6 +2001,14 @@
          * is holding you up, C is the only thing you would want it to mean,
          * and the demand panel says so. Everywhere else it is the camera. */
         case 'c':
+          /* Shift+C is the catalogue (2026-11-12). Plain C is the camera,
+           * and while someone is holding you up it is the only thing you
+           * would want it to mean, so the shift form stays out of both. */
+          if (e.shiftKey) {
+            G.showCatalogue = !G.showCatalogue;
+            if (G.showCatalogue) G.showHelp = false;
+            break;
+          }
           if (G.encounter && G.encounter.demand) { complyWithDemand(); break; }
           if (!G.followShip) { G.followShip = true; say('Camera tracking ship'); }
           else if (G.focus) { G.followShip = false; say('Camera holding on ' + G.focus.name); }
@@ -2283,9 +2321,17 @@
        * the release can say which — so it is the chart's, after the
        * buttons (its own zoom buttons sit on the plot) and before anything
        * that would turn a camera behind it. */
-      if (global.Screens && global.Screens.chartPointer && mouseButton(e) === 0 && !pointerLocked()) {
+      /* DRAG TURNS THE MAP, shift-drag and the right button pan it
+       * (2026-11-13). The chart is three-dimensional and rotating on drag
+       * is what every 3D viewer does; panning, which used to own the
+       * gesture, moves to the modifier and to the button that was doing
+       * nothing here anyway. The press carries which, and the chart holds
+       * that decision for the whole drag. */
+      if (global.Screens && global.Screens.chartPointer &&
+          (mouseButton(e) === 0 || mouseButton(e) === 2) && !pointerLocked()) {
         var cr = canvas.getBoundingClientRect();
-        if (global.Screens.chartPointer('down', e.clientX - cr.left, e.clientY - cr.top)) return;
+        if (global.Screens.chartPointer('down', e.clientX - cr.left, e.clientY - cr.top,
+                                        { shift: !!e.shiftKey, button: mouseButton(e) })) return;
       }
 
       if (G.cursor.active) {
@@ -2446,6 +2492,12 @@
     canvas.addEventListener('wheel', function (e) {
       e.preventDefault();
       if (menuOpen()) return;
+      /* The catalogue is a page of lists; rolling the wheel on it should
+       * walk them rather than fly the camera out of the cockpit behind it. */
+      if (G.showCatalogue && global.Screens && global.Screens.catalogueWheel) {
+        global.Screens.catalogueWheel(e.deltaY);
+        return;
+      }
       /* A list under the pointer gets the wheel first. Rolling the wheel
        * over a shop and having the camera fly backwards out of the cockpit
        * is the kind of thing that reads as the interface being broken. */
@@ -7963,11 +8015,25 @@
        * (intel.js). Counted here so the warp pays for it honestly: the
        * clock is the job. */
       if (global.Intel) global.Intel.tickWatch(G, G.sys, G.t, G.lastDtSim);
+      /* And two hulls with an arrangement, if today is the afternoon
+       * (rendezvous.js). */
+      if (global.Rendezvous) global.Rendezvous.watch(G, G.sys, G.t, HOOKS);
     }
     /* The other half of the same instrument: the coil pointed outward.
      * Outside the paused gate above, because a sweep started in orbit
      * should still finish while you sit on a pad waiting for it. */
     tickFieldSweep();
+
+    /* SOMEBODY OUT ON THE HULL, and anybody already adrift (outside.js).
+     * Its own statement, not inside the survey block above: a hand on a
+     * beacon has nothing to do with whether a scanner is fitted, and their
+     * air runs down whether or not you are flying. On the SIM clock,
+     * because the oxygen candle is twelve hours long and the whole
+     * mechanic is whether you turn round in time — under warp that is a
+     * decision measured in seconds of your life and hours of theirs. */
+    if (global.Outside && !G.paused && G.lastDtSim > 0) {
+      global.Outside.step(G, G.lastDtSim, HOOKS);
+    }
 
     /* Scooping. Drift onto a canister slowly enough and it is yours — the
      * other half of jettison, and the whole point of robbing a freighter
@@ -20021,6 +20087,7 @@
     }
     ctx.restore();
 
+    if (G.showCatalogue && global.Screens && global.Screens.drawCatalogue) global.Screens.drawCatalogue(ctx, w, h);
     if (G.showHelp) drawHelp(ctx, w, h);
     if (G.market) drawMarket(ctx, w, h);
     if (G.analyser) drawAnalyser(ctx, w, h);
@@ -20028,7 +20095,7 @@
      * read while you are standing at it; under the menu and the title. Not
      * in transit: the HUD's transit path skips drawConsole, which is what
      * empties the click list each frame. */
-    if (G.tutorial && !G.tutorial.done && !G.showHelp && !G.hyper) drawTutorialCard(ctx, w, h);
+    if (G.tutorial && !G.tutorial.done && !G.showHelp && !G.showCatalogue && !G.hyper) drawTutorialCard(ctx, w, h);
     /* Last of all, and in this order: the menu covers the market, and the
      * title screen covers everything including the menu. Both clear the
      * hotspot list as they draw, so nothing behind them can be clicked. */
@@ -21871,7 +21938,9 @@
 
       { kind: 'head', label: 'REFERENCE' },
       { kind: 'action', label: 'Keybindings', key: 'H',
-        run: function () { G.showHelp = true; G.menu = null; } }
+        run: function () { G.showHelp = true; G.showCatalogue = false; G.menu = null; } },
+      { kind: 'action', label: 'Catalogue', key: 'Shift+C',
+        run: function () { G.showCatalogue = true; G.showHelp = false; G.menu = null; } }
     ];
   }
 
@@ -22727,6 +22796,7 @@
       ['click a panel', 'change what that screen shows'],
       ['B', 'respawn above your start world after a crash'],
       ['H', 'close this'],
+      ['Shift+C', 'CATALOGUE — every item in the game, its icon, numbers and copy'],
       ['', ''],
       ['NOT ON THE KEYBOARD ANY MORE', ''],
       ['', 'orbit lines, ecliptic grid, traffic, cockpit chrome and render'],
