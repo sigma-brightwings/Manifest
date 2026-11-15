@@ -169,6 +169,12 @@ require('../src/sound.js');
 require('../src/save.js');
 /* The title card's artwork — the wordmark outline and the compass rose. */
 require('../src/logo.js');
+/* And which build it is, which the title card now says out loud under the
+ * seed. index.html loads this before main.js and release.test.js pins that
+ * it does, so a harness without it was drawing a title screen the real
+ * page never shows - the version line simply did not appear. Found
+ * 2026-11-14 by the check further down going looking for it. */
+require('../src/release.js');
 /* And the captains' stories that sit under the title menu. */
 require('../src/captain-stories.js');
 require('../src/hulls.js');
@@ -7271,6 +7277,52 @@ console.log('--- quit to the main menu ---');
   check('the title screen draws',
         drawn.texts.slice(mark).some(function (s) { return /^seed "/.test(s); }),
         JSON.stringify(drawn.texts.slice(mark).slice(0, 6)));
+  /* WHICH BUILD, ON THE CARD (Astra, 2026-11-14: "starting now, we're
+   * going to put the version number on the title screen"). It had in fact
+   * been there all along - bottom right, 11px at 55% opacity, with its own
+   * comment saying "out of the way" - which is faint enough that she had
+   * never seen it, so it was doing none of the work a version on a title
+   * screen exists to do. It sits under the seed caption now, where the eye
+   * already is.
+   *
+   * Checked here because a convention with nothing watching it is a
+   * convention that rots, which is most of what the 2026-11-14 bug hunt
+   * turned out to be about. Read off the live Release rather than written
+   * out, so cutting a release cannot make this fail. */
+  /* THE CARD FADES IN ON REAL TIME, so two frames is not enough for the
+   * tagline block to have any opacity at all - at frames(2) the only thing
+   * on screen saying "seed" is the menu's own hint on the Resume row, not
+   * the caption under the compass rose. Let the fade finish, then read. */
+  var cardMark = drawn.texts.length;
+  frames(20, 100);
+  (function () {
+    var Rel = W.Release;
+    /* spacedText letter-spaces BY HAND: it fillTexts one character at a
+     * time, so neither caption ever reaches drawn.texts as a whole string
+     * - they arrive as runs of single letters. Joining the run back up is
+     * what reading the card actually looks like, and it is the only way to
+     * ask this question of a screen drawn that way. */
+    var card = drawn.texts.slice(cardMark).join('');
+    check('the title screen says which build this is',
+          !!Rel && card.indexOf(Rel.version) >= 0,
+          Rel ? Rel.version : 'no Release');
+    check('and names the release as well as numbering it',
+          !!Rel && card.indexOf(Rel.name) >= 0, Rel ? Rel.name : '');
+    /* On the card WITH the seed rather than exiled to a corner: the two
+     * answer the same kind of question - which universe, which build - so
+     * the build has to follow the seed closely, not trail it by half a
+     * screen of menu. */
+    var buildAt = Rel ? card.indexOf(Rel.name) : -1;
+    /* The LAST "seed" before the build, not the first: the menu's own hint
+     * on the Resume row says the seed too, as one whole fillText long
+     * before the card is reached. The caption is the one next to the
+     * build, which is the whole point of the check. */
+    var seedAt = buildAt > 0 ? card.lastIndexOf('seed "', buildAt) : -1;
+    check('and says it on the card, right under the seed',
+          seedAt >= 0 && buildAt > seedAt && buildAt - seedAt < 120,
+          'caption seed at ' + seedAt + ', build at ' + buildAt);
+  })();
+
   check('and draws cleanly', errorsSince(mark).length === 0, errorsSince(mark)[0]);
 
   var tBefore = G.t;

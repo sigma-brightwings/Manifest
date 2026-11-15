@@ -40,6 +40,38 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-14, the build moves onto the card)
+
+Astra: *"starting now, we're going to put the version number on the title
+screen."* It was already on it - bottom right, 11px at 55% opacity, with
+its own comment saying "in the corner and out of the way" - which is faint
+enough that she had never seen it there, so it was doing none of the work a
+version on a title screen exists to do.
+
+- **It sits under the seed caption now**, centred beneath the compass rose:
+  `seed "kawartha" - 450 stars` and `1.5.1 "Icosidodecahedron"` on
+  consecutive lines, the second a shade dimmer so the card still reads top
+  down. The two answer the same kind of question - which universe, which
+  build - and belong together where the eye is already going.
+
+- **Tests:** `test/render.test.js` grows to 1,147 and now holds the
+  convention rather than just the code: it reads the version and the name
+  off the live `Release` (so cutting a release cannot make it fail) and
+  insists the build is drawn close behind the seed, not exiled somewhere
+  else on the screen. Writing it turned up two things about the harness
+  worth knowing:
+  - **render.test.js never loaded `src/release.js`**, though index.html
+    does and release.test.js pins that it does. The harness was drawing a
+    title screen the real page never shows.
+  - **The card fades in on real time**, so at `frames(2)` it has no
+    opacity at all and the only thing on screen saying "seed" is the
+    menu's own hint on the Resume row. The older check that claimed to
+    prove "the title screen draws" by finding `seed "` has in fact been
+    matching that hint, not the caption it names. Left alone for now - it
+    passes for a real reason - but it is not checking what it says.
+
+- **Saves:** unaffected. A caption.
+
 ## 1.5.1 "Icosidodecahedron" (2026-11-14)
 
 A repair release, and an unusually honest one: most of what is below

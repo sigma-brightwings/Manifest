@@ -22547,6 +22547,20 @@
       ctx.fillStyle = 'rgba(200,218,250,0.74)';
       spacedText(ctx, 'seed "' + G.seed + '"  ·  ' + G.galaxy.stars.length + ' stars',
                  cx, lineY + lineSize * 1.9, 0.9);
+      /* AND WHICH BUILD, on the card rather than in a corner (Astra,
+       * 2026-11-14: "starting now, we're going to put the version number
+       * on the title screen"). It was already drawn, bottom right at 55%
+       * opacity and out of the way, which is faint enough that she had
+       * not seen it. Here instead, because the two lines answer the same
+       * kind of question - which universe, which build - and belong
+       * together where the eye is already going. A shade dimmer than the
+       * seed above it, so the order of the card still reads top down. */
+      var Rel = global.Release;
+      if (Rel) {
+        ctx.fillStyle = 'rgba(200,218,250,0.56)';
+        spacedText(ctx, Rel.version + '  \u00b7  \u201c' + Rel.name + '\u201d',
+                   cx, lineY + lineSize * 3.0, 0.9);
+      }
       ctx.textAlign = 'left';
       ctx.restore();
     }
@@ -22584,19 +22598,8 @@
       ctx.restore();
     }
 
-    /* WHICH BUILD, in the corner and out of the way: the number and the
-     * release's name (see release.js). Faded in with the tagline, since
-     * it is part of the card rather than part of the menu. */
-    var Rel = global.Release;
-    if (Rel && aLine > 0) {
-      ctx.save();
-      ctx.globalAlpha = aLine;
-      ctx.font = 'bold 11px ui-monospace, monospace';
-      ctx.fillStyle = 'rgba(200,218,250,0.55)';
-      ctx.textAlign = 'right';
-      ctx.fillText(Rel.version + '  \u00b7  \u201c' + Rel.name + '\u201d', w - 18, h - 16);
-      ctx.restore();
-    }
+    /* (The build used to be drawn here, bottom right and out of the
+     * way. It is on the card now, under the seed - see above.) */
   }
 
   /* Draw a string with extra space between the letters, centred or left by
