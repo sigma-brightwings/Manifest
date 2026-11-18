@@ -196,6 +196,21 @@ console.log('--- how many hands each hull takes (2026-10-20) ---');
   check('a turret needs a gunner', Crew.crewNeeded(ship).gunner === 1);
 })();
 
+console.log('--- the books and who is inside (2026-11-18) ---');
+(function () {
+  var a = Crew.make('Ada Vance', 'engineer', 4, 'e1');
+  var b = Crew.make('Bo Ruiz', 'engineer', 2, 'e2');
+  var g = Crew.make('Cy Tan', 'gunner', 5, 'g1');
+  var s = { hullId: 'kestrel', fit: {}, crew: [a, b, g] };
+  a.out = 'adrift'; g.out = 'hull';
+  check('the books keep everyone signed on', Crew.aboard(s).length === 3);
+  check('present is who is inside her', Crew.present(s).length === 1 && Crew.present(s)[0] === b);
+  check('the best engineer inside is the one who is inside', Crew.best(s, 'engineer') === b);
+  check('a gunner out on the hull works no guns', Crew.best(s, 'gunner') === null);
+  delete a.out;
+  check('back in, she is the best again', Crew.best(s, 'engineer') === a);
+})();
+
 console.log('');
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

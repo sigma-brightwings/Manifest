@@ -40,6 +40,150 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-18, nothing fires on the rail)
+
+Astra, on the lift at Threshold: jets showing "when nothing should be
+firing, and they're in the wrong direction to the direction of motion".
+The rail sets her pose every frame - a car and a traverser carry her - but
+the controls still turned any key held during the ride into thrust, and the
+plume was drawn off it, pointing wherever the keys pushed while the rail
+moved her its own way.
+
+- **While the rail has her, her commanded thrust is zero** - keys, flight
+  assist and vector assist alike - so no plume or RCS puff is drawn.
+- Measured in the real build (tools/probe-railjets.js, Threshold transfer,
+  W and D held, assist on with the dock targeted): 141% of max thrust and
+  two thrusters live before, zero and none after.
+
+### Fixed (2026-11-18, the inclined lifts are level pads)
+
+Astra, at Threshold Dock: the ship "half its hull embedded in the cargo lift
+instead of sitting on the cargo lift", and of the lift itself: "the platform
+sticks out perpendicular to the direction of vertical travel so that when it
+slides up to the top, it blocks the hole". The art's car on every incline
+(cradle, cylinder, spine and skimmer bores) is a tilted panel, and the hull
+was stood level on it at the panel's middle - so the panel's uphill half
+rose through her.
+
+- **Every inclined car is now drawn as a level pad:** a flat deck on the
+  car's own footprint, with a wedge under it riding the shaft's real floor
+  (measured by vertical casts along the run), hazard stripes at both ends.
+  Plumb and flat cars, and the ground pad sites' transfer cars (already
+  level slabs), are left as they were.
+- **The seat stays where every route was laid** - the level stubs on and off
+  each lift - and is raised only where a hull on it would be in the incline:
+  the cradles' (12 m into the floor at a hull's uphill end before), not the
+  spines' (16 m clear already). The pad ends uphill where the floor climbs
+  to meet its deck.
+- Collision still sees the art's car where it was, as before.
+- **Still owed, waiting on Astra's eye:** the recess at the foot, the flush
+  landing at the head, and clipping the shaft where it pokes into the level
+  below.
+- **Tests:** lanes 7/7 (she rides seated on the car, every model), interiors
+  39/39 (every routed leg clear of the hull - the first cut of this, which
+  stood the pad on the floor, put four spine legs through their landings and
+  was caught here).
+
+### Fixed (2026-11-18, no sky painted over a station's walls)
+
+Astra, in the cutaway in Threshold's bore: Mirven's glow and name, planet
+labels and the orbit line drawn straight across the walls. The cutaway
+draws the station from outside with a cone cut through it, so the sky is
+meant to be there - but the labels, markers, glows, orbit lines, the grid
+and the predicted path are flat overlays with no idea a wall is in the way.
+
+- **Within four radii of the station you are looking at** (its cut, or from
+  outside it with the cut off): no ecliptic grid, no orbit lines, and no
+  predicted path while you are docked or on a rail.
+- **A body or ship whose line of sight runs through the station's metal is
+  not labelled, marked or plumed over it** - the sun and its glow, planets,
+  moons, other ships. Tested by marching the station's occupancy grid; its
+  48 cells are coarse, so a label can still slip through a thin wall.
+- The station's own name and marker stay.
+
+### Fixed (2026-11-18, the hangar is the berth you are in)
+
+Astra, docked at Threshold Dock after Halloway's run: a black S-size room
+stood in the middle of the L bay she had been put in, visible through the
+cutaway. The walkable hangar was always her hull plus 7 m of floor, and
+nothing ever asked the station where its own walls were.
+
+- **The hangar you walk down the ramp into is now the station's berth,** at
+  its real size: at Threshold, 52 x 104 m with a 30 m ceiling instead of a
+  26 x 40 m box. She stands where she was parked in it, not centred.
+- **Measured off the walls, not read off a box.** Neither box the model
+  carries is the bay's floor (the berth anchor and its section are both a
+  2.6 m slice at Threshold), and the collision grid is 48 cells across the
+  whole station. So it uses the chase camera's own ray casts against the
+  station's triangles (Render.boomLimit) in her four level directions and up.
+  A side open to space is held to 40 m past her hull.
+- **Where the station cannot be measured** (no walls found, as at Harrow
+  Hold's shed) the old hangar stands; nothing is invented.
+- The door out to the spine, the bar and the concourse is unchanged - that
+  part of the deck is still procedural, as agreed.
+- **Tests:** `test/walk.test.js` 36 (was 30): the hangar takes the bay's
+  width, depth and height, she stands off-centre where she was parked, and
+  without a measure the old hangar stands.
+- **Saves:** unaffected.
+
+### Fixed (2026-11-18, turning portraits draw with a depth buffer)
+
+Astra, at the market: the Medical supplies crate turning in its card had a
+black triangle cut into its face - "probably all rotating items have this
+bug". They did. The portrait painter sorted whole triangles by their middles
+and could not cull back faces (the art's winding is half and half), so a big
+face's middle often sorted in front of the small inset panel on it.
+
+- **Item portraits and the showroom's hull portraits now draw on a small
+  hidden WebGL canvas with a real depth test** - the same camera, light,
+  colours and outlines - and are copied into the card. No WebGL: the old
+  painter draws as before.
+- **The item camera stands further back** (ITEM_FILL 2.8 -> 3.4): a cube's
+  corner is 1.73 reaches out and the old framing showed 1.46, so every
+  crate ran off both edges of its card twice a turn.
+- Seen in the real build: six items at six angles, nothing cut or popping.
+
+### Fixed (2026-11-18, the crew roster is the books)
+
+An interaction hunt on 2026-11-15 ran the EVA code (`outside.js`) against
+the crew roster and found four ways they disagreed. Astra settled what the
+roster MEANS: *who is on your books* - so a hand outside or adrift stays
+listed, flagged, and only death takes them off.
+
+- **A hand cast off the hull no longer shows as aboard.** They stay on the
+  crew screen as `ADRIFT, 6 HOURS AIR` (or `OUTSIDE ON THE LINE, ...` while
+  working the hull) - that line is the prompt to go back for them. You
+  cannot pay off someone floating in space.
+- **A rescue no longer makes a second copy of them.** Three round trips
+  used to leave four of Ada Vance; now there is one, flag cleared.
+- **The dead come off the roster.** A hand who died on the hull used to
+  stay listed, so the engineer check still counted her and the game would
+  send the dead engineer out again. Death now strikes them off - which
+  also stops their wage.
+- **Stopped beacons no longer pile up in the save.** They are kept a week
+  of game time, then let go; the journal is where the death is remembered.
+- **Who is inside her vs who is signed on.** New `Crew.present(ship)` is
+  the physically-aboard list; the turret, gunnery console, best-hand picks,
+  the co-pilot's seat, crew walking the decks, and the "send an engineer
+  out" check all use it. `Crew.aboard` stays the whole books, because every
+  hire writes through it.
+- **Wages:** a hand who is adrift is still your crew and still draws a
+  wage; the dead do not.
+- **Housekeeping:** `package-lock.json` now carries the real version
+  (1.5.1) instead of the 0.1.0 it was born with.
+
+**Saves:** survive, and are mended. A career saved under the old bug is
+folded back into shape on the first frame - a doubled hand becomes one,
+a dead one is struck off (once - an old beacon can never strike a later
+hire), and the outside/adrift flags are set from what is actually out
+there rather than trusted.
+
+**Tests:** `test/outside.test.js` 87 (was 65) - every one of the four
+failures, three rescues in a row, deaths on the hull and adrift, six
+deaths and the week's pruning, an old-bug save mended, and two id-less
+hands kept apart. `test/crew.test.js` 40 - the books against who is
+inside.
+
 ### Changed (2026-11-14, the build moves onto the card)
 
 Astra: *"starting now, we're going to put the version number on the title

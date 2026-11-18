@@ -7043,6 +7043,20 @@
       }
     }
 
+    /* NOTHING FIRES WHILE A RAIL CARRIES HER (2026-11-18). Astra, on the
+     * lift at Threshold: jets showing "when nothing should be firing, and
+     * they're in the wrong direction to the direction of motion". The rail
+     * sets her pose every frame - a car and a traverser move her, not her
+     * drive - but this function still ran: flight assist saw her moving
+     * sideways against the station and fired the thrusters to kill it, the
+     * plume was drawn off that thrust, and it pushed against the very motion
+     * the rail was giving her. On the rail the drive is cold, whatever the
+     * keys or the assist want. */
+    if (G.ship.arrival && Sim.arrivalActive && Sim.arrivalActive(G.ship)) {
+      acc = V.zero();
+      active = {};
+    }
+
     G.ship.thrust = acc;
     G.ship.throttle = V.len(acc) / G.ship.maxAccel;
     G.activeThrust = active;
@@ -9130,6 +9144,44 @@
     return p;
   }
 
+  /* The orbital station being looked at from close by, through its cut or
+   * from outside it, with what an occlusion test needs: { port, basis, sol,
+   * r }. Null in the maps, at ground ports (their cut is a street section
+   * and the ground already hides what it should), and beyond CLOSE_CUT_R
+   * radii, where the station is a small thing in a big sky and the chart
+   * is the point. */
+  var CLOSE_CUT_R = 4;
+  function closeStationView(cam) {
+    if (mapMode() || !cam || !cam.eye) return null;
+    var p = (G.cutaway && G.cutaway.port) || G.viewOutside || null;
+    if (!p || p.surface || p.seaPlatform) return null;
+    var r = p.radius || 1;
+    var at = Sim.bodyPosition(p, G.sys, G.t);
+    if (!at || V.dist(cam.eye, at) > r * CLOSE_CUT_R) return null;
+    var basis = Sim.portBasis ? Sim.portBasis(p, G.sys, G.t) : null;
+    var role = Render.portModelFor ? Render.portModelFor(p) : null;
+    var sol = (role && Render.portSolidity) ? Render.portSolidity(role) : null;
+    if (!basis || !sol) return null;
+    return { port: p, basis: basis, sol: sol, r: r };
+  }
+  /* Does the line from the eye to `target` pass through the station's
+   * metal? Marched through its occupancy grid out to where the line leaves
+   * the station's reach. The first few per cent are skipped: in the cut
+   * the eye itself often sits in a cell the cone has opened, and a wall
+   * under the lens would hide the whole sky. */
+  function behindStation(cc, eye, target) {
+    var d = V.sub(target, eye), L = V.len(d);
+    if (!(L > 0)) return false;
+    var reach = Math.min(L, cc.r * (CLOSE_CUT_R + 2.5));
+    var u = V.scale(d, 1 / L), N = 96, b = cc.basis;
+    for (var i = 4; i <= N; i++) {
+      var q = V.sub(V.addScaled(eye, u, reach * i / N), b.entrance.pos);
+      var cell = Render.solidityAt(cc.sol, V.dot(q, b.east) / cc.r, V.dot(q, b.north) / cc.r, V.dot(q, b.up) / cc.r);
+      if (cell === Render.SOLID_WALL) return true;
+    }
+    return false;
+  }
+
   var HANGAR_OUT = 1.08;       // of the hangar's reach: a wheel notch past its wall leaves it
   var HANGAR_IN = 0.92;        // and back in under this, the hangar is the room again
   /* Set by a clamp that holds the boom short of a request it will honour
@@ -9753,8 +9805,19 @@
      * 2026-11-02): the ecliptic plane through a port on a tilted planet is a
      * slope through the hill, and its rings were painted over the street on
      * every frame of the zoom-out as if they were drawn on it. */
+    /* AND NOT THROUGH A STATION SEEN UP CLOSE (2026-11-18). Astra, in the
+     * cutaway in Threshold's bore: Mirven's glow and name, planet labels
+     * and the orbit line, painted straight across the walls. The cutaway
+     * draws the station from outside with a cone cut in it, so the sky is
+     * meant to be there - but these are 2D, drawn over everything, with no
+     * idea a wall stands between the eye and the thing they name. Within a
+     * few radii of the station you are looking at (the cut's port, or the
+     * one you zoomed out of with the cut off), the chart furniture - grid
+     * and orbit lines - is not drawn at all, and a body is drawn only if
+     * the line to it does not run through the station's metal (closeCut). */
+    var closeCut = closeStationView(cam);
     G.gridStep = 0;
-    if (G.showGrid && !inside && !(G.cam.frame && !mapMode())) {
+    if (G.showGrid && !inside && !closeCut && !(G.cam.frame && !mapMode())) {
       G.gridStep = Render.drawEclipticGrid(ctx, cam, cam.target, cam.dist * 1.15);
     }
 
@@ -9762,7 +9825,7 @@
      * this instant, which is why the shape is cached in local space. Forced
      * on in the orbit map, whatever the O toggle says — a map of orbits
      * with the orbits hidden is a joke at the player's expense. */
-    if ((G.showOrbits || mapMode()) && !inside) {
+    if ((G.showOrbits || mapMode()) && !inside && !closeCut) {
       for (var i = 0; i < G.sys.bodies.length; i++) {
         var b = G.sys.bodies[i];
         if (!b.orbit) continue;
@@ -9820,6 +9883,7 @@
       var pos = body.underground
         ? Sim.portEntrance(body, G.sys, G.t).pos
         : Sim.bodyPosition(body, G.sys, G.t);
+      if (closeCut && body !== closeCut.port && behindStation(closeCut, cam.eye, pos)) continue;
       var sp = cam.project(pos);
 
       /* A BODY YOU ARE INSIDE IS NOT CULLED ON ITS CENTRE POINT.
@@ -9917,7 +9981,10 @@
     /* Predicted trajectory — the whole point of the exercise. Not while
      * berthed: a ship on the clamps has no trajectory worth predicting, and
      * the path it last had is a line across the hangar wall. */
-    if (G.showPrediction && G.trajectory && !inside) {
+    /* Nor while a rail is carrying her through a station seen up close
+     * (2026-11-18): the orbit she will be on when she leaves is a line
+     * across its walls, not anything she is flying. */
+    if (G.showPrediction && G.trajectory && !inside && !(closeCut && (G.ship.arrival || G.ship.docked))) {
       // The prediction is stored relative to its reference body; anchor it to
       // wherever that body is right now.
       var tOff = Sim.bodyPosition(G.trajectory.reference, G.sys, G.t);
@@ -10732,6 +10799,10 @@
     if (!list.length) return;
     var tags = [], tagSkip = holoNames();
     var blink = (performance.now() / 1000) % 2;
+    /* Up close to a station, a ship on the far side of its metal is not
+     * named over the wall, nor marked with a diamond (closeStationView,
+     * 2026-11-18). Her hull is still drawn: that has a depth buffer. */
+    var cc = closeStationView(cam);
 
     for (var i = 0; i < list.length; i++) {
       var s = list[i];
@@ -10764,9 +10835,12 @@
        * hull has shrunk to nothing: a plume is a streak, not a dot. */
       // Offset each drive's flicker by its index so a formation of ships
       // does not pulse in unison like a string of fairy lights.
-      Render.drawShipExhaust(ctx, cam, s, s.size,
-                             s.throttle === undefined ? 1 : s.throttle,
-                             hullKey, null, performance.now() / 1000 + i * 0.37);
+      var hidden = !!(cc && behindStation(cc, cam.eye, s.pos));
+      if (!hidden) {
+        Render.drawShipExhaust(ctx, cam, s, s.size,
+                               s.throttle === undefined ? 1 : s.throttle,
+                               hullKey, null, performance.now() / 1000 + i * 0.37);
+      }
 
       var lenPx = s.size * sp.scale;
       if (lenPx > 4) {
@@ -10782,7 +10856,7 @@
           if (pr2) { ctx.fillStyle = '#7dffb0'; ctx.fillRect(pr2.x - 1, pr2.y - 1, 2.4, 2.4); }
           ctx.restore();
         }
-      } else {
+      } else if (!hidden) {
         ctx.save();
         ctx.globalAlpha = 0.9;
         ctx.strokeStyle = s.color;
@@ -10825,7 +10899,7 @@
 
       // Name only when it is genuinely nearby; otherwise the sky fills with
       // labels for ships you cannot see.
-      if (lenPx > 2.2 || (s.spec && s.spec.live)) {
+      if (!hidden && (lenPx > 2.2 || (s.spec && s.spec.live))) {
         var tag = s.name;
         if (s.kind !== 'trade') tag += '  [' + s.className + ']';
         if (tagSkip && tagSkip[s.name]) continue;
@@ -12530,10 +12604,22 @@
     if (!port) return null;
     var ships = walkShips();
     var key = port.id + '|' + (port.livery || 'civ') + '|' + (s.hullId || '') + '|' + ships.map(function (x) { return x.id + x.size; }).join(',') +
-              (port.seaPlatform ? '|pad' + currentBerth() : '');
+              (port.seaPlatform ? '|pad' : '|berth') + currentBerth();
     if (hangarCache && hangarCache.key === key) return hangarCache.plan;
     var hs = hangarSpec(s);
     if (!hs) return null;
+    /* THE BERTH SHE IS IN, NOT ONE HER SIZE (2026-11-18). Astra, docked
+     * in an L bay at the end of Halloway's run: a black S-size room stood
+     * in the middle of it, because the hangar was her hull plus a margin
+     * and nothing asked the station where its walls are. Now the hangar is
+     * the model's own berth floor, measured in her cockpit's metres - walk
+     * down the ramp and you are on the bay you flew into, whatever its
+     * size. A sea pad keeps its dome (seaLayout); a model with no berth
+     * box, or one she somehow does not fit, keeps the old hangar. */
+    if (!port.seaPlatform) {
+      var bay = berthBay(port, s, hs);
+      if (bay) hs.bay = bay;
+    }
     ships[0].hangar = hs;
     var plan = global.Walk.layout(port.id, {
       seed: G.seed || (G.galaxy && G.galaxy.seed) || '',
@@ -12545,6 +12631,59 @@
     armHangar(plan);
     hangarCache = { key: key, plan: plan };
     return plan;
+  }
+  /* The berth's floor as a box in her cockpit's metres: { box: [x0, z0,
+   * x1, z1], h } - the frame hangarSpec measures her in, so walk.js can
+   * size the room to it and stand her where she really is in it. Null
+   * when the station cannot say, and the old hangar is used.
+   *
+   * MEASURED OFF THE WALLS, NOT READ OFF A BOX (2026-11-18). Neither box
+   * the model carries is the bay's floor: Sim.berthRoom's x and y are the
+   * anchor the artist hung, and the berth's section box is the same slice
+   * - both 2.6 m thick at Threshold Dock, across a bay you could land a
+   * freighter in. And the occupancy grid is 48 cells over the whole
+   * station, wider than a bay. What does know is Render.boomLimit: the
+   * station's own triangles, cast from where she is parked in 16 x 9
+   * directions and cached per berth for the chase camera. Her four level
+   * directions give the four walls; up gives the ceiling. A side open to
+   * space (the doors, a bay with no end wall) is held to BAY_OPEN_M past
+   * her hull, so the room ends near her rather than out in the void. */
+  var BAY_OPEN_M = 40;
+  function berthBay(port, ship, hs) {
+    if (!Render.boomLimit || !Render.portModelFor || !Sim.portBasis) return null;
+    var basis = Sim.portBasis(port, G.sys, G.t);
+    if (!basis || !basis.east) return null;
+    var role = Render.portModelFor(port), bi = currentBerth(), r = port.radius || 1;
+    var F = cockpitShip(), M = Render.M;
+    if (!F || !F.pos || !F.right || !F.fwd || !ship.pos) return null;
+    function model(v) { return [V.dot(v, basis.east), V.dot(v, basis.north), V.dot(v, basis.up)]; }
+    function wallM(v) {
+      var d = Render.boomLimit(role, bi, model(v));
+      return isFinite(d) && d > 0 ? d * r / M : Infinity;
+    }
+    var hb = hs.hull || hs.box;
+    /* Her centre, in her cockpit's metres: the point the casts start from. */
+    var off = V.sub(ship.pos, F.pos);
+    var cx = V.dot(off, F.right) / M, cz = V.dot(off, F.fwd) / M;
+    var right = wallM(F.right), left = wallM(V.scale(F.right, -1));
+    var ahead = wallM(F.fwd), astern = wallM(V.scale(F.fwd, -1));
+    var up = wallM(F.up);
+    /* A berth the casts cannot see (no cached boom: a ground port's shed is
+     * measured another way) answers open everywhere. That is not a
+     * measurement, so it is not a room: the old hangar stands. */
+    var open = [right, left, ahead, astern].filter(function (d) { return !isFinite(d); }).length;
+    if (open > 2) return null;
+    function held(d, edge) { return Math.min(d, Math.abs(edge) + BAY_OPEN_M); }
+    var x1 = cx + held(right, hb[2] - cx), x0 = cx - held(left, hb[0] - cx);
+    var z1 = cz + held(ahead, hb[3] - cz), z0 = cz - held(astern, hb[1] - cz);
+    var floorY = hs.gy || 0;
+    var h = isFinite(up) ? up + (V.dot(off, F.up) / M - floorY) : (hs.height || 4) + 12;
+    if (!(x1 > x0) || !(z1 > z0) || !(h > 0) || !isFinite(x0 + x1 + z0 + z1)) return null;
+    /* She has to fit: a wall measured through her own hull (a cast that
+     * started in plating) says the measure is wrong, not that she is. */
+    if (hb[0] < x0 || hb[2] > x1 || hb[1] < z0 || hb[3] > z1) return null;
+    return { box: [x0, z0, x1, z1], h: h,
+             walls: { right: right, left: left, ahead: ahead, astern: astern, up: up } };
   }
   /* Her hull is solid on the hangar floor where her belly is too low to
    * get under, and her ramp is floor only when it is all the way down -
@@ -14326,7 +14465,7 @@
         return;
       }
       /* The rooms added 2026-10-25. */
-      var hands = function (role) { return Crew && Crew.aboard ? Crew.aboard(G.ship).filter(function (c) { return c.role === role; }) : []; };
+      var hands = function (role) { return Crew && Crew.present ? Crew.present(G.ship).filter(function (c) { return c.role === role; }) : []; };
       if (it.kind === 'copilot') {
         var cp = hands('pilot');
         say(cp.length ? cp[0].name + '\'s seat  —  they take the helm when you get up'
@@ -23088,6 +23227,15 @@
    * Save.restore already takes, so this is not a new entry point into the
    * world — it is the existing one, named. */
   G.enterSystem = enterSystem;
+  /* For probes: the deck you would step onto down her ramp, and the berth
+   * it was measured from (berthBay). Read-only; nothing in the game calls
+   * these. */
+  G.hangarPlan = hangarPlan;
+  G.berthBay = function () {
+    var s = G.ship, port = s && s.docked && G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    var hs = port ? hangarSpec(s) : null;
+    return hs ? berthBay(port, s, hs) : null;
+  };
   /* For the ground-port regression in render.test.js: the one question the
    * drawing of a ground port turns on (street, sun, sky) when you are
    * zoomed out of its bay. */

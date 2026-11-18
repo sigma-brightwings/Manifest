@@ -1648,11 +1648,166 @@
       var s = boxes[k].src;
       if (!boxes[k].f.length) continue;
       var mmesh = { v: shell.v, f: boxes[k].f, c: shell.c ? boxes[k].c : null };
+      /* AN INCLINED CAR IS A LEVEL PAD (2026-11-18). See levelPad. */
+      var lvl = levelPad(s, mmesh, shell, hullF);
       out.push({ node: s.node, min: s.min, max: s.max, mid: s.mid, axis: s.axis || null,
                  range: s.range || [0, 0], serves: s.serves || null,
-                 deck: moverDeck(mmesh, s), mesh: mmesh });
+                 deck: lvl ? lvl.deck : moverDeck(mmesh, s), mesh: lvl ? lvl.mesh : mmesh,
+                 level: lvl ? lvl.info : null });
     }
     return { shell: { v: shell.v, f: hullF, c: shell.c ? hullC : shell.c, oi: hullO }, movers: out };
+  }
+
+  /* AN INCLINED CAR IS A LEVEL PAD (2026-11-18). Astra, of a 45-degree lift:
+   * "the platform sticks out perpendicular to the direction of vertical
+   * travel so that when it slides up to the top, it blocks the hole" - and
+   * her 2026-11-09 diagram: level the whole ride, riding the sloped shaft
+   * floor, the ship driving straight on and straight off. The art's car on
+   * an incline is a tilted panel, and the hull was stood on it at the
+   * panel's height at its MIDDLE, so the uphill half of the panel rose
+   * through her: "half its hull embedded in the cargo lift instead of
+   * sitting on the cargo lift". No seat on a tilted car can fix that.
+   *
+   * So a car whose axis climbs and runs at once is drawn as a wedge on the
+   * car's own horizontal footprint - the hole it fills at the top: a level
+   * deck, and under it a bottom that follows the shaft floor's slope, thin
+   * at the uphill end and deep at the downhill end, resting on the shaft's
+   * real floor (measured by vertical casts along the run, cars lifted out).
+   * Its deck is the seat the routes were laid against, raised only where a
+   * hull on it would be in the floor (see HULL_HALF below), and it ends
+   * uphill where the floor climbs to meet that deck.
+   *
+   * WHY IT FITS WITHOUT DIGGING. In a bore whose floor and ceiling run
+   * parallel up the slope with a vertical gap G, a hull of length l on a
+   * level deck keeps about (G - l tan) / 2 over its low end. Measured gaps:
+   * cradle 83 m, cylinder 48-76, spine 53, so an S hull keeps 14-29 m - and
+   * interiors.test sweeps every routed leg against the hull to hold that.
+   *
+   * Collision still sees the art's car where it was left (solidShell), as
+   * it always has. A car that runs plumb, or flat, is untouched: its art is
+   * already a level deck. */
+  var LEVEL_PAD_MIN_Z = 0.15, LEVEL_PAD_MAX_Z = 0.97;   // |axis.z| that counts as inclined
+  function levelPad(mv, carMesh, shell, hullF) {
+    var ax = mv && mv.axis;
+    if (!ax || !mv.min || !mv.max || !mv.mid || !shell || !hullF) return null;
+    var az = Math.abs(ax[2]), hz = Math.hypot(ax[0], ax[1]);
+    if (!(az > LEVEL_PAD_MIN_Z && az < LEVEL_PAD_MAX_Z) || !(hz > 1e-6)) return null;
+    /* Uphill, on the level: the way the car goes as it climbs. */
+    var sg = ax[2] > 0 ? 1 : -1;
+    var ux = ax[0] / hz * sg, uy = ax[1] / hz * sg;      // uphill
+    var px = -uy, py = ux;                                // across
+    /* The footprint off the car's own vertices along its run and across it:
+     * the cylinder's side bores run on a bearing, and an axis-aligned box
+     * round a car on a bearing is half again too wide. */
+    var hl = 0, hw = 0, seen = {};
+    (carMesh && carMesh.f || []).forEach(function (fc) {
+      for (var q = 0; q < fc.length; q++) {
+        if (seen[fc[q]]) continue;
+        seen[fc[q]] = 1;
+        var pv = carMesh.v[fc[q]];
+        if (!pv) continue;
+        var dx = pv[0] - mv.mid[0], dy = pv[1] - mv.mid[1];
+        hl = Math.max(hl, Math.abs(dx * ux + dy * uy));
+        hw = Math.max(hw, Math.abs(dx * px + dy * py));
+      }
+    });
+    if (!(hl > 1e-6 && hw > 1e-6)) return null;
+    var tan = az / hz;
+    /* ONLY A TILTED CAR. The pad sites' transfer cars already are level
+     * slabs (12 m thick, 200 m across) that slide on a diagonal; a car
+     * whose box is far shallower than its run would rise across it is
+     * level art, and is left as it is. */
+    if ((mv.max[2] - mv.min[2]) < 2 * hl * tan * 0.5) return null;
+    /* THE INCLINE'S FLOOR, measured where it is an incline. A vertical cast
+     * from the car's middle onto the hull with the cars lifted out - but not
+     * at the car's rest pose, which is a landing (measured at Threshold:
+     * 6 m under the slope, so the deck rode that far low at its uphill end).
+     * Cast at seven points through the middle of the run instead, each
+     * brought back to the rest pose along the axis, and the median taken. */
+    var mid = moverDeck(carMesh, mv), reach = Math.max(hl, hw, mv.max[2] - mv.min[2]) * 2;
+    var r0 = mv.range ? mv.range[0] : 0, r1 = mv.range ? mv.range[1] : 0;
+    var span = Math.abs(r1 - r0) + reach;
+    var near = [];
+    for (var i = 0; i < hullF.length; i++) {
+      var t = hullF[i], a = shell.v[t[0]], b = shell.v[t[1]], c = shell.v[t[2]];
+      if (!a || !b || !c) continue;
+      if (Math.max(a[0], b[0], c[0]) < mv.mid[0] - span || Math.min(a[0], b[0], c[0]) > mv.mid[0] + span) continue;
+      if (Math.max(a[1], b[1], c[1]) < mv.mid[1] - span || Math.min(a[1], b[1], c[1]) > mv.mid[1] + span) continue;
+      near.push(a, b, c);
+    }
+    var samples = [];
+    for (var sk = 0; sk < 7; sk++) {
+      var ss = r0 + (r1 - r0) * (0.25 + 0.5 * sk / 6);
+      var o = [mv.mid[0] + ax[0] * ss, mv.mid[1] + ax[1] * ss, mid + ax[2] * ss + 1e-5], best = Infinity;
+      for (var ti = 0; ti < near.length; ti += 3) {
+        var h = boomHit(o, [0, 0, -1], near[ti], near[ti + 1], near[ti + 2]);
+        if (h > 0 && h < best) best = h;
+      }
+      if (isFinite(best) && best < reach) samples.push(o[2] - best - ax[2] * ss);
+    }
+    samples.sort(function (p, q) { return p - q; });
+    var floorMid = samples.length ? samples[Math.floor(samples.length / 2)] : mv.min[2];
+    /* THE SEAT STAYS WHERE THE ROUTES EXPECT IT unless a hull would be in
+     * the floor. Every route through these stations (the level stubs on and
+     * off each lift, interiors.test's swept legs) was laid against the art
+     * car's own deck, and lowering it to the floor pulled the spines' stubs
+     * through their landings - so the old deck is kept, and raised only as
+     * far as a hull of HULL_HALF either side of the car's middle needs to
+     * clear the incline. Measured: the spines' old deck already clears it
+     * by 16 m (unchanged), the cradles' sat 12 m into the floor at a hull's
+     * uphill end (raised - Astra's half-buried hull). */
+    var HULL_HALF = 0.012;                                // ~16 m at a 1.3 km station
+    var tk = Math.max(hl * 2 * 0.015, 1e-5);             // the deck plate over the floor
+    var top = Math.max(mid, floorMid + HULL_HALF * tan + tk);
+    /* The pad runs from the downhill edge up to where the floor meets its
+     * deck - past that the incline is above it, and a pad there would poke
+     * up through the floor. */
+    var hlUp = Math.min(hl, (top - tk - floorMid) / tan);
+    if (!(hlUp > -hl + 1e-6)) return null;
+    var lowB = floorMid - hl * tan;
+    var upB = floorMid + hlUp * tan;
+    var cx = mv.mid[0], cy = mv.mid[1];
+    function at(along, across, z) {
+      return [cx + ux * along + px * across, cy + uy * along + py * across, z];
+    }
+    var v = [
+      at(-hl, -hw, top), at(hlUp, -hw, top), at(hlUp, hw, top), at(-hl, hw, top),   // the level deck
+      at(-hl, -hw, lowB), at(hlUp, -hw, upB), at(hlUp, hw, upB), at(-hl, hw, lowB)
+    ];
+    /* The car's own colour for the deck, a shade darker for the wedge, and
+     * caution stripes along the edge a hull drives off. */
+    var counts = {}, deckCol = '#6f7478', bestN = 0;
+    (carMesh && carMesh.c || []).forEach(function (cc) {
+      if (!cc || cc.charAt(0) === '!' || cc.charAt(0) === '~') return;
+      counts[cc] = (counts[cc] || 0) + 1;
+      if (counts[cc] > bestN) { bestN = counts[cc]; deckCol = cc; }
+    });
+    var side = shadeHex(deckCol, 0.72);
+    var quads = [[0, 1, 2, 3, deckCol], [4, 7, 6, 5, side], [0, 4, 5, 1, side],
+                 [1, 5, 6, 2, side], [2, 6, 7, 3, side], [3, 7, 4, 0, side]];
+    var f = [], cl = [];
+    quads.forEach(function (q) { f.push([q[0], q[1], q[2]], [q[0], q[2], q[3]]); cl.push(q[4], q[4]); });
+    /* Hazard stripes: a band at each end of the deck, black and yellow. */
+    var N = 8, band = Math.min(hl * 0.12, hw * 0.25), zz = top + tk * 0.08;
+    [-1, 1].forEach(function (end) {
+      var a0 = end < 0 ? -hl : hlUp, a1 = a0 - end * band;
+      for (var k = 0; k < N; k++) {
+        var w0 = -hw + 2 * hw * k / N, w1 = -hw + 2 * hw * (k + 1) / N, base = v.length;
+        v.push(at(a0, w0, zz), at(a1, w0, zz), at(a1, w1, zz), at(a0, w1, zz));
+        f.push([base, base + 1, base + 2], [base, base + 2, base + 3]);
+        var col = (k % 2) ? '#1a1a1a' : '#e0b21c';
+        cl.push(col, col);
+      }
+    });
+    return { deck: top, mesh: { v: v, f: f, c: cl },
+             info: { floorMid: floorMid, top: top, low: lowB, hl: hl, hlUp: hlUp, hw: hw, tan: tan,
+                     raised: top - mid, uphill: [ux, uy] } };
+  }
+  function shadeHex(hex, k) {
+    if (typeof hex !== 'string' || hex.charAt(0) !== '#' || hex.length !== 7) return hex;
+    var n = parseInt(hex.slice(1), 16);
+    var r = Math.round(((n >> 16) & 255) * k), g = Math.round(((n >> 8) & 255) * k), b = Math.round((n & 255) * k);
+    return '#' + ((1 << 24) | (r << 16) | (g << 8) | b).toString(16).slice(1);
   }
 
   /* THE CAR'S DECK, NOT ITS BOX (2026-11-03). Astra, of the 45-degree lift
@@ -14724,6 +14879,121 @@
 
   var PORTRAIT_FILL = 2.35;          // how far back to stand, in model reaches
 
+  /* ---- A PORTRAIT WITH A DEPTH BUFFER (2026-11-18) -----------------------
+   * Astra, at the market: "rotating cargo image textures clip through the
+   * model" - the Medical supplies crate turning with a black triangle cut
+   * into its face and its side panel standing off it, and "probably all
+   * rotating items have this bug". They did. paintMesh is a painter: it
+   * sorts whole triangles by their middles, far first, and cannot cull
+   * back faces because the art's winding is half and half. A crate is a
+   * few big faces with small inset panels on them, and a big face's middle
+   * is often nearer the eye than the panel standing proud of it - so the
+   * back of the box is painted over the front, a frame at a time, as it
+   * turns. No sort fixes that; a depth test does.
+   *
+   * So the turning portraits (items, and hulls in the showroom) draw on one
+   * small hidden WebGL canvas with the SAME camera, the same light and the
+   * same per-face colours (shadeTint's numbers, done here), outlines
+   * included, and the result is copied into the card. Where there is no
+   * WebGL (node, a machine without it) paintMesh draws as before. */
+  var DP = null;                     // { cv, gl, prog, buf, loc }, or false once it has failed
+  function depthPortraitGL() {
+    if (DP !== null) return DP;
+    DP = false;
+    var doc = global.document;
+    if (!doc || !doc.createElement) return DP;
+    try {
+      var cv = doc.createElement('canvas');
+      var gl = cv.getContext('webgl', { alpha: true, antialias: true, depth: true, premultipliedAlpha: true, preserveDrawingBuffer: true });
+      if (!gl) return DP;
+      var vs = 'attribute vec3 p; attribute vec3 c; uniform vec4 k; varying vec3 vc;' +
+               'void main(){ float d = p.z; vc = c;' +
+               ' gl_Position = vec4(p.x * k.x, p.y * k.y, (d * k.z + k.w), d); }';
+      var fs = 'precision mediump float; varying vec3 vc; void main(){ gl_FragColor = vec4(vc, 1.0); }';
+      var mk = function (type, src) {
+        var s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(s));
+        return s;
+      };
+      var prog = gl.createProgram();
+      gl.attachShader(prog, mk(gl.VERTEX_SHADER, vs));
+      gl.attachShader(prog, mk(gl.FRAGMENT_SHADER, fs));
+      gl.linkProgram(prog);
+      if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      DP = { cv: cv, gl: gl, prog: prog, buf: gl.createBuffer(),
+             p: gl.getAttribLocation(prog, 'p'), c: gl.getAttribLocation(prog, 'c'),
+             k: gl.getUniformLocation(prog, 'k') };
+    } catch (e) { DP = false; }
+    return DP;
+  }
+  function depthPortrait(ctx, w, h, cam, frame, mesh, sunDir, tint) {
+    if (!ctx || !ctx.drawImage) return false;
+    var D = depthPortraitGL();
+    if (!D) return false;
+    /* At the pixels the card is really drawn at, not its CSS size, so a
+     * high-DPI screen gets a sharp portrait rather than a blown-up one. */
+    var tf = ctx.getTransform ? ctx.getTransform() : null;
+    var sc = tf ? Math.max(1, Math.min(3, Math.hypot(tf.a, tf.b))) : 1;
+    var gl = D.gl, pw = Math.max(1, Math.round(w * sc)), ph = Math.max(1, Math.round(h * sc));
+    if (D.cv.width !== pw || D.cv.height !== ph) { D.cv.width = pw; D.cv.height = ph; }
+    /* Each vertex in the camera's own space: across, up, and depth - the
+     * numbers cam.project divides, so the picture is the painter's picture. */
+    var vsp = [], i;
+    for (i = 0; i < mesh.v.length; i++) {
+      var q = mesh.v[i], wp = localToWorld(frame, q[0], q[1], q[2]);
+      var dx = wp.x - cam.eye.x, dy = wp.y - cam.eye.y, dz = wp.z - cam.eye.z;
+      vsp.push([dx * cam.r.x + dy * cam.r.y + dz * cam.r.z,
+                dx * cam.u.x + dy * cam.u.y + dz * cam.u.z,
+                dx * cam.f.x + dy * cam.f.y + dz * cam.f.z, wp]);
+    }
+    var tri = [], line = [];
+    var EDGE = [10 / 255, 14 / 255, 22 / 255];
+    for (i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i], A = vsp[f[0]], B = vsp[f[1]], C = vsp[f[2]];
+      if (!A || !B || !C) continue;
+      var a = A[3], b = B[3], c = C[3];
+      var n = V.norm(V.cross(V.sub(b, a), V.sub(c, a)));
+      if (V.dot(n, V.sub(cam.eye, a)) < 0) n = V.scale(n, -1);
+      var mat = faceMaterial((mesh.c && mesh.c[i]) || null);
+      var col = (PAINT_NOW && !mat.lit) ? paintFace(mat.color || tint) : (mat.color || tint);
+      var shade = mat.lit ? 1.15 : 0.26 + 0.70 * Math.max(0, V.dot(n, sunDir));
+      var rgb = (typeof col === 'string' && col.charAt(0) === '#' && col.length === 7) ? rgbOf(col) : [190 / 255, 205 / 255, 225 / 255];
+      var r = Math.min(1, rgb[0] * shade), g = Math.min(1, rgb[1] * shade), bl = Math.min(1, rgb[2] * shade);
+      [A, B, C].forEach(function (P) { tri.push(P[0], P[1], P[2], r, g, bl); });
+      /* The painter's outline, 55% of the edge colour over the face. */
+      var er = r * 0.45 + EDGE[0] * 0.55, eg = g * 0.45 + EDGE[1] * 0.55, eb = bl * 0.45 + EDGE[2] * 0.55;
+      [[A, B], [B, C], [C, A]].forEach(function (E) {
+        line.push(E[0][0], E[0][1], E[0][2], er, eg, eb, E[1][0], E[1][1], E[1][2], er, eg, eb);
+      });
+    }
+    if (!tri.length) return false;
+    var near = Math.max(1e-6, cam.dist * 0.05), far = cam.dist * 4;
+    var kx = cam.flen / (w / 2), ky = cam.flen / (h / 2);
+    gl.viewport(0, 0, pw, ph);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.enable(gl.DEPTH_TEST);
+    gl.depthFunc(gl.LEQUAL);
+    gl.useProgram(D.prog);
+    gl.uniform4f(D.k, kx, ky, (far + near) / (far - near), -2 * far * near / (far - near));
+    gl.bindBuffer(gl.ARRAY_BUFFER, D.buf);
+    gl.enableVertexAttribArray(D.p);
+    gl.enableVertexAttribArray(D.c);
+    var draw = function (arr, mode) {
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(arr), gl.STREAM_DRAW);
+      gl.vertexAttribPointer(D.p, 3, gl.FLOAT, false, 24, 0);
+      gl.vertexAttribPointer(D.c, 3, gl.FLOAT, false, 24, 12);
+      gl.drawArrays(mode, 0, arr.length / 6);
+    };
+    gl.enable(gl.POLYGON_OFFSET_FILL);
+    gl.polygonOffset(1, 1);
+    draw(tri, gl.TRIANGLES);
+    gl.disable(gl.POLYGON_OFFSET_FILL);
+    draw(line, gl.LINES);
+    ctx.drawImage(D.cv, 0, 0, w, h);
+    return true;
+  }
+
   function drawHullPortrait(ctx, x, y, w, h, hullId, spin, tint, paint) {
     if (!(w > 8) || !(h > 8)) return false;
     var mesh = hullPreviewMesh(hullId);
@@ -14763,7 +15033,11 @@
     /* The order sheet's paint, so the ship on the card is the ship you are
      * about to commission (see PAINT_NOW). */
     PAINT_NOW = paintRGB(paint);
-    try { paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8'); }
+    try {
+      if (!depthPortrait(ctx, w, h, cam, frame, mesh, sunDir, tint || '#b9c6d8')) {
+        paintMesh(ctx, cam, frame, mesh, 1, sunDir, tint || '#b9c6d8');
+      }
+    }
     finally { PAINT_NOW = null; }
     ctx.restore();
     return true;
@@ -15134,7 +15408,11 @@
     return true;
   }
 
-  var ITEM_FILL = 2.8;               // camera distance, in model reaches
+  /* 3.4, was 2.8 (2026-11-18). A cube's corner is 1.73 reaches from its
+   * middle, and at 2.8 the 55-degree lens frames only 1.46 either side -
+   * so every crate ran off its card twice a turn (Astra's Medical supplies
+   * card, cut at both edges). 3.4 frames 1.77, a full turn inside. */
+  var ITEM_FILL = 3.4;               // camera distance, in model reaches
   /* TIERED FITTINGS SHARE ART UNTIL THEY DON'T (2026-11-12). A ladder whose
    * rungs are the same instrument built better - gravI..gravIV - wears tier
    * I's model on every rung until its own .glb is in ref/icons. Dropping
@@ -15207,7 +15485,9 @@
     ctx.rect(x, y, size, size);
     ctx.clip();
     ctx.translate(x, y);
-    paintMesh(ctx, cam, frame, mesh, 1, sunDir, '#9aa6b4');
+    if (!depthPortrait(ctx, size, size, cam, frame, mesh, sunDir, '#9aa6b4')) {
+      paintMesh(ctx, cam, frame, mesh, 1, sunDir, '#9aa6b4');
+    }
     ctx.restore();
     return true;
   }

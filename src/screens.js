@@ -4020,10 +4020,19 @@
     for (var j = 0; j < mine.length; j++) {
       (function (p) {
         var kn = Crew.knackOf ? Crew.knackOf(p) : null;
-        row('  ' + p.name, Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) +
+        /* On the books but not inside her (crew.js present, outside.js).
+         * The line IS the rescue prompt, so it says the air. */
+        var outNote = global.Outside && global.Outside.statusOf ? global.Outside.statusOf(G, p) : null;
+        row('  ' + p.name + (outNote ? '  —  ' + outNote.toUpperCase() : ''),
+            Crew.ROLES[p.role].name + ', ' + Crew.ratingWord(p.rating) +
             (kn ? ', ' + Crew.KNACKS[kn].name : '') +
             '  ·  ' + Crew.dailyWage(p) + ' cr/day',
             function () {
+              if (p.out) {
+                say('Not while ' + p.name + (p.out === 'hull' ? ' is out on the hull' :
+                    ' is adrift - go and get them first'), 5);
+                return;
+              }
               s.crew = Crew.aboard(s).filter(function (q) { return q.id !== p.id; });
               /* A cool hand's saving counted at the yard; without them she
                * may be drawing more than the reactor makes. Say so now, not

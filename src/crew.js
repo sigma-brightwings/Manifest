@@ -246,10 +246,23 @@
     return { pilot: pilot, engineer: engineer, gunner: gunner, total: pilot + engineer + gunner };
   }
 
+  /* TWO LISTS, ONE ROSTER (2026-11-18). Astra: the roster means who is ON
+   * YOUR BOOKS. `aboard` is the books - everyone signed on, including a hand
+   * out on the hull (`out: 'hull'`) or floating on a beacon behind you
+   * (`out: 'adrift'`), because seeing "adrift, 6h air" on the crew screen is
+   * the prompt to go back for them. They still draw a wage: they are still
+   * your crew. Every write to s.crew goes through `aboard`, so it must stay
+   * the whole list or a hire would quietly drop the hand outside.
+   *
+   * `present` is who is physically inside the hull - the only list that
+   * may stand a watch, work a turret, take the helm or go out an airlock. */
   function aboard(ship) { return (ship && ship.crew) || []; }
+  function present(ship) {
+    return aboard(ship).filter(function (p) { return p && !p.out; });
+  }
 
   function best(ship, role) {
-    var list = aboard(ship), top = null;
+    var list = present(ship), top = null;
     for (var i = 0; i < list.length; i++) {
       if (list[i].role !== role) continue;
       if (!top || list[i].rating > top.rating) top = list[i];
@@ -324,7 +337,7 @@
   }
 
   function gunnery(ship) {
-    var gunners = aboard(ship).filter(function (p) { return p.role === 'gunner'; });
+    var gunners = present(ship).filter(function (p) { return p.role === 'gunner'; });
     gunners.sort(function (a, b) { return (b.rating - a.rating) || (String(a.id) < String(b.id) ? -1 : 1); });
     var mounts = (ship && ship.turret && needsCrew(ship)) ? 1 : 0;
     var bridge = gunners.slice(mounts);
@@ -365,7 +378,7 @@
     forHire: forHire, make: make, personName: personName,
     signingFee: signingFee, dailyWage: dailyWage,
     WAGE_DAY: WAGE_DAY, payrollDue: payrollDue,
-    needsCrew: needsCrew, crewNeeded: crewNeeded, aboard: aboard, best: best,
+    needsCrew: needsCrew, crewNeeded: crewNeeded, aboard: aboard, present: present, best: best,
     turretCrewing: turretCrewing, canBeOrdered: canBeOrdered,
     KNACKS: KNACKS, GUNNERY_MAX: GUNNERY_MAX, knackOf: knackOf, gunnery: gunnery,
     describe: describe

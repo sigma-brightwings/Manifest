@@ -633,7 +633,16 @@
    * the chase camera to swing round her inside the hangar without riding
    * on her hull - main.js clampCameraToDeckHangar keeps the eye in here. */
   var HANGAR_MARGIN = 7;       // m of floor round her
+  /* THE STATION'S OWN BERTH, when main.js measured one (hg.bay, 2026-11-18):
+   * the room is that berth's floor, wall to wall, and as tall as it is -
+   * not her hull plus a margin, which put an S-size room inside an L bay.
+   * Same axes as hg.box (her x across, her z along), so the same rotation
+   * lays it out. */
   function hangarDims(hg) {
+    if (hg.bay && hg.bay.box) {
+      var y = hg.bay.box;
+      return { w: y[3] - y[1], d: y[2] - y[0], h: Math.max(4, hg.bay.h || 8) };
+    }
     var b = hg.box;
     return { w: (b[3] - b[1]) + 2 * HANGAR_MARGIN, d: Math.max(9, (b[2] - b[0]) + 2 * HANGAR_MARGIN),
              h: Math.max(8, (hg.height || 4) + 5) };
@@ -651,6 +660,12 @@
     var th = br.noseIn ? -out : out, c = Math.cos(th), s = Math.sin(th);
     var b = hg.box, hcx = (b[0] + b[2]) / 2, hcz = (b[1] + b[3]) / 2;
     if (br.noseIn && hg.origin) { hcx = hg.origin.x; hcz = hg.origin.z; }
+    /* In a real berth the room's middle is the BERTH's middle, so she
+     * stands wherever in it she was parked, not centred. */
+    else if (hg.bay && hg.bay.box) {
+      var yb = hg.bay.box;
+      hcx = (yb[0] + yb[2]) / 2; hcz = (yb[1] + yb[3]) / 2;
+    }
     var RX = (br.x0 + br.x1) / 2, RZ = (br.z0 + br.z1) / 2;
     var H = { room: br.id, theta: th, cos: c, sin: s, gy: hg.gy || 0,
               X0: RX - (hcx * c + hcz * s), Z0: RZ - (-hcx * s + hcz * c) };

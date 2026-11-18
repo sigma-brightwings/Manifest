@@ -254,7 +254,10 @@
   function shipScene(plan, ship, opts) {
     opts = opts || {};
     var CrewM = global.Crew;
-    var roster = (CrewM && CrewM.aboard) ? CrewM.aboard(ship) : (ship && ship.crew) || [];
+    /* Who is inside her - a hand out on the hull or adrift does not walk
+     * her decks (crew.js present). */
+    var roster = (CrewM && CrewM.present) ? CrewM.present(ship)
+               : (CrewM && CrewM.aboard) ? CrewM.aboard(ship) : (ship && ship.crew) || [];
     var liv = liveryFor({ livery: ship && ship.livery, faction: ship && ship.liveryFaction });
     /* Assigned off the whole ship: on a decked hull `plan` is one deck. */
     var W = plan.ship || plan;

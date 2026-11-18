@@ -346,6 +346,108 @@ console.log('--- a jump is not a pause ---');
   })();
 })();
 
+/* ---- THE ROSTER IS THE BOOKS (2026-11-18) -----------------------------
+ * Astra chose: the crew roster means who is on your books. Each check
+ * below was a real failure on 2026-11-15, found by running the modules:
+ * a cast-off hand listed as aboard, a rescue that made two of her, and a
+ * dead engineer the game would send out again. */
+console.log('--- the roster is the books ---');
+(function () {
+  function burnOnce(g, h) {
+    g.ship.thrust = { x: 1, y: 0, z: 0 };
+    O.step(g, 1, h, { noPickup: true });
+    g.ship.thrust = { x: 0, y: 0, z: 0 };
+  }
+  function named(g, n) { return g.ship.crew.filter(function (p) { return p.name === n; }); }
+
+  /* 1. out on the hull: on the books, not inside her */
+  var a = makeG(), ha = says();
+  O.send(a, 0, null, false, ha);
+  check('a hand on the hull stays on the roster', a.ship.crew.length === 1);
+  check('flagged outside, not aboard', a.ship.crew[0].out === 'hull');
+  check('and is not counted as an engineer inside her', O.engineersAboard(a).length === 0);
+  check('the crew screen says so', /outside/.test(O.statusOf(a, a.ship.crew[0]) || ''),
+        O.statusOf(a, a.ship.crew[0]));
+  O.recall(a, 0, ha);
+  check('called back in: one of her, and inside', a.ship.crew.length === 1 && !a.ship.crew[0].out);
+
+  /* 2. cast off: still on the books, flagged adrift */
+  var b = makeG(), hb = says();
+  O.send(b, 0, null, false, hb);
+  burnOnce(b, hb);
+  check('cast off, she is still on the roster', b.ship.crew.length === 1);
+  check('flagged adrift', b.ship.crew[0].out === 'adrift');
+  check('with the air on the crew screen', /adrift, .* air/.test(O.statusOf(b, b.ship.crew[0]) || ''),
+        O.statusOf(b, b.ship.crew[0]));
+  check('and not sent out again while she floats', /engineer/.test(O.refusal(b) || ''), O.refusal(b));
+  check('she does not walk the decks', Crew.present(b.ship).length === 0);
+
+  /* 3. rescued: ONE of her, three round trips over */
+  for (var trip = 0; trip < 3; trip++) {
+    if (!b.adrift.length) { O.send(b, 0, null, false, hb); burnOnce(b, hb); }
+    b.adrift[0].pos = { x: 0, y: 0, z: 0 };
+    b.adrift[0].sysKey = b.here.id;
+    b.ship.pos = { x: 0, y: 0, z: 0 };
+    O.step(b, 1, hb);
+  }
+  check('three rescues later there is one Ada Vance', named(b, 'Ada Vance').length === 1,
+        named(b, 'Ada Vance').length + ' of her');
+  check('and she is inside', !b.ship.crew[0].out);
+
+  /* 4. died on the hull: struck off, and not sent out again */
+  var c = makeG(), hc = says();
+  O.send(c, 0, null, true, hc);
+  c.ship.hullHp = c.ship.hullMax * 0.1;
+  O.step(c, O.O2_SECONDS + 60, hc);
+  check('a hand who dies on the hull leaves the roster', c.ship.crew.length === 0,
+        c.ship.crew.length + ' on it');
+  check('and the game will not send the dead out again', O.refusal(c) !== null, O.refusal(c));
+
+  /* 5. died adrift: struck off too */
+  var d = makeG(), hd = says();
+  O.send(d, 0, null, false, hd);
+  burnOnce(d, hd);
+  O.step(d, O.O2_SECONDS + 60, hd, { noPickup: true });
+  check('a hand who dies adrift leaves the roster', d.ship.crew.length === 0);
+
+  /* 6. a career's worth of deaths does not grow the save forever */
+  var e = makeG({ crew: [] }), he = says();
+  for (var i = 0; i < 6; i++) {
+    e.ship.crew.push(Crew.make('Hand ' + i, 'engineer', 2, 'h' + i));
+    O.send(e, e.t, null, false, he);
+    burnOnce(e, he);
+    e.t += 13 * HOUR;
+    O.step(e, 13 * HOUR, he, { noPickup: true });
+  }
+  check('six dead, none on the roster', e.ship.crew.length === 0);
+  check('the stopped beacons are kept a while', e.adrift.length >= 1, e.adrift.length + ' kept');
+  e.t += O.KEEP_DEAD + HOUR;
+  O.step(e, HOUR, he, { noPickup: true });
+  check('and let go after a week', e.adrift.length === 0, e.adrift.length + ' still in the save');
+
+  /* 7. a career saved under the old bug is mended on the next frame */
+  var f = makeG(), hf = says();
+  var ada = f.ship.crew[0];
+  f.ship.crew.push({ id: ada.id, name: ada.name, role: ada.role, rating: ada.rating });
+  var bo = Crew.make('Bo Ruiz', 'engineer', 2, 'e2');
+  f.ship.crew.push(bo);
+  f.adrift = [{ id: bo.id, name: 'Bo Ruiz', role: 'engineer', rating: 2, dead: true,
+                diedAt: 0, pos: { x: 0, y: 0, z: 0 }, vel: { x: 0, y: 0, z: 0 }, o2: 0 }];
+  O.step(f, 1, hf, { noPickup: true });
+  check('an old doubled hand is folded back into one', named(f, 'Ada Vance').length === 1);
+  check('an old dead hand is struck off', named(f, 'Bo Ruiz').length === 0);
+  f.ship.crew.push(Crew.make('Bo Ruiz', 'engineer', 2, 'e2'));
+  O.step(f, 1, hf, { noPickup: true });
+  check('but the old beacon strikes once, not forever', named(f, 'Bo Ruiz').length === 1);
+
+  /* 8. records with no id are not all the same person */
+  var g = makeG({ crew: [{ name: 'Ann', role: 'engineer', rating: 2 },
+                         { name: 'Cy', role: 'gunner', rating: 2 }] }), hg = says();
+  O.send(g, 0, null, true, hg);
+  O.recall(g, 0, hg);
+  check('two id-less hands stay two', g.ship.crew.length === 2 && !g.ship.crew[0].out);
+})();
+
 console.log('--- it survives a reload ---');
 /* These used to read save.js as TEXT and check only that each field was
  * WRITTEN. All three passed for a day while load() read none of them back,

@@ -185,5 +185,31 @@ console.log('--- labels keep off the room title and the use-prompt (2026-11-03) 
   check('and a label nowhere near either is left where it was', Walk.labelClear(W / 2, 200, tw, res) === 200);
 })();
 
+/* THE HANGAR IS THE STATION'S BERTH (2026-11-18). Astra, docked in an L bay
+ * after Halloway's run, found an S-size room standing in the middle of it.
+ * With a measured bay (main.js berthBay), the hangar is that bay: its floor
+ * wall to wall, its height, and she stands where she was parked in it. */
+console.log('--- the hangar is the berth she is in ---');
+(function () {
+  var hg = { box: [-6, -14, 6, 12], hull: [-5, -13, 5, 11], height: 6, foot: { x: 0, z: -12 }, gy: -2,
+             bay: { box: [-26, -63, 26, 41], h: 30 } };
+  var p = Walk.layout('port-bay', { seed: 'kawartha', ships: [{ id: 'a', size: 'S', current: true, hangar: hg }] });
+  var H = p.hangar, r = H && p.rooms.filter(function (q) { return q.id === H.room; })[0];
+  check('a measured bay gives the hangar', !!r);
+  if (!r) return;
+  check('as wide as the bay', Math.abs((r.x1 - r.x0) - 104) < 1e-6, (r.x1 - r.x0) + ' m');
+  check('as deep as the bay', Math.abs((r.z1 - r.z0) - 52) < 1e-6, (r.z1 - r.z0) + ' m');
+  check('as tall as the bay', Math.abs((r.y1 - r.y0) - 30) < 1e-6, (r.y1 - r.y0) + ' m');
+  /* Her centre sits where it was in the bay, not the bay's middle: the bay
+   * runs 41 ahead of her and 63 behind, so she is 11 m off its centre. */
+  var c = Walk.hangarToStation(H, 0, 0), mid = (r.x0 + r.x1) / 2;
+  check('and she stands where she was parked in it, not centred', Math.abs(Math.abs(c.x - mid) - 11) < 1e-6,
+        (c.x - mid).toFixed(2) + ' m off the middle');
+  var old = Walk.layout('port-bay', { seed: 'kawartha', ships: [{ id: 'a', size: 'S', current: true,
+    hangar: { box: hg.box, hull: hg.hull, height: 6, foot: hg.foot, gy: -2 } }] });
+  var ro = old.rooms.filter(function (q) { return q.id === old.hangar.room; })[0];
+  check('without a measure the old hangar stands', Math.abs((ro.x1 - ro.x0) - (26 + 2 * Walk.HANGAR_MARGIN)) < 1e-6);
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);

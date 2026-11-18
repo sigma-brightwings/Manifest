@@ -58,17 +58,127 @@
 
   var PICKUP_KM = 0.35;              // close enough to take them aboard
   var BURN_EPS = 1e-9;               // any thrust at all counts
+  var KEEP_DEAD = 7 * 86400;         // a stopped beacon is let go after a week
 
   function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 
   /* ---- who is out ------------------------------------------------------ */
   function current(G) { return (G && G.outside) || null; }
 
+  /* Inside the hull - not on the books. A hand already outside, or on a
+   * beacon, is not an engineer you can send out (crew.js present). */
   function engineersAboard(G) {
     var C = global.Crew, s = G && G.ship;
     if (!s) return [];
-    var list = (C && C.aboard) ? C.aboard(s) : (s.crew || []);
+    var list = (C && C.present) ? C.present(s)
+             : (s.crew || []).filter(function (p) { return p && !p.out; });
     return list.filter(function (p) { return p && p.role === 'engineer'; });
+  }
+
+  /* ---- the roster is the books (2026-11-18) -----------------------------
+   * Astra: the crew roster means who is ON YOUR BOOKS. So a hand going out,
+   * being cast off, or coming back never leaves or re-enters the list -
+   * their record is flagged (`out: 'hull' | 'adrift'`) and the flag
+   * cleared. Only death takes them off. Before this, a cast-off hand stayed
+   * listed as if aboard, a rescue pushed a SECOND copy, and a hand who died
+   * outside stayed on the list - where refusal() counted them and send()
+   * put the dead engineer over the side again.
+   *
+   * Matched by id; by name only for a record that has no id at all, so two
+   * id-less records can never be mistaken for each other by `undefined`. */
+  function sameHand(a, b) {
+    if (!a || !b) return false;
+    if (a.id != null && b.id != null) return a.id === b.id;
+    if (a.id == null && b.id == null) return !!a.name && a.name === b.name;
+    return false;
+  }
+  function onBooks(s, who) {
+    var list = (s && s.crew) || [];
+    for (var i = 0; i < list.length; i++) if (sameHand(list[i], who)) return list[i];
+    return null;
+  }
+  function markOut(s, who, how) {
+    var p = onBooks(s, who);
+    if (p) p.out = how;
+    return p;
+  }
+  /* Back inside: clear the flag, or - for a hand who somehow is not on the
+   * books (a career from before this) - sign them back on once. */
+  function bringIn(s, who) {
+    if (!s) return null;
+    var p = onBooks(s, who);
+    if (p) { delete p.out; return p; }
+    var rec = { id: who.id, name: who.name, role: who.role, rating: who.rating };
+    (s.crew = (s.crew || []).slice()).push(rec);
+    return rec;
+  }
+  function strikeOff(s, who) {
+    if (!s || !s.crew) return;
+    s.crew = s.crew.filter(function (p) { return !sameHand(p, who); });
+  }
+
+  /* Make the books agree with who is actually outside. Cheap (a crew is a
+   * handful of people) and run every frame from step(), which is what
+   * mends a career saved under the old bug: a doubled Ada is folded back
+   * into one, a dead one struck off, and the flags set from G.outside and
+   * G.adrift rather than trusted. */
+  function reconcile(G) {
+    var s = G && G.ship;
+    if (!s || !Array.isArray(s.crew) || !s.crew.length) return;
+    var kept = [], changed = false;
+    for (var i = 0; i < s.crew.length; i++) {
+      var p = s.crew[i];
+      if (!p) { changed = true; continue; }
+      var dup = false;
+      for (var k = 0; k < kept.length; k++) if (sameHand(kept[k], p)) { dup = true; break; }
+      if (dup) { changed = true; continue; }
+      kept.push(p);
+    }
+    var adrift = (G.adrift || []);
+    /* A death not yet struck off (a career saved under the old bug) is
+     * struck now, ONCE: `struck` is set so a later hand with the same id -
+     * should one ever sign on - is not struck off by an old beacon. */
+    var out = kept.filter(function (p) {
+      for (var a = 0; a < adrift.length; a++) {
+        var d = adrift[a];
+        if (d && d.dead && !d.struck && sameHand(d, p)) return false;
+      }
+      return true;
+    });
+    for (var c = 0; c < adrift.length; c++) if (adrift[c] && adrift[c].dead) adrift[c].struck = true;
+    if (out.length !== kept.length) changed = true;
+    for (var j = 0; j < out.length; j++) {
+      var q = out[j], how = null;
+      if (G.outside && sameHand(G.outside, q)) how = 'hull';
+      else {
+        for (var b = 0; b < adrift.length; b++) {
+          var r = adrift[b];
+          if (r && !r.dead && sameHand(r, q)) { how = 'adrift'; break; }
+        }
+      }
+      if (how) { if (q.out !== how) q.out = how; }
+      else if (q.out) delete q.out;
+    }
+    if (changed) s.crew = out;
+  }
+
+  /* What the crew screen says after their name, or null if they are in. */
+  function statusOf(G, p) {
+    if (!p || !p.out) return null;
+    if (p.out === 'hull') {
+      var o = current(G);
+      return 'outside' + (o && sameHand(o, p) ? (o.tether ? ' on the line' : ' OFF the line') +
+             ', ' + hoursWord(o.o2) + ' air' : '');
+    }
+    var list = (G && G.adrift) || [];
+    for (var i = 0; i < list.length; i++) {
+      var r = list[i];
+      if (r && !r.dead && sameHand(r, p)) {
+        var here = (G.here && G.here.id) || 'sys';
+        return 'adrift, ' + hoursWord(r.o2) + ' air' + (r.sysKey === here ? '' : ', in another system');
+      }
+    }
+    return 'adrift';
   }
 
   /* Why they cannot go out, or null. The board and the button say the same
@@ -108,6 +218,7 @@
       t0: t, o2: O2_SECONDS, tether: tether !== false,
       mended: 0, warnedO2: false
     };
+    markOut(G.ship, rec, 'hull');
     if (hooks && hooks.say) {
       hooks.say(rec.name + ' is outside' + (G.outside.tether ? ', on the line' : ', off the line') +
                 ' - ' + Math.round(mendRate(rec, G.outside.tether)) + ' hull an hour', 6);
@@ -137,18 +248,8 @@
       hooks.say(o.name + ' is back aboard' +
                 (o.mended > 0 ? ' - ' + Math.round(o.mended) + ' hull mended' : ''), 5);
     }
-    if (s && !aboardAlready(s, o)) putAboard(s, o);
+    bringIn(s, o);
     return { ok: true, mended: o.mended };
-  }
-
-  function aboardAlready(s, o) {
-    var list = s.crew || [];
-    for (var i = 0; i < list.length; i++) if (list[i] && list[i].id === o.id) return true;
-    return false;
-  }
-  function putAboard(s, o) {
-    (s.crew = (s.crew || []).slice()).push(
-      { id: o.id, name: o.name, role: o.role, rating: o.rating });
   }
 
   /* ---- the thing that strands them ------------------------------------- */
@@ -160,6 +261,7 @@
    * of a tunnel - but their air still runs, which is the whole point
    * of being handed the interval at all. */
   function step(G, dt, hooks, opts) {
+    reconcile(G);
     var o = current(G);
     var s = G && G.ship;
     if (o && s) {
@@ -226,6 +328,9 @@
       mended: o.mended, dead: false, mourned: false
     };
     (G.adrift = G.adrift || []).push(rec);
+    /* Still on your books - flagged, so the crew screen shows the air
+     * running down instead of pretending they are aboard. */
+    markOut(s, o, 'adrift');
     if (hooks && hooks.say) {
       hooks.say(o.name + ' IS OFF THE HULL - you burned with them unclipped. ' +
                 'Beacon is up. ' + hoursWord(rec.o2) + ' of air.', 12);
@@ -285,6 +390,15 @@
       if (V && r.pos && r.vel) r.pos = V.add(r.pos, V.scale(r.vel, dt));
       if (r.o2 <= 0) died(G, G.t, r, hooks, false);
     }
+    /* A stopped beacon is kept a week, then let go. Every record here goes
+     * into every save, and nothing reads a dead one - the journal is where
+     * the death is remembered. In place, so a caller holding the array (the
+     * save, a test) sees the same list. */
+    var now = (G && typeof G.t === 'number') ? G.t : 0;
+    for (var j = list.length - 1; j >= 0; j--) {
+      var d = list[j];
+      if (d && d.dead && d.struck && now - (d.diedAt || 0) > KEEP_DEAD) list.splice(j, 1);
+    }
   }
 
   /* ---- coming back ----------------------------------------------------- */
@@ -312,7 +426,9 @@
     if (!rec) return { ok: false, why: 'nobody within reach' };
     var idx = (G.adrift || []).indexOf(rec);
     if (idx >= 0) G.adrift.splice(idx, 1);
-    if (G.ship) putAboard(G.ship, rec);
+    /* Clears the flag on the record already on the books - never a second
+     * copy of them (the old putAboard did, every rescue). */
+    if (G.ship) bringIn(G.ship, rec);
     /* How close it was decides what it did to your name. */
     var left = rec.o2 / O2_SECONDS;
     var d = left > 0.5 ? REP_RECOVER : REP_SCARE;
@@ -331,7 +447,11 @@
     if (rec.dead) return;
     rec.dead = true;
     rec.diedAt = t;
-    if (G.outside && G.outside.id === rec.id) G.outside = null;
+    if (G.outside && sameHand(G.outside, rec)) G.outside = null;
+    /* Off the books. The one thing that takes a hand off the roster: no
+     * wage runs to the dead, and no engineer count sends them out again. */
+    strikeOff(G.ship, rec);
+    rec.struck = true;
     bumpRep(G, REP_DEATH);
     /* Whoever's space it was. A beacon with your ship's name ran for twelve
      * hours and then stopped; somebody logged that. */
@@ -400,7 +520,8 @@
     mendRate: mendRate, send: send, setTether: setTether, recall: recall,
     step: step, strand: strand, stepAdrift: stepAdrift,
     liveHere: liveHere, pickupAt: pickupAt, recover: recover,
-    rep: rep, bumpRep: bumpRep, hallEffect: hallEffect, hoursWord: hoursWord
+    rep: rep, bumpRep: bumpRep, hallEffect: hallEffect, hoursWord: hoursWord,
+    KEEP_DEAD: KEEP_DEAD, reconcile: reconcile, statusOf: statusOf, sameHand: sameHand
   };
   global.Outside = Outside;
   if (typeof module !== 'undefined' && module.exports) module.exports = Outside;
