@@ -82,6 +82,17 @@
 
   /* ---- drones ------------------------------------------------------------ */
   function hash01(s) { return Sv() ? Sv().hash01(s) : 0.5; }
+  /* When a drone on this claim may next dig: now, unless its drones are
+   * building an outpost, in which case the day it stands (outposts.js). */
+  function resumeAt(G, key, t) {
+    var Op = global.Outposts, op = Op && Op.onClaim ? Op.onClaim(G, key) : null;
+    return op && t < op.doneAt ? op.doneAt : t;
+  }
+  /* A drone set down on a claim with an outpost on it is guarded by it. */
+  function droneStrip(G, key, sys) {
+    var Op = global.Outposts, op = Op && Op.onClaim ? Op.onClaim(G, key) : null;
+    return stripRate(sys) * (op ? Op.OUTPOST_STRIP : 1);
+  }
 
   /* Strips per day, off the system's crime score (0..100). */
   function stripRate(sys) {
@@ -113,8 +124,10 @@
     var s = lastStripBefore(d, t), level, stripped = false;
     if (s !== null && s > d.baseT) { level = rate * Math.max(0, tEff - s); stripped = true; }
     else level = (d.base || 0) + rate * Math.max(0, tEff - d.baseT);
-    return { tonnes: Math.min(HOPPER, level), cid: d.cid, stripped: stripped, strippedAt: stripped ? s : null,
-             lapsed: t > until, full: level >= HOPPER };
+    /* A drone feeding an outpost's bins holds more (outposts.js). */
+    var cap = global.Outposts && global.Outposts.capFor ? global.Outposts.capFor(G, d) : HOPPER;
+    return { tonnes: Math.min(cap, level), cid: d.cid, stripped: stripped, strippedAt: stripped ? s : null,
+             lapsed: t > until, full: level >= cap, cap: cap };
   }
 
   function landedWorld(G, sys) {
@@ -140,6 +153,9 @@
   function act(G, sys, t) {
     var world = landedWorld(G, sys);
     if (!world) return { ok: false, why: 'land on your claim first' };
+    /* At an outpost, the whole claim at once (outposts.js). */
+    var Op = global.Outposts, op = Op && Op.near ? Op.near(G, sys, t) : null;
+    if (op && Op.standing(op, t)) return Op.collectAll(G, sys, t, op);
     var near = dronesNear(G, sys, t);
     if (near.length) return collect(G, sys, t, near[0]);
     /* Somebody else's, beside you: that is theft, and N does it. */
@@ -179,7 +195,7 @@
     var id = 'drone-' + key + '-' + Math.round(t);
     var d = { id: id, key: key, star: (G.here && G.here.id) || 'sys', body: world.id, name: world.name,
               at: { lat: G.ship.landedAt.lat, lon: G.ship.landedAt.lon, elevation: 0 },
-              cid: best.cid, grade: best.grade, t0: t, baseT: t, base: 0, stripRate: stripRate(sys) };
+              cid: best.cid, grade: best.grade, t0: t, baseT: resumeAt(G, key, t), base: 0, stripRate: droneStrip(G, key, sys) };
     G.drones.push(d);
     G.ship.drones -= 1;
     /* A stolen drone set down on your own claim is yours now. */
@@ -246,7 +262,7 @@
     G.drones = G.drones || [];
     var d = { id: 'drone-' + key + '-' + Math.round(t), key: key, star: (G.here && G.here.id) || 'sys',
               body: world.id, name: world.name, at: { lat: lat, lon: lon, elevation: 0 },
-              cid: best.cid, grade: best.grade, t0: t, baseT: t, base: 0, stripRate: stripRate(sys) };
+              cid: best.cid, grade: best.grade, t0: t, baseT: resumeAt(G, key, t), base: 0, stripRate: droneStrip(G, key, sys) };
     G.drones.push(d);
     G.ship.drones -= 1;
     if (G.ship.hotDrones > 0) G.ship.hotDrones -= 1;
@@ -273,7 +289,7 @@
       ex[d.cid] = (ex[d.cid] || 0) + take;
     }
     d.base = Math.max(0, h.tonnes - take);
-    d.baseT = Math.min(t, (G.claims && G.claims[d.key]) ? G.claims[d.key].until : t);
+    d.baseT = resumeAt(G, d.key, Math.min(t, (G.claims && G.claims[d.key]) ? G.claims[d.key].until : t));
     var name = Sv() ? Sv().NAMES[d.cid] : d.cid;
     return { ok: take > 0, taken: take, left: d.base,
              text: take > 0 ? note + take + ' t of ' + name.toLowerCase() + ' aboard' +
@@ -539,7 +555,7 @@
   var Claims = {
     CLAIM_FEE: CLAIM_FEE, CLAIM_DAYS: CLAIM_DAYS, CLAIM_MIN_COV: CLAIM_MIN_COV,
     DRONE_PRICE: DRONE_PRICE, DRONE_MAX: DRONE_MAX, DRONE_RATE: DRONE_RATE, HOPPER: HOPPER, NEAR_KM: NEAR_KM,
-    claimFor: claimFor, claimable: claimable, fileClaim: fileClaim,
+    claimFor: claimFor, claimable: claimable, fileClaim: fileClaim, resumeAt: resumeAt,
     stripRate: stripRate, lastStripBefore: lastStripBefore, hopper: hopper,
     dronesNear: dronesNear, landedWorld: landedWorld,
     act: act, deploy: deploy, deployAt: deployAt, POD_FUEL: POD_FUEL, collect: collect, recover: recover, buyDrone: buyDrone, keyOf: keyOf,

@@ -1139,6 +1139,83 @@
     }
   };
 
+  /* ---- the fixer's business (fixer.js, 2026-11-19) ----
+   * One door into a sheet of five: the job, grey goods, papers, who is
+   * looking for you, and the way in. A sheet rather than five more topics
+   * because the top list shows five and the fixer already fills it. */
+  function Fx() { return global.Fixer; }
+  function fixJob(ctx) { return Fx() ? Fx().jobAt(ctx.G, ctx.port, ctx.sys, ctx.t) : null; }
+  function daysWord(s) { var d = Math.max(1, Math.round(s / DAY)); return d === 1 ? 'a day' : d + ' days'; }
+  var WORK = {
+    id: 'work', label: 'What can you do for me?', repeat: true,
+    when: function (ctx) {
+      if (!Fx()) return false;
+      if (refusing(ctx)) return 'they do not deal with you';
+      return true;
+    },
+    run: function (ctx) {
+      ctx.state.node = 'fixer';
+      return sayLine(ctx, ['Depends what you need.', 'Work, goods, word. Pick one.', 'Sit. What is it?'], 'fixerOpen');
+    }
+  };
+  function fixerSheet(ctx) {
+    var out = [];
+    out.push({ id: 'x-job', sub: 'fixer', label: 'Is there work?',
+      when: function (c2) {
+        var j = fixJob(c2);
+        if (!j) return 'nothing they can offer here';
+        if (j.taken) return 'you have their job - more in ' + daysWord(j.back - c2.t);
+        return true;
+      },
+      run: function (c2) {
+        var j = fixJob(c2);
+        c2.state.node = 'fixjob';
+        return j.desc + ' ' + crs(j.pay) + ', inside ' + daysWord(j.deadline - c2.t) + '.';
+      } });
+    out.push({ id: 'x-grey', sub: 'fixer', label: 'Where can I buy a gun nobody certified?',
+      run: function (c2) {
+        var Fl = global.Fleet;
+        return Fx().greyWord(c2.G, c2.sys, c2.G.here, Fl && Fl.systemFor);
+      } });
+    out.push({ id: 'x-papers', sub: 'fixer', label: PAPERS.label, run: PAPERS.run });
+    out.push({ id: 'x-look', sub: 'fixer', label: 'Is anyone looking for me?',
+      run: function (c2) { return Fx().lookingFor(c2.G, c2.t); } });
+    out.push({ id: 'x-way', sub: 'fixer', label: 'How do I get in with the Syndicate?',
+      run: function (c2) { return STANDING.run(c2) + ' ' + Fx().wayIn(c2.G, c2.t); } });
+    out.push({ id: 'x-done', sub: 'fixer', label: 'That is all.',
+      run: function (c2) { c2.state.node = null; return 'You know where I sit.'; } });
+    return out;
+  }
+  function fixJobSheet(ctx) {
+    return [
+      { id: 'j-take', sub: 'fixjob', label: 'I will take it.',
+        when: function (c2) {
+          var j = fixJob(c2);
+          if (!j || j.taken) return 'the job is gone';
+          if (j.tonnes) {
+            var Sm = global.Sim, free = c2.G.ship.cargoCap - (Sm && Sm.cargoMass ? Sm.cargoMass(c2.G.ship) : 0);
+            if (j.tonnes > free) return 'you need ' + j.tonnes + 't of hold space';
+          }
+          return true;
+        },
+        run: function (c2) {
+          var M = global.Missions, j = fixJob(c2);
+          var r = M ? M.accept(c2.G, j, null) : { ok: false, why: 'no ledger' };
+          c2.state.node = null;
+          if (!r.ok) return 'Then we have nothing to talk about. (' + r.why + ')';
+          record(c2.G, c2.p.key, 'hired', c2.t);
+          if (global.Journal && global.Journal.add) {
+            try { global.Journal.add(c2.G, 'mission', 'Took a job from ' + c2.person.name + ' at ' + portName(c2) + ': ' + j.text); } catch (e) { /* the log is a courtesy */ }
+          }
+          return j.type === 'smuggle'
+            ? sayLine(c2, ['It is in your hold already. Do not get scanned.', 'Loaded. Smile at customs.'], 'jobSmuggle')
+            : sayLine(c2, ['Good. I do not want to hear how.', 'Then we never spoke.'], 'jobSabotage');
+        } },
+      { id: 'j-no', sub: 'fixjob', label: 'Not this one.',
+        run: function (c2) { c2.state.node = 'fixer'; return 'Suit yourself.'; } }
+    ];
+  }
+
   /* ---- a docked crew ---- */
   function captainOf(ctx) {
     var c = contactOf(ctx.person), C = Cap();
@@ -1383,14 +1460,16 @@
     customs: [WARRANT, BUSINESS, TROUBLE],
     marine: [BUSINESS, TROUBLE],
     security: [BUSINESS, TROUBLE, WARRANT],
-    fixer: [TITHE, FRIENDS, PAPERS, STANDING],
+    /* PAPERS and STANDING live in the business sheet now (fixerSheet). */
+    fixer: [WORK, TITHE, FRIENDS],
     factor: [FIRM_WHAT, READING, ENGAGE, ACCOUNT],
     syndicate: [TITHE, STANDING],
     other: []
   };
   /* A sub-menu is a list, or a function of the conversation for one whose
    * rows depend on what you have chosen (the trading house's deal sheet). */
-  var SUB = { business: CLAIMS.map(claimTopic), firm: firmSheet, firmgoods: goodsSheet, account: accountSheet };
+  var SUB = { business: CLAIMS.map(claimTopic), firm: firmSheet, firmgoods: goodsSheet, account: accountSheet,
+              fixer: fixerSheet, fixjob: fixJobSheet };
 
   /* ---- the conversation ------------------------------------------------------ */
   function ctxOf(G, sys, port, state) {

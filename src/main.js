@@ -4483,12 +4483,18 @@
   }
 
   /* One solve. Returns the pip, or null with a reason. */
-  function solveIntercept(lock) {
+  function solveIntercept(lock, planning) {
     var rails = interceptRails(lock);
     if (!rails) return null;
     var now = rails.at(0);
     if (!now) return null;
-    var cr = interceptCruise();
+    /* PLANNING (2026-11-18, the mission board's "how long to get there"):
+     * the trip as you would fly it, not as you could fly it this second. On
+     * the clamps the drive is refused ("on the clamps"), but nobody crosses
+     * an AU on thrusters; if the hull has a drive, assume she will use it.
+     * The mass lock leaving the dock is still in the model (lockCeiling). */
+    var cr = (planning && cruiseTopKms() > 0 && G.ship.thrusterFuel >= 0.5)
+      ? { ok: true } : interceptCruise();
     var ff = interceptFeedForward(rails);
     var aim0 = interceptAim(rails, now, 0, G.ship.pos);
     var opts = {
@@ -4537,6 +4543,31 @@
     res.name = rails.name;
     return res;
   }
+
+  /* HOW LONG TO A PORT, for the mission screens (Missions.reach). One
+   * planning solve per port, cached for ETA_KEEP_MS of real time, and at
+   * most one fresh solve every ETA_GAP_MS, so a board of eight rows costs a
+   * solve now and then instead of eight a frame. A row with no answer yet
+   * shows its distance alone until its turn comes. */
+  var ETA_KEEP_MS = 3000, ETA_GAP_MS = 40, etaCache = {}, etaLast = 0;
+  function etaTo(portId, force) {
+    if (!portId || !G.sys || !G.sys.byId[portId]) return null;
+    var now = performance.now(), c = etaCache[portId];
+    var key = G.here ? G.here.id : '';
+    if (c && c.key === key && now - c.at < ETA_KEEP_MS) return c.res;
+    if (!force && now - etaLast < ETA_GAP_MS) return c && c.key === key ? c.res : null;
+    etaLast = now;
+    var res = null;
+    try {
+      var r = solveIntercept({ kind: 'body', id: portId }, true);
+      if (r && isFinite(r.T)) res = { secs: r.T, drive: r.drive };
+    } catch (e) { res = null; }
+    etaCache[portId] = { at: now, key: key, res: res };
+    return res;
+  }
+  /* On the global rather than on G: newGame may rebuild G, and missions.js
+   * asks at draw time without knowing main.js exists (the tests have none). */
+  global.MissionEta = etaTo;
 
   /* The pip, kept fresh. Runs every frame but solves on its own clock;
    * between solves only the countdown and the target's present position
@@ -6157,10 +6188,24 @@
     var off = G.payOffer;
     if (!off) { say('Nothing quoted — hail the police channel first', 3); return; }
     if (G.t > off.until) { G.payOffer = null; say('That quote has expired', 3); return; }
+    /* Short of the money, the second Y is the other way to settle (combat.js
+     * workOff): their contracts pay half until it is cleared. Not being able
+     * to pay a fine is not allowed to be the end of a career. */
+    if (off.workable) {
+      var debt = Combat.workOff(G, off.faction);
+      G.payOffer = null;
+      say((off.who || off.name + ' Control') + ': "Agreed. ' + debt + ' cr, worked off: half of every ' +
+          off.name + ' contract fee comes to us until it is paid. You are clear to dock."', 9);
+      HOOKS.sound('click');
+      return;
+    }
     var paid = off.fugitive ? Combat.payFugitive(G) : Combat.payBounty(G, off.faction);
     if (paid < 0) {
+      off.workable = true;
+      off.until = G.t + 60;
       say('Declined — ' + Math.abs(paid) + ' cr required, you have ' +
-          Math.round(G.ship.credits), 5);
+          Math.round(G.ship.credits) + '.   Y again to work it off: ' + off.name +
+          ' contracts pay half until it is cleared', 9);
       HOOKS.sound('warn');
       return;
     }
@@ -7168,6 +7213,7 @@
              * (startEva): the suit has the keys from here. */
             if (G.walk) {
               npcFacing();
+              if (!G.walk.ship) updateConcourse(dtReal);
               if (G.walk.ship) lockLabels();
               /* Doors on the wall clock, like the walking itself. */
               if (G.walk.ship && global.ShipDeck) global.ShipDeck.updateDoors(G.walk.plan, G.walk, dtReal, npcHold);
@@ -7864,6 +7910,7 @@
     /* Thefts from other prospectors' drones are reported when the owner
      * next comes round - on the clock, wherever you are. */
     if (global.Claims && G.thefts && G.thefts.length) global.Claims.tickThefts(G, G.t, HOOKS);
+    if (global.Outposts && G.outposts && G.outposts.length) global.Outposts.tick(G, G.t, HOOKS);
     /* AND THE ONES ON THE SLIPS. A commissioned hull is handed over at her
      * yard when her build time is up, wherever you are — said, and logged,
      * so a pilot three stars away hears that she is ready. */
@@ -8135,6 +8182,17 @@
          * the throttle: it is the only sign from outside that she is lit. */
         : G.ship.landed ? (G.ship.drive === 'spool' ? 0.06 + 0.18 * (G.ship.spool || 0) : G.ship.drive === 'hot' ? 0.1 : 0)
         : (G.ship.throttle || 0));
+      /* And the room you are standing in (sound.js ambience, 2026-11-19):
+       * the station's deck only - aboard, in flight and on the title card,
+       * no bed. The hangar is its berth. */
+      if (global.Sound.ambience) {
+        var akind = null;
+        if (G.walk && !G.walk.ship && !G.walk.outside && G.walk.plan && global.Walk && !G.title) {
+          var ar = global.Walk.roomAt(G.walk.plan, G.walk.x, G.walk.z);
+          akind = ar ? (ar.hangar ? 'berth' : ar.kind) : null;
+        }
+        global.Sound.ambience(akind);
+      }
     }
 
     /* Nearest other ship, for the cockpit's contact readout. Range-limited:
@@ -9577,14 +9635,25 @@
     /* SEA PLATFORM TUBE (2026-11-02): on foot at a platform the world IS
      * drawn first, from the walker's eye, and seen through the tube's
      * panes. See seaWalkWorld. */
-    var seaWalk = !!(G.walk && flying() && !menuOpen() && seaWalkWorld());
+    /* BEHIND A MENU, WHERE YOU ARE (2026-11-19). Astra: "make menus show
+     * where the player is." These used to be `!menuOpen()`, so any page of
+     * the pause menu - Esc, the recap, being detained - swapped the deck
+     * for the cockpit view behind its dimming. The title card is the one
+     * exception: it is not anywhere. The menus clear the hotspots as they
+     * draw, so nothing on the deck behind them can be clicked. */
+    var seaWalk = !!(G.walk && flying() && !G.title && seaWalkWorld());
     if (seaWalk) buildSeaWalkCam(cam, w, h);
-    if (G.walk && flying() && !menuOpen() && global.Walk && !shipWalkGpu() && !seaWalk) {
+    if (G.walk && flying() && !G.title && global.Walk && !shipWalkGpu() && !seaWalk) {
       if (glLive()) { ctx.clearRect(0, 0, w, h); global.GLWorld.begin(ROCK_CLEAR); }
       /* With the GPU the station deck is drawn on the world layer like your
        * ship's rooms, so the people on it can stand in it (2026-10-25). */
-      if (stationWalkGpu()) { drawStationWalkGpu(ctx, cam, w, h); return; }
-      drawWalkView(ctx, w, h);
+      if (stationWalkGpu()) drawStationWalkGpu(ctx, cam, w, h);
+      else drawWalkView(ctx, w, h);
+      /* This branch returns before the overlay pass that draws the menu
+       * (drawConsole's tail), so the menu is drawn here, over the deck. It
+       * clears the hotspots as it draws, so the deck's own (the labels,
+       * the prompts) cannot be clicked through it. */
+      if (G.menu) drawPauseMenu(ctx, w, h);
       return;
     }
     /* With the GL layer live the sky is ITS clear colour, and this canvas
@@ -10059,10 +10128,13 @@
 
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
     /* On foot at a sea platform: the deck, over the world just drawn. */
-    if (seaWalk) { drawStationWalkGpu(ctx, cam, w, h); return; }
+    if (seaWalk) { drawStationWalkGpu(ctx, cam, w, h); if (G.menu) drawPauseMenu(ctx, w, h); return; }
     /* In the suit: your own ship from outside, the hatches marked, and the
      * suit's own readout in place of the flight HUD (eva.js). */
-    if (G.eva) { drawOutsideWeather(ctx, cam, w, h); drawEvaView(ctx, cam, w, h); return; }
+    /* Each of these early returns skips drawHUD, which is where the menu is
+     * drawn - so before 2026-11-19 the pause menu was open but invisible in
+     * the suit and on foot aboard. They draw it themselves now. */
+    if (G.eva) { drawOutsideWeather(ctx, cam, w, h); drawEvaView(ctx, cam, w, h); if (G.menu) drawPauseMenu(ctx, w, h); return; }
     if (G.viewMode === 'cockpit') drawCockpitView(ctx, cam, w, h);
     else {
       /* Berthed, from outside her: the hangar you walk in, round her. */
@@ -10084,7 +10156,7 @@
     }
     /* On foot aboard, nobody is flying: no markers, no labels, no flight
      * hints. drawShipWalkView drew the walker's own overlay and the bar. */
-    if (shipWalkGpu()) return;
+    if (shipWalkGpu()) { if (G.menu) drawPauseMenu(ctx, w, h); return; }
     drawHUD(ctx, w, h);
     drawBurnBanner(ctx, w, h);
     drawCursor(ctx);
@@ -12856,6 +12928,23 @@
     var hp = hangarPlan();
     return hp && hp.hangar ? hp : null;
   }
+  /* WALKING ABOARD HER, BERTHED (2026-11-18). Astra: "the ramp into the
+   * station has flickering textures when looking down it from inside the
+   * ship". The walk view draws the hangar deck down her ramp and out of her
+   * windows (drawShipWalkView), and the station model was drawn as well.
+   * Until today that was harmless: the walk hangar was a box of her own
+   * size inside the model's bay. Since the hangar IS the berth (berthBay),
+   * its floor and walls lie exactly on the bay's, and the two fought for
+   * every pixel beside the ramp. The chase view and the seat already left
+   * the model out for this reason; on foot is the third - aboard, on her
+   * ramp, or on the deck, all of which stand inside the same hangar. */
+  function hangarAboard() {
+    if (!G.walk || G.eva) return null;
+    if (!glLive() || !berthHangar() || seaBerth()) return null;
+    var hp = hangarPlan();
+    return hp && hp.hangar ? hp : null;
+  }
+
   /* The longest boom, along the camera's own direction, that keeps the eye
    * inside her hangar: a slab test in the hangar's frame (metres), 0.6 m
    * off the walls and the ceiling, 0.4 m off the floor. */
@@ -14223,6 +14312,408 @@
     G.walk.near = { kind: 'npc', label: 'Talk to ' + p.name, npc: p, x: p.x, z: p.z };
   }
 
+  /* ---- THE STATION SPEAKS (concourse.js, 2026-11-18) -----------------------
+   * On a station's deck: the public address now and then, and what people
+   * say as you pass them. Everything said is read off the game (the
+   * timetable, the market, the crew hall, the law, the rumour network), so
+   * it is worth listening to. Each thing is said once a visit; a sailing
+   * once per sailing. Nothing is said over a conversation or a menu, or
+   * over a line still on the screen. A visit ends when you have been off
+   * the deck for half a minute, or at another port. */
+  var CONC_PA_FIRST = 6, CONC_PA_GAP = 75, CONC_PA_JITTER = 45;  // s, real
+  var CONC_HEAR_M = 2.4, CONC_HEAR_GAP_MS = 9000;
+  var CONC_APPR_MIN = 25, CONC_APPR_SPAN = 50, CONC_APPR_FROM = 22, CONC_APPR_GIVEUP = 30;  // s, m, s
+  /* The one who comes over: chosen when the time comes (the nearest who
+   * might, within CONC_APPR_FROM m), walked over by npc.js's own routing,
+   * and heard when within 1.8 m. Given up on after CONC_APPR_GIVEUP s, or
+   * if they vanish. True when it said something this frame. */
+  function stepApproach(C, port, w, dt, busy) {
+    var a = conc.appr;
+    if (!npcScene || npcScene.kind === 'ship' || !global.Npc || !global.Npc.approach) return false;
+    var ppl = npcScene.people || [];
+    if (!a.pid) {
+      a.due -= dt;
+      if (a.due > 0 || busy) return false;
+      var best = null, bd = CONC_APPR_FROM;
+      for (var i = 0; i < ppl.length; i++) {
+        var q = ppl[i], d = Math.hypot(q.x - w.x, q.z - w.z);
+        if (q.away || !C.canApproach(q) || d >= bd || d < 1.5) continue;
+        best = q; bd = d;
+      }
+      if (!best) { a.due = 5; return false; }   // nobody near: look again shortly
+      var line = C.approach(G, port, G.sys, G.t, best);
+      if (!line) { conc.appr = null; return false; }
+      var ux = (best.x - w.x) / bd, uz = (best.z - w.z) / bd;
+      var at = { x: w.x + ux * 1.3, z: w.z + uz * 1.3 };
+      if (!global.Walk.standable(w.plan, at.x, at.z)) at = { x: best.x - ux * Math.max(0, bd - 1.3), z: best.z - uz * Math.max(0, bd - 1.3) };
+      if (!global.Npc.approach(npcScene, best, at, npcClock, 14, { x: w.x, z: w.z })) { conc.appr = null; return false; }
+      a.pid = best.id; a.line = line; a.t = 0;
+      return false;
+    }
+    a.t += dt;
+    var p = null;
+    for (var j = 0; j < ppl.length; j++) if (ppl[j].id === a.pid) p = ppl[j];
+    if (!p || p.away || a.t > CONC_APPR_GIVEUP) { conc.appr = null; return false; }
+    if (Math.hypot(p.x - w.x, p.z - w.z) > 1.8 || busy) return false;
+    say((p.name || 'Someone') + ' comes over:  “' + a.line.text + '”', 11);
+    conc.heard[p.id] = 1;
+    conc.quietUntil = performance.now() + CONC_HEAR_GAP_MS;
+    conc.appr = null;
+    return true;
+  }
+  /* The law comes for you: the nearest officer on the deck, sent after you
+   * and sent again every CONC_DETAIN_REAIM s while you move, so walking
+   * off does not lose them. Within 1.8 m the detention page opens. With no
+   * officer on the deck, the PA pages you and the next one through the
+   * door does it (looked for again every few seconds). */
+  var CONC_DETAIN_AFTER = 6, CONC_DETAIN_REAIM = 3;
+  function stepDetain(C, port, w, dt) {
+    var a = conc.detain;
+    if (a.done) return;
+    if (!npcScene || npcScene.kind === 'ship' || !global.Npc || !global.Npc.approach) return;
+    var ppl = npcScene.people || [];
+    a.due -= dt; a.t += dt;
+    if (a.due > 0) return;
+    var p = null, j;
+    if (a.pid) for (j = 0; j < ppl.length; j++) if (ppl[j].id === a.pid) p = ppl[j];
+    if (!p || !C.isLaw(p)) {
+      var bd = Infinity;
+      p = null;
+      for (j = 0; j < ppl.length; j++) {
+        var q = ppl[j], d = Math.hypot(q.x - w.x, q.z - w.z);
+        if (C.isLaw(q) && d < bd) { p = q; bd = d; }
+      }
+      if (!p) {
+        if (!a.paged) { a.paged = true; HOOKS.sound('chime'); say('PA  ·  Port security to the concourse. ' + C.shipCalled(G).replace(/ in port$/, '').replace(/^a /, 'The captain of a ') + ', report to the nearest officer.', 8); }
+        a.due = 4; return;
+      }
+      a.pid = p.id; a.aimT = -1;
+    }
+    var dd = Math.hypot(p.x - w.x, p.z - w.z);
+    if (dd <= 1.8) { openDetain(C, port, p); conc.detain = { done: true }; return; }
+    if (a.t - a.aimT >= CONC_DETAIN_REAIM) {
+      a.aimT = a.t;
+      var ux = (p.x - w.x) / dd, uz = (p.z - w.z) / dd;
+      var at = { x: w.x + ux * 1.2, z: w.z + uz * 1.2 };
+      if (!global.Walk.standable(w.plan, at.x, at.z)) at = { x: w.x, z: w.z };
+      global.Npc.approach(npcScene, p, at, npcClock, 20, { x: w.x, z: w.z });
+    }
+  }
+
+  /* The detention page: pay, or work it off. A page of the pause menu, so
+   * the world is stopped while you choose; Esc is not one of the choices -
+   * they are not letting you walk away - and the page says so. */
+  function openDetain(C, port, officer) {
+    var fac = C.portFaction(G, port);
+    var cost = Combat.settleCost(G, fac), facN = (G.galaxy.factionById[fac] || {}).name || 'the port';
+    G.menu = { page: 'detain', sel: G.ship.credits >= cost ? 0 : 1, edit: null, note: null,
+               detain: { fac: fac, name: facN, cost: cost, owed: C.bountyHere(G, port),
+                         who: (officer && officer.name) || 'An officer', port: port.name } };
+    G.market = null; G.analyser = null;
+    HOOKS.sound('detain');
+  }
+  function detainItems() {
+    var d = G.menu.detain, can = G.ship.credits >= d.cost;
+    return [
+      { label: 'Pay ' + d.cost.toLocaleString('en-US') + ' cr', dim: !can,
+        hint: can ? 'the bounty and the costs, settled here' : 'you have ' + Math.round(G.ship.credits).toLocaleString('en-US') + ' cr',
+        run: function () {
+          if (!can) { G.menu.note = 'Not enough money. Working it off is the other way.'; return; }
+          var paid = Combat.payBounty(G, d.fac);
+          closeMenu();
+          say(d.who + ': "Settled, ' + paid + ' cr. You are free to go."', 6);
+          HOOKS.sound('pay');
+        } },
+      { label: 'Work it off', hint: 'their contracts pay you half till it is paid',
+        run: function () {
+          var debt = Combat.workOff(G, d.fac);
+          closeMenu();
+          say(d.who + ': "Fine. ' + debt + ' cr. Half of what ' + d.name + ' pays you comes to us until it is cleared. Do not make me come looking."', 9);
+          HOOKS.sound('click');
+        } }
+    ];
+  }
+  function drawDetainPage(ctx, w, h) {
+    var m = G.menu, d = m.detain, items = detainItems();
+    var box = menuShell(ctx, w, h, 'DETAINED  ·  ' + d.port,
+                        d.who + ', ' + d.name + ' security: ' + d.owed.toLocaleString('en-US') + ' cr owed', items.length + 2);
+    for (var i = 0; i < items.length; i++) {
+      (function (i) {
+        menuRow(ctx, box, i, box.top + i * 30, items[i].label, items[i].hint, i === m.sel,
+                function () { m.sel = i; items[i].run(); }, items[i].dim);
+      })(i);
+    }
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText('arrows move  ·  Enter chooses', box.x + 30, box.y + box.h - 20);
+    ctx.restore();
+    if (m.note) drawMenuNote(ctx, box, m.note);
+  }
+  var conc = { port: null, said: {}, heard: {}, paAt: 0, quietUntil: 0, seen: 0, n: 0 };
+  function updateConcourse(dt) {
+    var C = global.Concourse, w = G.walk;
+    if (!C || !w || w.ship || !G.ship.docked || !G.sys || !G.sys.byId) return;
+    var port = G.sys.byId[G.ship.docked];
+    if (!port) return;
+    var now = performance.now();
+    if (conc.port !== port.id || now - conc.seen > 30000) {
+      conc.port = port.id; conc.said = {}; conc.heard = {}; conc.paAt = CONC_PA_FIRST; conc.quietUntil = 0; conc.n = 0;
+      conc.detain = null;
+      /* SOMEBODY MAY COME OVER, once this visit (concourse.js approach).
+       * One roll a visit, seeded by port and game day, against how known
+       * you are here; if it comes up, after 25-75 s on the deck. */
+      conc.appr = null;
+      try {
+        var fm = C.fame(G, port, G.sys, G.t), RN = global.RNG;
+        conc.visitN = (conc.visitN || 0) + 1;   // this session's visits; not saved, so not on G
+        var roll = RN ? new RN('approach|' + port.id + '|' + Math.floor(G.t / 86400) + '|' + conc.visitN) : null;
+        if (roll && roll.next() < C.approachChance(fm.score)) conc.appr = { due: CONC_APPR_MIN + roll.next() * CONC_APPR_SPAN, pid: null };
+      } catch (e) { conc.appr = null; }
+    }
+    conc.seen = now;
+    if (G.talk || G.menu || G.market) return;
+    var busy = G.message && G.messageUntil > now;
+    /* DETAINED (2026-11-19). Astra: "security should detain you when
+     * you're wanted, but if you don't have enough money to pay your fine
+     * that shouldn't be game breaking". With a bounty on you with this
+     * port's faction, the port's law comes for you - not a roll, every
+     * visit - and you settle there: pay, or work it off (combat.js). A
+     * bounty past what a port will overlook never gets you this far: the
+     * port refuses the dock (combat.js dockRefusal), and the police
+     * channel's quote offers the same choice from a port that will. */
+    var owedHere = C.bountyHere(G, port);
+    if (owedHere && !conc.detain) conc.detain = { due: CONC_DETAIN_AFTER, pid: null, t: 0, aimT: 0 };
+    if (!owedHere) conc.detain = null;
+    if (conc.detain) { stepDetain(C, port, w, dt); return; }
+    if (conc.appr && stepApproach(C, port, w, dt, busy)) return;
+    conc.paAt -= dt;
+    if (conc.paAt <= 0 && !busy) {
+      var line = null;
+      try { line = C.paLine(G, port, G.sys, G.t, conc.said); } catch (e) { line = null; }
+      conc.n++;
+      conc.paAt = CONC_PA_GAP + ((global.RNG ? global.RNG.hashString(port.id + '|pa|' + conc.n) : 0) % CONC_PA_JITTER);
+      if (line) { conc.said[line.key] = 1; HOOKS.sound('chime'); say('PA  ·  ' + line.text, 8); return; }
+    }
+    if (busy || now < conc.quietUntil || !npcScene || npcScene.kind === 'ship') return;
+    var ppl = npcScene.people || [];
+    for (var i = 0; i < ppl.length; i++) {
+      var p = ppl[i];
+      if (conc.heard[p.id]) continue;
+      if (Math.hypot(p.x - w.x, p.z - w.z) > CONC_HEAR_M) continue;
+      conc.heard[p.id] = 1;
+      var said = null;
+      try { said = C.overheard(G, port, G.sys, p, G.t); } catch (e) { said = null; }
+      if (!said) continue;
+      say((p.name || 'Someone') + ':  “' + said + '”', 6);
+      conc.quietUntil = now + CONC_HEAR_GAP_MS;
+      return;
+    }
+  }
+
+  /* The departures and arrivals board, written over the screen dressing.js
+   * hung on the wall (plan.boards). Drawn in 2D over the GPU view the way
+   * the item labels are, through an affine map of the screen's corners, so
+   * it is in perspective and stays on the wall as you move. Only from the
+   * room it is in and in front of it. Known limit: it is drawn over a
+   * person standing between you and the board. */
+  /* 3.4 m, not the first draft's 2.9: the concourse kiosk's canopy stands
+   * above 2.9 and the rows were written over it from mid-room. */
+  var boardCache = { at: 0, key: '', sch: null }, BOARD_OCCLUDE_Y = 3.4;
+  /* Is the sight line from your eye to the wall point (cx, cy) at deck z
+   * `bz` clear of every floor box (counters, props) below BOARD_OCCLUDE_Y?
+   * Shared by both boards. People are not tested. */
+  function boardSightClear(p, cx, bz, cy) {
+    var eyeY = 1.7 + (G.walk.dy || 0);
+    var ax = G.walk.x, az = G.walk.z, dx = cx - ax, dz = bz - az;
+    for (var i = 0; i < p.items.length; i++) {
+      var bx = p.items[i].counter;
+      if (!bx) continue;
+      var t0 = 0, t1 = 1, ok = true;
+      [[ax, dx, bx[0], bx[2]], [az, dz, bx[1], bx[3]]].forEach(function (s) {
+        if (!ok) return;
+        if (Math.abs(s[1]) < 1e-9) { if (s[0] < s[2] || s[0] > s[3]) ok = false; return; }
+        var ta = (s[2] - s[0]) / s[1], tb = (s[3] - s[0]) / s[1];
+        if (ta > tb) { var tt = ta; ta = tb; tb = tt; }
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb);
+        if (t0 > t1) ok = false;
+      });
+      if (ok && t0 < 0.97 && eyeY + (cy - eyeY) * t0 < BOARD_OCCLUDE_Y) return false;
+    }
+    return true;
+  }
+
+  /* What the noticeboard has pinned to it: this port's contract board as
+   * the F7 screen deals it, less what you have already signed or done.
+   * Re-read every couple of seconds, like the timetable. */
+  var noticeCache = { at: 0, key: '', list: [] };
+  function noticesFor(port) {
+    var nowMs = performance.now(), M = global.Missions;
+    if (!M || !M.boardAt) return [];
+    if (noticeCache.key === port.id && nowMs - noticeCache.at < 2000) return noticeCache.list;
+    var list = [];
+    try {
+      /* The same deal as screens.js's board, chains first. */
+      var A = global.Arcs;
+      list = M.boardAt(port, G.sys, G.galaxy, G.here, G.t, G)
+        .concat(A && A.campaignBoardAt ? A.campaignBoardAt(G, port, G.sys, G.galaxy, G.here, G.t) : [])
+        .concat(A && A.powerBoardAt ? A.powerBoardAt(G, port, G.sys, G.galaxy, G.here, G.t) : [])
+        .filter(function (o) { return !M.alreadyHave(G, o.id); })
+        .sort(function (a, b) { return (b.campaign ? 1 : 0) - (a.campaign ? 1 : 0); });
+    } catch (e) { list = []; }
+    noticeCache = { at: nowMs, key: port.id, list: list };
+    return list;
+  }
+
+  /* The slips: up to nine, three by three, each a contract's headline and
+   * fee, pinned a little crooked. Written only within reading distance;
+   * from across the room they are blank paper, as paper is. */
+  function drawNotices(ctx, proj, b, port, p) {
+    var TL = proj(b.x1 - 0.06, b.y1 - 0.06, b.z + 0.02), TR = proj(b.x0 + 0.06, b.y1 - 0.06, b.z + 0.02),
+        BL = proj(b.x1 - 0.06, b.y0 + 0.06, b.z + 0.02);
+    if (!TL || !TR || !BL || TL.d > 16) return;
+    if (!boardSightClear(p, (b.x0 + b.x1) / 2, b.z, (b.y0 + b.y1) / 2)) return;
+    var list = noticesFor(port).slice(0, 9);
+    var W = 1000, H = W * (b.y1 - b.y0 - 0.12) / (b.x1 - b.x0 - 0.12);
+    ctx.save();
+    ctx.transform((TR.x - TL.x) / W, (TR.y - TL.y) / W, (BL.x - TL.x) / H, (BL.y - TL.y) / H, TL.x, TL.y);
+    var cols = 3, rowsN = 3, gw = W / cols, gh = H / rowsN, near = TL.d < 4.5;
+    for (var i = 0; i < list.length; i++) {
+      var o = list[i], c = i % cols, r = Math.floor(i / cols);
+      var h = 0; for (var k = 0; k < o.id.length; k++) h = (h * 31 + o.id.charCodeAt(k)) >>> 0;
+      var sw = gw * 0.84, sh = gh * 0.84, ox = c * gw + gw * 0.08, oy = r * gh + gh * 0.08;
+      ctx.save();
+      ctx.translate(ox + sw / 2, oy + sh / 2);
+      ctx.rotate(((h % 9) - 4) * 0.012);
+      ctx.fillStyle = (h & 1) ? '#efe6cf' : '#f3edde';
+      ctx.fillRect(-sw / 2, -sh / 2, sw, sh);
+      ctx.fillStyle = '#c0392b';
+      ctx.beginPath(); ctx.arc(0, -sh / 2 + 12, 7, 0, Math.PI * 2); ctx.fill();
+      if (near) {
+        ctx.fillStyle = '#2a2520';
+        /* Small handwriting, not a headline: the slip holds at most three
+         * lines of the contract and its fee on a line of its own, and a
+         * line that would not fit ends in an ellipsis rather than running
+         * into the fee. Sized off the slip so every slip reads alike. */
+        var fs = sw / 20, lh = fs * 1.2, maxW = sw - 24, MAXL = 3;
+        ctx.font = fs.toFixed(1) + 'px ui-serif, Georgia, serif';
+        ctx.textBaseline = 'top';
+        var words = String(o.text || '').split(/\s+/), lines = [], line = '';
+        for (var wi = 0; wi < words.length; wi++) {
+          var tryL = line ? line + ' ' + words[wi] : words[wi];
+          if (ctx.measureText(tryL).width > maxW && line) { lines.push(line); line = words[wi]; }
+          else line = tryL;
+        }
+        if (line) lines.push(line);
+        if (lines.length > MAXL) {
+          var last = lines[MAXL - 1];
+          while (last.length > 1 && ctx.measureText(last + '…').width > maxW) last = last.slice(0, -1);
+          lines = lines.slice(0, MAXL - 1).concat([last.replace(/\s+$/, '') + '…']);
+        }
+        lines.forEach(function (ln, li) {
+          var s = ln;
+          while (s.length > 1 && ctx.measureText(s).width > maxW) s = s.slice(0, -1);
+          ctx.fillText(s, -sw / 2 + 12, -sh / 2 + 24 + li * lh);
+        });
+        ctx.fillStyle = '#7a2a1a';
+        ctx.font = 'bold ' + (fs * 0.95).toFixed(1) + 'px ui-monospace, monospace';
+        ctx.textBaseline = 'bottom';
+        ctx.fillText((o.pay || 0).toLocaleString('en-US') + ' cr', -sw / 2 + 12, sh / 2 - 8);
+      } else {
+        /* Lines of writing too far off to read. */
+        ctx.fillStyle = 'rgba(42,37,32,0.45)';
+        for (var ln = 0; ln < 4; ln++) ctx.fillRect(-sw / 2 + 10, -sh / 2 + 30 + ln * sh * 0.15, sw * (0.55 + ((h >> ln) & 3) * 0.1), sh * 0.05);
+      }
+      ctx.restore();
+    }
+    if (!list.length && TL.d < 4.5) {
+      ctx.fillStyle = '#f3edde';
+      ctx.font = 'bold 40px ui-serif, Georgia, serif';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('Nothing posted today.', 40, H / 2);
+    }
+    ctx.restore();
+  }
+
+  function drawInfoBoards(ctx, cam, p, here, frame) {
+    var C = global.Concourse;
+    if (!C || !p.boards || !p.boards.length || !G.ship.docked) return;
+    var port = G.sys && G.sys.byId ? G.sys.byId[G.ship.docked] : null;
+    if (!port) return;
+    var M = Render.M;
+    function proj(x, y, z) {
+      var q = Render.localToWorld(frame, x * M, y * M, z * M);
+      var vx = q.x - cam.eye.x, vy = q.y - cam.eye.y, vz = q.z - cam.eye.z;
+      var dpt = vx * cam.f.x + vy * cam.f.y + vz * cam.f.z;
+      if (dpt < 0.3 * M) return null;
+      return { x: cam.cx + (vx * cam.r.x + vy * cam.r.y + vz * cam.r.z) * cam.flen / dpt,
+               y: cam.cy - (vx * cam.u.x + vy * cam.u.y + vz * cam.u.z) * cam.flen / dpt, d: dpt / M };
+    }
+    var nowMs = performance.now();
+    if (!boardCache.sch || boardCache.key !== port.id || nowMs - boardCache.at > 2000) {
+      boardCache = { at: nowMs, key: port.id, sch: C.schedule(port, G.sys, G.t) };
+    }
+    var sch = boardCache.sch;
+    p.boards.forEach(function (b) {
+      if (!here || here.id !== b.room || G.walk.z < b.z) return;
+      if (b.kind === 'notices') { drawNotices(ctx, proj, b, port, p); return; }
+      /* The rows' area: under the headers, the screen's left edge at x1. */
+      var top = b.y1 - 0.58, bot = b.y0 + 0.12;
+      var TL = proj(b.x1 - 0.12, top, b.z + 0.02), TR = proj(b.x0 + 0.12, top, b.z + 0.02), BL = proj(b.x1 - 0.12, bot, b.z + 0.02);
+      if (!TL || !TR || !BL || TL.d > 28) return;
+      var W = 1000, H = W * (top - bot) / (b.x1 - b.x0 - 0.24);
+      ctx.save();
+      ctx.transform((TR.x - TL.x) / W, (TR.y - TL.y) / W, (BL.x - TL.x) / H, (BL.y - TL.y) / H, TL.x, TL.y);
+      /* Sized off the columns, not the rows: each half is 500 units and
+       * holds 5 + 14 + 12 + 9 characters with gaps, and a monospace glyph
+       * is 0.6 of the font size. The first draft sized by row height and
+       * the columns ran into each other. */
+      var rows = 6, rh = H / (rows + 1.5), fs = Math.min(rh * 0.62, 18.5);
+      ctx.font = 'bold ' + fs.toFixed(1) + 'px ui-monospace, monospace';
+      ctx.textBaseline = 'middle';
+      var cwid = fs * 0.6;
+      function cut(s, n) { s = String(s || '').toUpperCase(); return s.length > n ? s.slice(0, n - 1) + '.' : s; }
+      function statusCol(s) {
+        return s === 'BOARDING' || s === 'APPROACH' ? '#ffd36b' : s === 'AT BERTH' ? '#7fe0a0' : s === 'AT ANCHOR' ? '#9fb3c4' : '#d8ecf6';
+      }
+      function column(list, x0, placeKey) {
+        var xName = x0 + 6 + cwid * 6, xPlace = xName + cwid * 15, xStat = xPlace + cwid * 13;
+        for (var i = 0; i < rows && i < list.length; i++) {
+          var r = list[i], y = rh * (i + 0.6);
+          ctx.fillStyle = '#ffe9b0'; ctx.fillText(C.clock(r.at), x0 + 6, y);
+          ctx.fillStyle = '#d8ecf6'; ctx.fillText(cut(r.name, 14), xName, y);
+          ctx.fillStyle = '#9fc4d4'; ctx.fillText(cut(r[placeKey], 12), xPlace, y);
+          ctx.fillStyle = statusCol(r.status); ctx.fillText(cut(r.status, 9), xStat, y);
+        }
+        if (!list.length) { ctx.fillStyle = '#6a7d92'; ctx.fillText('NONE TODAY', x0 + 8, rh * 0.6); }
+      }
+      /* A column is written only if nothing solid stands between you and
+       * it: the rows are 2D over the 3D view, and would otherwise print on
+       * top of a kiosk or a sign in the way. The deck knows its solids
+       * only as floor boxes (counters, props), so the sight line is
+       * blocked where it crosses one below BOARD_OCCLUDE_Y; above that it
+       * is taken to pass over. People are not tested. */
+      var mid = (b.x0 + b.x1) / 2, cy = (top + bot) / 2;
+      function clear(cx) { return boardSightClear(p, cx, b.z, cy); }
+      var seeL = clear((b.x1 + mid) / 2), seeR = clear((mid + b.x0) / 2);
+      if (seeL) column(sch.departures, 0, 'to');
+      if (seeR) column(sch.arrivals, W / 2 + 6, 'from');
+      /* The foot: the station clock, and the law's notice when there is
+       * one on you here (concourse.js bountyHere: the same figure the
+       * PA reads out and the contracts screen shows). Each under its own
+       * half, and only where that half is in view. */
+      var owed = C.bountyHere(G, port), fy = rh * (rows + 0.75);
+      ctx.fillStyle = '#6a7d92';
+      if (seeL) ctx.fillText('STATION TIME ' + C.clock(G.t), 8, fy);
+      if (owed && seeR) {
+        ctx.fillStyle = '#ff8a7a';
+        var who = C.shipCalled(G).replace(/^(the|a) /, '').replace(/ in port$/, '');
+        ctx.fillText(cut('SECURITY NOTICE: ' + who + ' - ' + owed.toLocaleString('en-US') + ' CR OWED', 44), W / 2 + 6, fy);
+      }
+      ctx.restore();
+    });
+  }
+
   /* Hand this frame's bodies to the GPU, in the docked ship's frame — the
    * frame both your own rooms and a station deck are drawn in. */
   function queueNpcs(cam) {
@@ -14357,6 +14848,7 @@
     queueNpcs(cam);
     queueSelf(cam);
     var room = global.Walk.roomAt(p, G.walk.x, G.walk.z);
+    drawInfoBoards(ctx, cam, p, room, F);
     drawWalkLabels(ctx, cam, p, room, w, h, F, 2.4 + (G.walk.dy || 0));
     drawWalkOverlay(ctx, w, h, room);
   }
@@ -14375,7 +14867,9 @@
       if (it.silent) return;
       var r = global.Walk.roomAt(p, it.x, it.z);
       if (!r || (here && r !== here)) return;
-      var q = Render.localToWorld(frame, it.x * M, labelY * M, it.z * M);
+      /* An item can carry its own tag height (the noticeboard's sits over
+       * its frame, not across its header). */
+      var q = Render.localToWorld(frame, it.x * M, (it.labelY != null ? it.labelY : labelY) * M, it.z * M);
       var vx = q.x - cam.eye.x, vy = q.y - cam.eye.y, vz = q.z - cam.eye.z;
       var dpt = vx * cam.f.x + vy * cam.f.y + vz * cam.f.z;
       if (dpt < 0.3 * M || dpt > 30 * M) return;
@@ -14526,6 +15020,19 @@
     /* The freight office is where contracts are let (2026-10-31): it opens
      * the contract board, not the market screen beside it. */
     if (it.kind === 'freight') { selectPanel(idx('missions') >= 0 ? idx('missions') : 6); return; }
+    /* The concourse noticeboard (2026-11-19): the same board, on paper. */
+    if (it.kind === 'notices') { selectPanel(idx('missions') >= 0 ? idx('missions') : 6); return; }
+    /* The departures board (concourse.js): read aloud, for when it is too
+     * far up the wall to read. The next sailing and the next arrival. */
+    if (it.kind === 'departures' && global.Concourse) {
+      var dport = G.sys.byId[G.ship.docked], sch = dport ? global.Concourse.schedule(dport, G.sys, G.t) : null;
+      var nd = sch && sch.departures.filter(function (x) { return x.status !== 'AT ANCHOR'; })[0], na = sch && sch.arrivals[0];
+      say(nd || na ? ((nd ? 'Next out: ' + nd.name + ' for ' + nd.to + ', ' + global.Concourse.inWords(nd.at - G.t) : '') +
+                      (nd && na ? '   ·   ' : '') +
+                      (na ? 'next in: ' + na.name + ' from ' + na.from + ', ' + global.Concourse.inWords(na.at - G.t) : ''))
+                   : 'Nothing scheduled in or out today.', 7);
+      return;
+    }
     if (it.kind === 'yard') { G.yardTab = 'hulls'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'crew') { G.yardTab = 'crew'; selectPanel(idx('ship') >= 0 ? idx('ship') : 4); return; }
     if (it.kind === 'bar') { say('The bar is quiet — the people who drink here come next', 5); return; }
@@ -18597,7 +19104,7 @@
      * is nothing of the rest of the station to see either. Zoomed out past
      * its wall (G.hangarOut, 2026-11-02) hangarChase is null and the
      * station is drawn again — that, cut away round her, is the outside. */
-    if (b.kind === 'station' && G.ship.docked === b.id && (hangarChase() || hangarSeat())) return;
+    if (b.kind === 'station' && G.ship.docked === b.id && (hangarChase() || hangarSeat() || hangarAboard())) return;
 
     if (b.kind === 'station') {
       /* Same scale rule as everything else: real geometry once it would
@@ -21765,7 +22272,7 @@
   function titleItems() {
     return [
       { label: 'Resume career', hint: currentCareerLine(),
-        run: function () { G.title = null; } },
+        run: function () { G.title = null; if (!G.recapShown) { G.recapShown = true; openRecap(); } } },
       { label: 'Load game', hint: 'a slot from any galaxy',
         run: function () { G.title = null; G.menu = { page: 'load', sel: 0, edit: null, note: null, fromTitle: true }; } },
       /* Straight to the seed (2026-11-03): the ship is chosen after
@@ -21852,10 +22359,85 @@
       G.market = null;
       say('Loaded "' + rec.label + '" — ' + fmtCredits(G.ship.credits) + ', ' +
           fmtEpoch(G.t), 6);
+      G.recapShown = true;
+      openRecap();
     } catch (err) {
       console.error('slot load failed', err);
       if (G.menu) G.menu.note = 'That save could not be read.';
     }
+  }
+
+  /* ---- "Last time on..." (recap.js, 2026-11-18) ----------------------------
+   * A page of the pause menu, so the world is stopped behind it the way
+   * every menu stops it, and a hand adrift loses no air while you read.
+   * Opens once per launch on Resume, and on every slot load. A career with
+   * nothing on any list (a fresh one) gets no card. Any key closes it. */
+  function openRecap() {
+    if (!global.Recap || !G.ship) return;
+    /* The card is built once, so its trip times are solved now, all of
+     * them, rather than one every few frames as the boards do. */
+    (G.missions || []).forEach(function (m) {
+      if (m.toPortId && global.MissionEta) global.MissionEta(m.toPortId, true);
+    });
+    var r = null;
+    try { r = global.Recap.build(G); } catch (e) { console.error('recap failed', e); r = null; }
+    if (!r || r.empty) return;
+    G.menu = { page: 'recap', sel: 0, edit: null, note: null, recap: r };
+    G.market = null; G.analyser = null;
+  }
+
+  function drawRecapPage(ctx, w, h) {
+    var r = G.menu.recap;
+    G.hotspots = [];
+    ctx.save();
+    ctx.fillStyle = 'rgba(3,6,12,0.82)';
+    ctx.fillRect(0, 0, w, h);
+    ctx.restore();
+
+    var lines = 0;
+    for (var i = 0; i < r.sections.length; i++) lines += 1.6 + r.sections[i].rows.length;
+    var pw = Math.min(w - 60, 760);
+    var ph = Math.min(h - 60, 130 + lines * 16);
+    var px = (w - pw) / 2, py = (h - ph) / 2;
+    panel(ctx, px, py, pw, ph, true);
+    var cols = Math.floor((pw - 60) / 6.6);
+
+    ctx.save();
+    ctx.font = 'bold 17px ui-monospace, monospace';
+    ctx.fillStyle = '#ffe6a8';
+    ctx.fillText(r.title, px + 24, py + 34);
+    ctx.font = 'bold 12px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText(clipLine(r.where, cols), px + 24, py + 54);
+    ctx.fillStyle = '#b4c8d6';
+    ctx.fillText(clipLine(r.ship, cols), px + 24, py + 70);
+
+    var y = py + 98, bottom = py + ph - 34;
+    for (var s = 0; s < r.sections.length && y < bottom; s++) {
+      var sec = r.sections[s];
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#5d8fa4';
+      ctx.fillText(sec.head, px + 24, y);
+      y += 16;
+      for (var k = 0; k < sec.rows.length && y < bottom; k++) {
+        ctx.fillStyle = sec.rows[k].color || '#d8ecf6';
+        ctx.fillText(clipLine(sec.rows[k].text, cols), px + 32, y);
+        y += 16;
+      }
+      y += 10;
+    }
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = 'rgba(160,185,220,0.55)';
+    ctx.fillText('any key or click: back to the ship  ▶', px + 24, py + ph - 14);
+    ctx.restore();
+
+    /* The whole card is the button: one click anywhere and you are back. */
+    G.hotspots.push({ x: 0, y: 0, w: w, h: h, fn: closeMenu });
+  }
+
+  function clipLine(s, cols) {
+    s = String(s || '');
+    return s.length > cols ? s.slice(0, Math.max(1, cols - 1)) + '…' : s;
   }
 
   /* ---- choosing a start (start.js, 2026-11-02; moved 2026-11-03) ---------
@@ -22232,6 +22814,23 @@
     var k = e.key.toLowerCase();
     m.note = null;
 
+    /* The recap is read, not navigated: any key is "got it". Modifier keys
+     * alone do not count, so alt-tabbing back to the window does not close
+     * it before it was seen. */
+    if (m.page === 'recap') {
+      if (k !== 'shift' && k !== 'control' && k !== 'alt' && k !== 'meta') closeMenu();
+      return;
+    }
+    /* Detained: two choices and no way out but one of them. */
+    if (m.page === 'detain') {
+      var di = detainItems();
+      if (k === 'arrowup') { m.sel = (m.sel - 1 + di.length) % di.length; return; }
+      if (k === 'arrowdown') { m.sel = (m.sel + 1) % di.length; return; }
+      if (k === 'enter' || k === ' ') { di[m.sel].run(); return; }
+      if (k === 'escape') { m.note = 'They are not letting you walk away. Pay, or agree to work it off.'; return; }
+      return;
+    }
+
     if (m.page === 'startpick') {
       var picks = startPickItems(m);
       if (m.sel >= picks.length) m.sel = 0;
@@ -22414,6 +23013,8 @@
     if (m.page === 'options') return drawOptionsPage(ctx, w, h);
     if (m.page === 'save' || m.page === 'load') return drawSlotsPage(ctx, w, h);
     if (m.page === 'startpick') return drawStartPickPage(ctx, w, h);
+    if (m.page === 'recap') return drawRecapPage(ctx, w, h);
+    if (m.page === 'detain') return drawDetainPage(ctx, w, h);
 
     var items = menuItems();
     var box = menuShell(ctx, w, h, 'PAUSED', currentCareerLine(), items.length + 1);
@@ -23231,6 +23832,11 @@
    * it was measured from (berthBay). Read-only; nothing in the game calls
    * these. */
   G.hangarPlan = hangarPlan;
+  /* For probes too: who is on the deck right now (npc.js scene). */
+  G.npcSceneNow = function () { return npcScene; };
+  /* For probes: bring this visit's somebody-comes-over forward to now, as
+   * if the roll had come up (concourse.js). Nothing in the game calls it. */
+  G.approachNow = function () { conc.appr = { due: 0, pid: null }; };
   G.berthBay = function () {
     var s = G.ship, port = s && s.docked && G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
     var hs = port ? hangarSpec(s) : null;

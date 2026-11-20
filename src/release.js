@@ -31,9 +31,9 @@
   var Release = {
     /* Three parts because electron-builder's latest.yml sorts on semver
      * and a two-part number does not parse as one. */
-    version: '1.5.1',
-    name: 'Icosidodecahedron',
-    /* 'Manifest 1.5.1 "Icosidodecahedron"' -- the one way it is written out. */
+    version: '1.5.2',
+    name: 'Rhombicuboctahedron',
+    /* 'Manifest 1.5.2 "Rhombicuboctahedron"' -- the one way it is written out. */
     label: function () { return 'Manifest ' + Release.version + ' \u201c' + Release.name + '\u201d'; }
   };
   if (typeof document !== 'undefined' && document.title) document.title = Release.label();

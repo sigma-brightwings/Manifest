@@ -79,6 +79,7 @@
      planar slice. After survey.js, whose ground map and hashes it reads. -->
 <script src="src/gravity.js"></script>
 <script src="src/claims.js"></script>
+<script src="src/outposts.js"></script>
     <!-- THE CARTOGRAPHERS (2026-11-13): the second buyer for one survey
          flight - the sheet rather than the assay. After survey.js, whose
          records and deposits it prices, and galaxy.js, whose control and
@@ -153,6 +154,13 @@
 <!-- The captain's notes and log (F5 NOTES): written to by combat, upkeep,
      favours, tithe and missions at call time; drawn by screens.js. -->
 <script src="src/journal.js"></script>
+<!-- "Last time on..." when a career is picked back up: reads missions,
+     outside, journal and crew at call time; drawn by main.js. -->
+<script src="src/recap.js"></script>
+<!-- The station speaks (departures board, PA, overheard lines): reads
+     sim, crew, economy and rumours at call time; driven by main.js. -->
+<script src="src/concourse.js"></script>
+<script src="src/fixer.js"></script>
 <script src="src/tutorial.js"></script>
 <script src="src/rumours.js"></script>
 <!-- Talking to people on foot: reads captains, rumours, favours and

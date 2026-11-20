@@ -510,8 +510,10 @@
   }
 
   function payIntel(G, port, t, m, burnChance, what, hooks) {
-    G.ship.credits += m.pay;
     var M = global.Missions;
+    /* Through the one place a fine being worked off takes its half
+     * (missions.js creditFor, 2026-11-18). */
+    if (M && M.creditFor) M.creditFor(G, m, m.pay); else G.ship.credits += m.pay;
     if (M && M.bumpStanding) M.bumpStanding(G, m.faction, Math.max(4, Math.min(14, Math.round(m.pay / 6000))));
     G.intel = G.intel || {};
     var rec = G.intel[m.fixKey] || (G.intel[m.fixKey] = { sold: [], t: t });

@@ -446,6 +446,9 @@
        * the same way a dented hull does. */
       deadPanels: G.deadPanels || {},
       wanted: G.wanted || {},
+      /* Fines being worked off (combat.js workOff, 2026-11-18): additive,
+       * an older save has none. */
+      workoff: G.workoff || {},
       /* The navy's ledger (hunters.js): additive, an older save has none. */
       notoriety: G.notoriety || {},
       /* WHICH START THIS CAREER CHOSE (start.js): { difficulty, focus }.
@@ -573,6 +576,8 @@
        * plain data and needs nothing re-run on load. */
       claims: G.claims || {},
       drones: G.drones || [],
+      /* Outposts the drones built (outposts.js): plain records on the rails. */
+      outposts: G.outposts || [],
       /* Other prospectors' drones are derived from the seed; only what
        * YOU did to them is written, and the thefts not yet reported. */
       npcDrones: G.npcDrones || {},
@@ -860,6 +865,7 @@
     G.standing = data.standing || {};
     G.deadPanels = data.deadPanels || {};
     G.wanted = data.wanted || {};
+    G.workoff = data.workoff || {};
     G.notoriety = data.notoriety || {};
     G.start = (data.start && typeof data.start === 'object') ? data.start : null;
     G.queueJumps = data.queueJumps || {};
@@ -904,6 +910,7 @@
     G.extracted = (data.extracted && typeof data.extracted === 'object') ? data.extracted : {};
     G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
     G.drones = Array.isArray(data.drones) ? data.drones : [];
+    G.outposts = Array.isArray(data.outposts) ? data.outposts : [];
     G.npcDrones = (data.npcDrones && typeof data.npcDrones === 'object') ? data.npcDrones : {};
     G.thefts = Array.isArray(data.thefts) ? data.thefts : [];
     G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};

@@ -80,7 +80,7 @@ var GROUPS = {
     'test/rendezvous.test.js', 'test/hunters.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
-    'test/wars.test.js'
+    'test/wars.test.js', 'test/workoff.test.js'
   ],
   economy: [
     'test/economy.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
@@ -91,7 +91,7 @@ var GROUPS = {
     'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [
@@ -99,7 +99,7 @@ var GROUPS = {
     'test/guild.test.js', 'test/dawdle.test.js', 'test/poaching.test.js',
     'test/captains.test.js', 'test/captain-stories.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',
-    'test/journal.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',
+    'test/journal.test.js', 'test/recap.test.js', 'test/reach.test.js', 'test/concourse.test.js', 'test/fixer.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',
     'test/cruisedrive.test.js', 'test/intercept.test.js'
   ]
 };

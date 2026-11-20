@@ -136,6 +136,22 @@
     click:     function () { tone('square', 1400, 900, 0.03, 0.05); },
     pay:       function () { tone('sine', 780, 1240, 0.14, 0.12); },
     scoop:     function () { tone('sine', 300, 520, 0.18, 0.10); },
+    /* The station's own (2026-11-19, ambience below). The PA's two-note
+     * chime before it speaks; freight set down somewhere in the hall; a
+     * forklift backing up. Quiet: they are the room, not an event. */
+    chime:     function () { tone('sine', 659, 659, 0.5, 0.07); tone('sine', 523, 523, 0.7, 0.07, 0.25); },
+    clank:     function () { noise(0.16, 0.06, 700 + Math.random() * 900, 2.5, 220); tone('sine', 120 + Math.random() * 60, 70, 0.3, 0.04); },
+    forklift:  function () {
+      var c = ready(); if (!c) return;
+      for (var i = 0; i < 3; i++) {
+        var t0 = c.currentTime + i * 0.55, o = c.createOscillator(), g = c.createGain();
+        o.type = 'square'; o.frequency.value = 1150;
+        env(g, t0, 0.005, 0.018, 0.28);
+        o.connect(g); g.connect(master); o.start(t0); o.stop(t0 + 0.35);
+      }
+    },
+    /* Detained: a door shut hard and the officer's word. */
+    detain:    function () { noise(0.22, 0.12, 260, 1, 90); tone('square', 330, 330, 0.12, 0.06, 0.18); },
     /* THUNDER (2026-11-10). One sound with a distance knob, because a
      * strike overhead and a strike on the horizon are the same event heard
      * through different amounts of air: the crack is the shock front and
@@ -174,12 +190,120 @@
     thrustGain.gain.setTargetAtTime(want, c.currentTime, 0.08);
   }
 
+  /* ---- A PLACE'S SOUND (2026-11-19) ------------------------------------------
+   * Astra, asked whether station sound should be generated or wait for
+   * recordings: "sound effects, yes." So, from nothing, like the rest:
+   * five beds that run for as long as the game does, each a filtered noise
+   * or a pair of sines, and a level for each per kind of room. Walking from
+   * one room into the next crossfades them (setTargetAtTime, a second and a
+   * half), so a door is heard as well as seen.
+   *
+   *   hum     mains and plant: 50 and 100 Hz sines
+   *   murmur  people: band-passed noise round 450 Hz, its level breathing
+   *           on a slow LFO so it reads as voices coming and going
+   *   rumble  machinery through the deck: low-passed noise under 90 Hz
+   *   air     ventilation: high-passed noise, very quiet
+   *   music   the bar only: soft triangle notes on a slow minor walk
+   *
+   * And now and then, in the rooms that have them, a one-shot: a clank of
+   * freight in the cargo hall and the hangar, a forklift's reverse beeps in
+   * the cargo hall. Their timing is Math.random, like the noise buffer:
+   * a sound is not part of the seed, and nothing reads it back. */
+  var AMB = {
+    bar:       { hum: 0.015, murmur: 0.075, rumble: 0.015, air: 0.008, music: 1 },
+    concourse: { hum: 0.020, murmur: 0.060, rumble: 0.025, air: 0.012 },
+    crewhall:  { hum: 0.020, murmur: 0.040, rumble: 0.020, air: 0.012 },
+    cargohall: { hum: 0.020, murmur: 0.012, rumble: 0.080, air: 0.020, clank: [5, 14], beep: [16, 34] },
+    corridor:  { hum: 0.045, murmur: 0.010, rumble: 0.030, air: 0.028 },
+    lport:     { hum: 0.040, murmur: 0.012, rumble: 0.045, air: 0.030, clank: [9, 22] },
+    berth:     { hum: 0.030, murmur: 0.000, rumble: 0.055, air: 0.030, clank: [8, 20] },
+    tube:      { hum: 0.020, murmur: 0.000, rumble: 0.015, air: 0.040 }
+  };
+  var amb = null, ambKind = null, ambNext = {}, ambNoteAt = 0, ambStep = 0;
+  function ambBuild(c) {
+    var nb = noiseBuffer(c);
+    function noiseLayer(type, f, q) {
+      var s = c.createBufferSource(); s.buffer = nb; s.loop = true;
+      /* Each starts at a different point in the buffer, so the layers are
+       * not one noise heard through four filters in lockstep. */
+      var fl = c.createBiquadFilter(); fl.type = type; fl.frequency.value = f; fl.Q.value = q || 0.7;
+      var g = c.createGain(); g.gain.value = 0;
+      s.connect(fl); fl.connect(g); g.connect(master);
+      s.start(0, Math.random() * 1.1);
+      return g;
+    }
+    var hum = c.createGain(); hum.gain.value = 0; hum.connect(master);
+    [50, 100].forEach(function (f, i) {
+      var o = c.createOscillator(), og = c.createGain();
+      o.type = 'sine'; o.frequency.value = f; og.gain.value = i ? 0.5 : 1;
+      o.connect(og); og.connect(hum); o.start();
+    });
+    var murmur = noiseLayer('bandpass', 450, 0.6);
+    /* Voices come and go: a 0.23 Hz wobble on the murmur's own gain. */
+    var lfo = c.createOscillator(), lfoG = c.createGain();
+    lfo.frequency.value = 0.23; lfoG.gain.value = 0;
+    lfo.connect(lfoG); lfoG.connect(murmur.gain); lfo.start();
+    var music = c.createGain(); music.gain.value = 0;
+    var mf = c.createBiquadFilter(); mf.type = 'lowpass'; mf.frequency.value = 1600;
+    music.connect(mf); mf.connect(master);
+    return { hum: hum, murmur: murmur, murmurLfo: lfoG, rumble: noiseLayer('lowpass', 90, 0.5),
+             air: noiseLayer('highpass', 3200, 0.5), music: music };
+  }
+  /* A slow walk round A minor; one soft note at a time, a little off the
+   * beat now and then, so it is somebody's tape rather than a metronome. */
+  var BAR_NOTES = [220, 261.6, 329.6, 293.7, 246.9, 196, 220, 329.6, 392, 349.2, 293.7, 261.6];
+  function barNote(c, t0) {
+    var f = BAR_NOTES[ambStep++ % BAR_NOTES.length];
+    [f, f * 2].forEach(function (ff, k) {
+      var o = c.createOscillator(), g = c.createGain();
+      o.type = 'triangle'; o.frequency.value = ff;
+      env(g, t0, 0.03, k ? 0.012 : 0.03, 1.4);
+      o.connect(g); g.connect(amb.music); o.start(t0); o.stop(t0 + 1.6);
+    });
+  }
+  /* `kind` is the room you are in (walk.js room kinds) or null for none:
+   * aboard, in flight, on the title card. Called every frame. */
+  function ambience(kind, dt) {
+    var c = ready();
+    if (!c) return;
+    var lv = (kind && AMB[kind]) || null;
+    if (!amb) { if (!lv) return; amb = ambBuild(c); }
+    var now = c.currentTime;
+    if (kind !== ambKind) {
+      ambKind = kind;
+      var L = lv || {};
+      amb.hum.gain.setTargetAtTime(L.hum || 0, now, 0.5);
+      amb.murmur.gain.setTargetAtTime(L.murmur || 0, now, 0.5);
+      amb.murmurLfo.gain.setTargetAtTime((L.murmur || 0) * 0.45, now, 0.5);
+      amb.rumble.gain.setTargetAtTime(L.rumble || 0, now, 0.5);
+      amb.air.gain.setTargetAtTime(L.air || 0, now, 0.5);
+      amb.music.gain.setTargetAtTime(L.music ? 1 : 0, now, 0.6);
+      ambNext = {};
+    }
+    if (!lv) return;
+    if (lv.music && now >= ambNoteAt) {
+      barNote(c, now + 0.02);
+      ambNoteAt = now + 0.62 + (Math.random() < 0.2 ? 0.31 : 0);
+    }
+    ['clank', 'beep'].forEach(function (k) {
+      if (!lv[k]) return;
+      if (ambNext[k] === undefined) ambNext[k] = now + lv[k][0] + Math.random() * (lv[k][1] - lv[k][0]);
+      if (now < ambNext[k]) return;
+      ambNext[k] = now + lv[k][0] + Math.random() * (lv[k][1] - lv[k][0]);
+      fx(k === 'clank' ? 'clank' : 'forklift');
+    });
+  }
+
   function setVolume(v) {
     VOLUME = Math.max(0, Math.min(1, v));
     if (master) master.gain.value = VOLUME;
   }
 
-  function mute(on) { enabled = !on ? true : false; if (on && thrustGain) thrustGain.gain.value = 0; }
+  function mute(on) {
+    enabled = !on ? true : false;
+    if (on && thrustGain) thrustGain.gain.value = 0;
+    if (on && amb) { ['hum', 'murmur', 'murmurLfo', 'rumble', 'air', 'music'].forEach(function (k) { amb[k].gain.value = 0; }); ambKind = '__muted'; }
+  }
 
   /* Does the table know this name? For the test that scrapes every
    * `sound('x')` call site out of the other modules and asserts each one
@@ -189,7 +313,7 @@
   function has(name) { return Object.prototype.hasOwnProperty.call(FX, name); }
 
   var Sound = { fx: fx, thrust: thrust, poke: poke, setVolume: setVolume,
-                mute: mute, has: has };
+                mute: mute, has: has, ambience: ambience, AMB: AMB };
   global.Sound = Sound;
   if (typeof module !== 'undefined' && module.exports) module.exports = Sound;
 })(typeof window !== 'undefined' ? window : globalThis);

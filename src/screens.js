@@ -6434,6 +6434,14 @@
        * way to see it was to hope the generated headline mentioned it. */
       ctx.fillStyle = '#7fd6c0';
       ctx.fillText(clipText(fwLine || destinationLine(m), subCols), pad + 14, y + 27);
+      /* HOW FAR, from where you are right now (2026-11-18). */
+      var rch = Missions.reach ? Missions.reach(G, m) : null;
+      var extra = 0;
+      if (rch) {
+        ctx.fillStyle = '#9fd0e0';
+        ctx.fillText(clipText(rch.text, subCols), pad + 14, y + 40);
+        extra += 13;
+      }
       /* THE PARCEL (2026-11-01): what you know about what you carry. Only
        * for a parcel actually aboard; "sealed" with no scanner, the
        * contents once a combat scanner or better reads through the seal,
@@ -6442,7 +6450,8 @@
         ? Missions.parcelKnown(G, m) : null;
       if (know) {
         ctx.fillStyle = know.known && know.dirty ? '#ffb86b' : MFD_DIM;
-        ctx.fillText(clipText(know.line, subCols), pad + 14, y + 40);
+        ctx.fillText(clipText(know.line, subCols), pad + 14, y + 40 + extra);
+        extra += 13;
       }
       ctx.restore();
 
@@ -6461,7 +6470,7 @@
               return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
             })(m.id), { font: 10 });
       }
-      y += know ? 59 : 46;
+      y += 46 + extra;
 
       if (openC && m.desc) {
         var dlines = wrapText(m.desc, Math.max(20, Math.floor((leftW - 44) / 6.49)));
@@ -6530,6 +6539,13 @@
         ctx.fillStyle = '#ff5a5a';
         ctx.textAlign = 'right';
         ctx.fillText('bounty ' + Math.round(owed), pad + leftW - 12, yy);
+        ctx.textAlign = 'left';
+      } else if (G.workoff && G.workoff[facs[f].id] > 0) {
+        /* A fine being worked off (combat.js workOff): their contracts
+         * pay half until this is gone. */
+        ctx.fillStyle = '#ffb86b';
+        ctx.textAlign = 'right';
+        ctx.fillText('working off ' + Math.round(G.workoff[facs[f].id]), pad + leftW - 12, yy);
         ctx.textAlign = 'left';
       }
       ctx.restore();
@@ -6641,7 +6657,7 @@
     var sawCampaignBoardHdr = false, sawContractBoardHdr = false;
     for (var o = 0; o < offers.length; o++) {
       var off = offers[o];
-      if (oy + 46 > top + pad + colH - 6) break;
+      if (oy + 58 > top + pad + colH - 6) break;
       if (off.campaign && !sawCampaignBoardHdr) {
         sawCampaignBoardHdr = true;
         ctx.save();
@@ -6710,6 +6726,12 @@
                                  ? Intel.demand(off)
                                : off.tonnes + 't of hold'),
                             Math.floor((rw - 130) / 6.16)), rx + 16, oy + 28);
+      /* HOW FAR (2026-11-18): live, from where you are docked now. */
+      var offReach = Missions.reach ? Missions.reach(G, off) : null;
+      if (offReach) {
+        ctx.fillStyle = '#9fd0e0';
+        ctx.fillText(clipText(offReach.text, Math.floor((rw - 130) / 6.16)), rx + 16, oy + 41);
+      }
       ctx.restore();
       btn(ctx, rx + rw - 96, oy + 6, 80, 28, 'ACCEPT',
           (function (offer) {
@@ -6729,7 +6751,7 @@
               return function () { G.missionDesc = (G.missionDesc === id) ? null : id; };
             })(off.id), { font: 10 });
       }
-      oy += 48;
+      oy += offReach ? 60 : 48;
 
       if (openHere && off.desc) {
         var lines = wrapText(off.desc, Math.floor((rw - 44) / 6.49));
@@ -8024,6 +8046,20 @@
     }
     theirs.forEach(function (c) { droneMark(c, '#ff9f7a'); });
     mine.forEach(function (c) { droneMark(c, '#7dffb0'); });
+    /* Your outpost on this claim: a square round its drone's cell, dashed
+     * while it is being built. */
+    var OpM = global.Outposts, opM = OpM && Sv.cellOfLatLon ? OpM.onClaim(G, T.key) : null;
+    if (opM) {
+      var oc = Sv.cellOfLatLon(opM.at.lat, opM.at.lon);
+      var OX = sxc(scanX(oc % nLon, flip, nLon) + 0.5), OY = syr(nLat - 0.5 - Math.floor(oc / nLon));
+      ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2.5;
+      if (!OpM.standing(opM, G.t)) ctx.setLineDash([5, 4]);
+      ctx.strokeRect(OX - 15, OY - 15, 30, 30);
+      ctx.setLineDash([]);
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = '#ffd36b';
+      ctx.fillText('OUTPOST', OX + 19, OY + 4);
+    }
 
     /* the ship */
     if (sc !== null) {
@@ -8120,6 +8156,31 @@
         ctx.fillText((G.ship.drones || 0) + ' drone' + ((G.ship.drones || 0) === 1 ? '' : 's') + ' aboard' +
                      (Cl.claimFor(G, T.key, G.t) ? '  ·  claim live' : '  ·  no claim filed') +
                      '  ·  from orbit it goes down in a pod', mapX + 200, ry + 26);
+        /* AN OUTPOST (outposts.js): your drones build it where one of them
+         * stands, so the button is under a cell with your drone on it. The
+         * reason it cannot, when it cannot, beside it. */
+        var Op = global.Outposts;
+        if (Op && mine.indexOf(sel) >= 0) {
+          var myD = (G.drones || []).filter(function (d) {
+            return d.key === T.key && Sv.cellOfLatLon(d.at.lat, d.at.lon) === sel;
+          })[0];
+          var opHere = Op.onClaim(G, T.key);
+          var opWhy = myD ? Op.refusal(G, G.sys, G.t, myD.id) : 'no drone of yours there';
+          btn(ctx, mapX, ry + 40, 190, 24, opHere ? 'OUTPOST ON THIS CLAIM' : 'DRONES BUILD AN OUTPOST', function () {
+            if (!myD) return;
+            var r = Op.order(G, G.sys, G.t, myD.id);
+            say(r.ok ? r.text : 'Outpost: ' + r.why, r.ok ? 9 : 5);
+            if (r.ok && global.Save) global.Save.store(G);
+          }, { bold: true, font: 11, disabled: !!opWhy });
+          ctx.font = 'bold 10px ui-monospace, monospace';
+          ctx.fillStyle = opHere ? '#ffd36b' : opWhy ? '#ff9f7a' : '#7dffb0';
+          ctx.fillText(opHere ? Op.statusLine(G, opHere, G.t)
+                       : opWhy ? opWhy
+                       : Op.OUTPOST_FEE.toLocaleString('en-US') + ' cr for the Guild\'s frame  ·  ' +
+                         Op.dronesOn(G, T.key).length + ' drones build it in about ' +
+                         Math.round(Op.daysFor(Op.dronesOn(G, T.key).length)) + ' days',
+                       mapX + 200, ry + 56);
+        }
       }
     } else {
       ctx.fillStyle = '#4f7d90';

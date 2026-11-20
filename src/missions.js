@@ -1134,6 +1134,24 @@
    * late cut on a passage — with the one difference that nothing about
    * the trip was being shot at: a ship on a timetable is not in the
    * encounter system. */
+  /* WORKING A FINE OFF (combat.js garnish, 2026-11-18): while you owe a
+   * faction, half of each of its contract fees goes to the debt. Every
+   * contract payment in this file comes through here, so none can forget
+   * to. Returns what you keep; `note` is the line to add to whatever the
+   * contract says on completion. */
+  function creditFor(G, m, pay) {
+    var C = global.Combat;
+    var g = C && C.garnish ? C.garnish(G, m.faction, pay) : { kept: pay, took: 0, left: 0 };
+    G.ship.credits += g.kept;
+    g.note = g.took ? ('  (' + g.took + ' cr to your fine with ' + (m.factionName || factionName(G, m.faction)) + ', ' +
+                       (g.left ? g.left + ' cr still owed)' : 'now paid off)')) : '';
+    return g;
+  }
+  function factionName(G, fac) {
+    var f = G.galaxy && G.galaxy.factionById ? G.galaxy.factionById[fac] : null;
+    return (f && f.name) || 'them';
+  }
+
   /* A partner's ship (favours.js) splits what she earns with her captain. */
   function partnerShare(G, rec, pay) {
     var F = global.Favours;
@@ -1149,9 +1167,9 @@
       if (m.type === 'passage') {
         rec.passengers = Math.max(0, (rec.passengers || 0) - (m.souls || 0));
         var cut = passageCut({ t: t }, m);
-        G.ship.credits += partnerShare(G, rec, cut.pay);
+        var gp = creditFor(G, m, partnerShare(G, rec, cut.pay));
         bumpStanding(G, m.faction, cut.standing);
-        lines.push(rec.name + ' at ' + port.name + ': ' + cut.text);
+        lines.push(rec.name + ' at ' + port.name + ': ' + cut.text + gp.note);
       } else {
         var held = (rec.cargo && rec.cargo[m.cid]) || 0;
         if (held + 1e-9 < (m.tonnes || 0)) {
@@ -1164,11 +1182,11 @@
         rec.cargo[m.cid] = held - m.tonnes;
         if (rec.cargo[m.cid] <= 1e-9) delete rec.cargo[m.cid];
         var mine = partnerShare(G, rec, m.pay);
-        G.ship.credits += mine;
+        var gm = creditFor(G, m, mine);
         bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
         lines.push(rec.name + ' delivered at ' + port.name + ' — ' + m.pay + ' cr' +
                    (mine !== m.pay ? ' (' + mine + ' to you, ' + (m.pay - mine) + ' to ' +
-                                     rec.partner.name + ')' : ''));
+                                     rec.partner.name + ')' : '') + gm.note);
       }
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);
@@ -1367,11 +1385,11 @@
           continue;
         }
         var cut = passageCut(G, m);
-        G.ship.credits += cut.pay;
+        var gc = creditFor(G, m, cut.pay);
         if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: cut.pay });
-        jot(G, 'mission', 'Passage to ' + port.name + ' done: ' + cut.text);
+        jot(G, 'mission', 'Passage to ' + port.name + ' done: ' + cut.text + gc.note);
         bumpStanding(G, m.faction, cut.standing);
-        if (hooks && hooks.say) hooks.say(cut.text, 6);
+        if (hooks && hooks.say) hooks.say(cut.text + gc.note, 6);
         if (hooks && hooks.sound) hooks.sound(cut.pay > 0 ? 'pay' : 'warn');
         if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
         continue;
@@ -1407,7 +1425,7 @@
       G.ship.cargo[m.cid] = held - m.tonnes;
       if (G.ship.cargo[m.cid] <= 1e-9) delete G.ship.cargo[m.cid];
       Sim.refreshShip(G.ship);
-      G.ship.credits += m.pay;
+      var gh = creditFor(G, m, m.pay);
       /* Captain Halloway's last lesson is a delivery (tutorial.js). */
       if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: m.pay });
       chargeDawdle(G, m, t, hooks);
@@ -1416,8 +1434,8 @@
       list.splice(i, 1);
       jot(G, 'mission', 'Contract complete at ' + port.name + ': ' + m.tonnes + ' t of ' +
           ((global.Economy && global.Economy.BY_ID && global.Economy.BY_ID[m.cid] && global.Economy.BY_ID[m.cid].name) || m.cid) +
-          ', ' + m.pay + ' cr');
-      if (hooks && hooks.say) hooks.say('Contract complete — ' + m.pay + ' cr', 5);
+          ', ' + m.pay + ' cr' + gh.note);
+      if (hooks && hooks.say) hooks.say('Contract complete — ' + m.pay + ' cr' + gh.note, gh.took ? 7 : 5);
       if (hooks && hooks.sound) hooks.sound('pay');
       /* A campaign chapter settling is what casts the next one — see
        * arcs.js. Ordinary contracts have no `campaign` flag and this is a
@@ -1527,11 +1545,11 @@
     for (var i = list.length - 1; i >= 0; i--) {
       var m = list[i];
       if (m.type !== 'sabotage' || m.toPortId !== port.id) continue;
-      G.ship.credits += m.pay;
+      var gs = creditFor(G, m, m.pay);
       bumpStanding(G, m.faction, STANDING_WIN.haul || 3);
       (G.doneMissions = G.doneMissions || {})[m.id] = true;
       list.splice(i, 1);
-      if (hooks && hooks.say) hooks.say('Contract complete - ' + port.name + ' is closed for a season. ' + m.pay + ' cr', 6);
+      if (hooks && hooks.say) hooks.say('Contract complete - ' + port.name + ' is closed for a season. ' + m.pay + ' cr' + gs.note, 6);
       if (hooks && hooks.sound) hooks.sound('pay');
       if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
     }
@@ -1695,9 +1713,83 @@
     return { ok: true, contents: c, text: text };
   }
 
+  /* ---- how far, from where you are now (2026-11-18) ----------------------
+   * Astra: "I also want the missions to describe how far away the target
+   * is." Read at DRAW time from the ship's position, not written into the
+   * prose: planets move, and a distance fixed when the job was posted is
+   * wrong by the time you have flown half of it. legKm above stays as it
+   * is, because a fee must not wander while you read it; this line should.
+   *
+   * The time is a straight flip-and-burn at the hull's best acceleration
+   * (t = 2*sqrt(d/a)): it ignores gravity and coasting, so it is a floor,
+   * and the line says "at full burn" so nobody reads it as a schedule.
+   * Null when there is nothing true to say (a survey of a body, a target
+   * the save never recorded). */
+  var AU_KM = 1.495978707e8;
+  function fmtReachKm(km) {
+    if (km < 1) return Math.round(km * 1000) + ' m';
+    if (km < 1e6) return Math.round(km).toLocaleString('en-US') + ' km';
+    if (km < 0.02 * AU_KM) return (km / 1e6).toFixed(2) + ' Mkm';
+    return (km / AU_KM).toFixed(km < 10 * AU_KM ? 2 : 1) + ' AU';
+  }
+  function fmtReachTime(s) {
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + ' min';
+    if (s < 48 * 3600) return (s / 3600).toFixed(1) + ' h';
+    return (s / 86400).toFixed(1) + ' days';
+  }
+  function reach(G, m) {
+    if (!G || !m || !G.ship) return null;
+    var Sim = global.Sim, V = global.V, Gx = global.Galaxy;
+    if (m.toStarId && G.here && m.toStarId !== G.here.id) {
+      var stars = (G.galaxy && G.galaxy.stars) || [], star = null;
+      for (var i = 0; i < stars.length; i++) {
+        if (stars[i].id === m.toStarId) { star = stars[i]; break; }
+      }
+      if (!star || !Gx || !Gx.distance3) return null;
+      var ly = Gx.distance3(G.here, star);
+      return { ly: ly, km: null, secs: null,
+               text: ly.toFixed(1) + ' ly away, in the ' + star.name + ' system' };
+    }
+    var p = (m.toPortId && G.sys && G.sys.byId) ? G.sys.byId[m.toPortId] : null;
+    if (!p) {
+      return (m.toStarId && G.here && m.toStarId === G.here.id)
+        ? { ly: 0, km: null, secs: null, text: 'in this system: any port will do' } : null;
+    }
+    if (G.ship.docked === p.id) return { ly: 0, km: 0, secs: 0, text: 'you are docked here' };
+    if (!Sim || !V || !G.ship.pos) return null;
+    var at;
+    try { at = Sim.bodyPosition(p, G.sys, G.t); } catch (e) { return null; }
+    if (!at) return null;
+    var km = V.dist(G.ship.pos, at);
+    /* The time. In the game, main.js answers with the intercept pip's own
+     * solve, the faster of cruise and thrusters, as you would actually fly
+     * it (global.MissionEta, cached there). The first draft printed a
+     * flip-and-burn on thrusters alone - "2.2 days" for an hour's hop the
+     * cruise drive does in minutes - which is the wrong number to plan a
+     * deadline by. Where there is no main.js (the suites), the burn is
+     * still the honest fallback, and says so. */
+    var eta = global.MissionEta ? global.MissionEta(p.id) : null;
+    if (eta && eta.secs > 0) {
+      return { ly: 0, km: km, secs: eta.secs, drive: eta.drive,
+               text: fmtReachKm(km) + ' from you, about ' + fmtReachTime(eta.secs) +
+                     (eta.drive === 'cruise' ? ' by cruise' : ' on thrusters') };
+    }
+    if (global.MissionEta) {
+      /* Its turn has not come yet (one solve every few frames): the
+       * distance alone for a moment, rather than a number we know is wrong. */
+      return { ly: 0, km: km, secs: null, text: fmtReachKm(km) + ' from you' };
+    }
+    var a = G.ship.maxAccel;                       // km/s^2
+    var secs = a > 0 ? 2 * Math.sqrt(km / a) : null;
+    return { ly: 0, km: km, secs: secs,
+             text: fmtReachKm(km) + ' from you' +
+                   (secs ? ', about ' + fmtReachTime(secs) + ' at full burn' : '') };
+  }
+
   registerParcel();
 
   var Missions = {
+    reach: reach, creditFor: creditFor,
     WINDOW: WINDOW,
     boardAt: boardAt, accept: accept,
     passageRefusal: passageRefusal, passageCut: passageCut,

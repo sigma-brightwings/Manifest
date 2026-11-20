@@ -834,6 +834,20 @@
     });
     return hold;
   }
+  /* SOMEBODY COMES OVER (2026-11-18, concourse.js): send `p` to stand at
+   * `at`, facing `face` if given, for `hold` seconds, by the same routing
+   * every other walk takes. Their own script picks up again when the hold
+   * is up. Returns false if there is no way there. */
+  function approach(sc, p, at, now, hold, faceAt) {
+    if (!sc || !p || p.away) return false;
+    var path = route(sc.plan, { x: p.x, z: p.z }, at);
+    if (!path || !path.length) return false;
+    var yaw = faceAt ? Math.atan2(faceAt.x - at.x, faceAt.z - at.z) : undefined;
+    begin(p, { at: { x: at.x, z: at.z }, act: 'stand', yaw: yaw, hold: hold || 12 }, now);
+    p.leaving = false;
+    p.path = path;
+    return true;
+  }
   function face(p, wp, dt) { turnTo(p, Math.atan2(wp.x - p.x, wp.z - p.z), dt); }
   function turnTo(p, target, dt) {
     var d = target - p.yaw;
@@ -980,7 +994,7 @@
     WATCH: WATCH, liveryFor: liveryFor, crewForShip: crewForShip, visitScene: visitScene,
     shipScene: shipScene, stationScene: stationScene,
     update: update, pose: pose, figures: figures, facing: facing, talk: talk,
-    route: route, onWatch: onWatch, nameFrom: nameFrom
+    route: route, onWatch: onWatch, nameFrom: nameFrom, approach: approach
   };
 
   global.Npc = Npc;

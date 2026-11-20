@@ -216,6 +216,20 @@
     item('bar', -cw / 2 - 9.4, hub + 10, 'The bar', { counter: [-cw / 2 - 10.7, hub + 6, -cw / 2 - 10, hub + 14],
                                                        post: { x: -cw / 2 - 11.3, z: hub + 10, yaw: Math.PI / 2 } });
     item('crew', cw / 2 + 8.8, hub + 8, 'Crew hall board', { counter: [cw / 2 + 9.4, hub + 5, cw / 2 + 10, hub + 11] });
+    /* THE DEPARTURES BOARD (2026-11-18, concourse.js): on the concourse's
+     * south wall, over the door in from the cargo hall (3.2 m high), where
+     * the whole concourse sees it between the pillars - the first place
+     * tried, east of the door, was half behind the east pillar from the
+     * middle of the room. walk.js only says where it hangs; dressing.js
+     * frames it and main.js writes the live timetable on it. */
+    var boards = [{ id: 'departures', room: conc.id, x0: -4.2, x1: 4.2, y0: 3.45, y1: 5.75, z: hub + 0.16 }];
+    item('departures', 3.4, hub + 1.6, 'Departures and arrivals', { board: 'departures' });
+    /* THE NOTICEBOARD (2026-11-19): the contract board as paper on the
+     * same wall, at eye height west of the door, one slip per contract
+     * this port is letting (main.js writes them from Missions.boardAt). E
+     * opens the board itself, the way the freight office does. */
+    boards.push({ id: 'notices', kind: 'notices', room: conc.id, x0: -7.4, x1: -4.4, y0: 0.95, y1: 2.45, z: hub + 0.1 });
+    item('notices', -5.9, hub + 1.3, 'Noticeboard', { board: 'notices', labelY: 2.95 });
 
     /* Your ships into berths of their size, the current one first. */
     var ships = (opts.ships || []).slice().sort(function (a, b) { return (b.current ? 1 : 0) - (a.current ? 1 : 0); });
@@ -263,7 +277,7 @@
     });
     if (!spawn) spawn = { x: 0, z: -6, yaw: 0 };
 
-    var plan = { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn };
+    var plan = { portId: portId, rooms: rooms, doors: doors, items: items, spawn: spawn, boards: boards };
     if (hangar) plan.hangar = hangar;
     /* Whose port it is (generate.js stampLiveries: civ, navy or syn, and
      * pir should one ever fly it): the walls' colours here, and the whole

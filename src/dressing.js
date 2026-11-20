@@ -713,22 +713,22 @@
       }
     });
 
-    /* A departures board on the south wall, by the way back to the ships. */
-    var Ps = wallPoint(room, 'z0'), Ls = wallLen(room, 'z0');
-    var du = Ls / 2 + 4.5;
-    wallPlate(K, Ps, du, 2.4, du + 4.2, 4.4, 0.05, '#0b0d10', { bias: -0.02 });
-    for (var row = 0; row < 7; row++) {
-      var vy = 4.15 - row * 0.25;
-      wallPlate(K, Ps, du + 0.15, vy, du + 0.15 + rng.range(1.2, 2.2), vy + 0.12, 0.06, '#ffb43f', { lit: true, bias: -0.04 });
-      wallPlate(K, Ps, du + 2.8, vy, du + 3.2 + rng.range(0, 0.6), vy + 0.12, 0.06, row % 3 ? '#5aff9c' : '#ff5a3c', { lit: true, bias: -0.04 });
-    }
+    /* THE DEPARTURES BOARD is real now (2026-11-18): walk.js hangs it over
+     * the door (plan.boards), infoBoards below frames it and main.js writes
+     * the timetable on it. What stood here was a stand-in - rows of lit
+     * bars of random length that said nothing - and a sign that says
+     * nothing breaks the rule the signs keep, so it is gone. Nothing after
+     * this line draws from `rng`, so no other piece of the room moved. */
 
-    /* Overhead, just inside the door from the spine: where things are. */
+    /* Overhead, just inside the door from the spine: where things are.
+     * Hung 1 m in from the wall (was 3.2 m), so they sit under the board
+     * above the door from anywhere in the room instead of across it. */
     var bar = plan.rooms.filter(function (r) { return r.kind === 'bar'; })[0], hall = plan.rooms.filter(function (r) { return r.kind === 'crewhall'; })[0];
     var wordL = bar ? '< BAR' : '', wordR = hall ? 'CREW >' : '';
-    if (wordL) hangingSign(K, cx - 3.2, z0 + 3.2, 'z', 1, wordL, '', 0.4, '#ff3fa4', null, H);
-    if (wordR) hangingSign(K, cx + 3.2, z0 + 3.2, 'z', 1, wordR, '', 0.4, '#5aff9c', null, H);
-    hangingSign(K, cx, z0 + 3.2, 'z', -1, '^ BERTHS', '', 0.4, '#3ff0ff', null, H);
+    var signZ = (plan.boards || []).some(function (b) { return b.room === room.id; }) ? z0 + 1.0 : z0 + 3.2;
+    if (wordL) hangingSign(K, cx - 3.2, signZ, 'z', 1, wordL, '', 0.4, '#ff3fa4', null, H);
+    if (wordR) hangingSign(K, cx + 3.2, signZ, 'z', 1, wordR, '', 0.4, '#5aff9c', null, H);
+    hangingSign(K, cx, signZ, 'z', -1, '^ BERTHS', '', 0.4, '#3ff0ff', null, H);
 
     ceilingPipes(K, room, ['x0', 'x1'], H);
     return { quads: K.quads, solids: solids, seats: seats, noStrip: true };
@@ -1217,6 +1217,42 @@
     });
   }
 
+  /* ---- information boards (2026-11-18) -------------------------------------
+   * The frame and the screen of each board walk.js hangs (plan.boards): a
+   * steel bezel, a dark lit screen and its header in neon. The rows are not
+   * here - they change by the minute, and main.js writes them over the
+   * screen every frame (concourse.js). No draws from any stream, so the
+   * rest of the dressing is exactly as it was. Stood proud of the wall
+   * (0.16 m) so a banner or trim on the same span stays behind it. */
+  function infoBoards(K, plan, room) {
+    (plan.boards || []).forEach(function (b) {
+      if (b.room !== room.id) return;
+      var P = wallPoint(room, 'z0'), d = b.z - room.z0;
+      /* z0's u runs from x1 toward x0. */
+      var u0 = room.x1 - b.x1, u1 = room.x1 - b.x0;
+      /* The noticeboard: cork in a wooden frame and its header. The slips
+       * are main.js's, one per contract the port is letting. */
+      if (b.kind === 'notices') {
+        wallPlate(K, P, u0 - 0.08, b.y0 - 0.08, u1 + 0.08, b.y1 + 0.3, d - 0.03, '#4a3220', { bias: -0.03 });
+        wallPlate(K, P, u0, b.y0, u1, b.y1, d, '#8a6440', { bias: -0.035 });
+        neonText(K, P, 'CONTRACTS', (u0 + u1) / 2, b.y1 + 0.05, 0.17, d + 0.012, '#ffd36b');
+        return;
+      }
+      wallPlate(K, P, u0 - 0.14, b.y0 - 0.14, u1 + 0.14, b.y1 + 0.14, d - 0.03, '#3b4148', { bias: -0.03 });
+      wallPlate(K, P, u0, b.y0, u1, b.y1, d, '#061016', { bias: -0.035, lit: true });
+      /* Two halves: departures first, where reading starts. u runs left to
+       * right as you face a wall (the ads' rule), so they take the low u;
+       * main.js writes its rows with the same left edge (deck x = b.x1). */
+      var um = (u0 + u1) / 2;
+      neonText(K, P, 'DEPARTURES', (u0 + um) / 2, b.y1 - 0.36, 0.3, d + 0.012, '#ffd36b');
+      neonText(K, P, 'ARRIVALS', (um + u1) / 2, b.y1 - 0.36, 0.3, d + 0.012, '#9fe8ff');
+      /* The rule under each header, and the seam between the halves. */
+      wallPlate(K, P, u0 + 0.12, b.y1 - 0.5, um - 0.1, b.y1 - 0.47, d + 0.01, '#ffd36b', { bias: -0.04, lit: true });
+      wallPlate(K, P, um + 0.1, b.y1 - 0.5, u1 - 0.12, b.y1 - 0.47, d + 0.01, '#9fe8ff', { bias: -0.04, lit: true });
+      wallPlate(K, P, um - 0.02, b.y0 + 0.1, um + 0.02, b.y1 - 0.1, d + 0.01, '#3b4148', { bias: -0.04 });
+    });
+  }
+
   var DRESSERS = { bar: dressBar, concourse: dressConcourse, crewhall: dressCrewHall, corridor: dressSpine,
                    lport: dressLPort, berth: dressBerth, cargohall: dressCargoHall };
 
@@ -1269,6 +1305,7 @@
         var K = Kit(), rng = stream('ads|' + (seed || '') + '|' + plan.portId + '|' + room.id);
         if (room.kind !== 'bar') placeAds(K, plan, room, rng, ctx);
         factionDetail(K, plan, room, rng);
+        infoBoards(K, plan, room);
         if (K.quads.length) plan.dress[room.id] = plan.dress[room.id].concat(K.quads);
       });
     } finally {

@@ -40,6 +40,338 @@ before they update.
 
 ## Unreleased
 
+## 1.5.2 "Rhombicuboctahedron" (2026-11-19)
+
+The stations come alive, and the first piece of mining's last stage. A
+rhombicuboctahedron is a hub with a face turned every way: eighteen
+squares and eight triangles, every one of them a way in, which is the
+release where the concourse, the bar and the claim each got somewhere to
+go and something true to say.
+
+- **Last time on...** when you pick a career back up, and missions say how
+  far off their target is.
+- **The station speaks:**
+  - a departures board read off the real timetable;
+  - a PA, and lines overheard in passing;
+  - now and then, somebody who has heard of you;
+  - the sound of each room.
+- **Wanted and on the deck,** security detains you. If you can't pay, you
+  can work the fine off on half-pay contracts.
+- **Menus** sit over wherever you are standing.
+- **The bar's fixer** has work, grey goods, papers, word of who is looking
+  for you, and a way into the Syndicate. **The concourse** has a
+  noticeboard of the port's real contracts.
+- **Outposts,** built by your own drones on a claim.
+- **Fixed:** the ramp's flickering seen from inside the ship.
+
+> **Saves survive.** No version bump. The new records (`workoff`,
+> `outposts`) are additive, and an older career loads with none.
+
+Astra asked for this as 1.4.2. The last release was 1.5.1, so the next
+patch number is 1.5.2. Polytope names since 1.4.0 (src/release.js).
+
+### Added (2026-11-19, outposts, built by your drones)
+
+Astra: "Outposts are constructed by mining drones." The first piece of
+mining's last stage that was still missing; the order of the rest is in
+the project doc `claude/after-mining-roadmap.md`.
+
+- **What it takes:**
+  - two of your drones on a live claim;
+  - 15,000 cr for the Mining Guild's frame.
+- **How it is built:**
+  - the drones build it where one of them stands, in 40 drone-days (two
+    drones take 20 days);
+  - while they build they dig nothing, so part of the price is their time.
+- **Once it stands:**
+  - every drone on the claim feeds its bins and holds 90 t instead of 30;
+  - N at the outpost empties the whole claim at once, richest first;
+  - thieves come half as often.
+- **Ordering it:** from the planetary scanner. Pin a cell that has one of
+  your drones on it and click **DRONES BUILD AN OUTPOST**. When the button
+  is off, the line beside it says why: one drone, a lapsed claim, the fee,
+  or one already there. The outpost is drawn as a square on the map, dashed
+  while it is being built, and announced once when it stands.
+- **On the rails:**
+  - the drones' hoppers are re-based to the day it stands, so the bigger
+    bins are exact rather than backdated;
+  - a drone emptied or set down while it is being built also waits for it;
+  - skipping a month gives the right answer.
+- **Not yet:** a model on the ground. Your drones have none either.
+- **Saves:** `G.outposts`, additive. Old careers load with none.
+- Tests: `test/outposts.test.js` (23). Probe: `tools/probe-outpost.js`.
+  claims, mining, prospectors, survey and the save round trip all still
+  pass.
+
+### Added (2026-11-19, the fixer's business, and a noticeboard)
+
+Slice 2 of the engaging-stations plan. Astra: "let's keep going".
+
+- **The bar's fixer now has business** (`src/fixer.js`). "What can you do
+  for me?" opens a sheet of five:
+  - **Is there work?** One job per port per contract window (two days).
+    - Over a black market it is smuggling: real contraband sold at this
+      bar, loaded into your hold when you take it, for a real port in the
+      system.
+    - Elsewhere it is holing a lawful port in the system with a rock
+      torpedo.
+    - Both are ordinary contracts on the ledger (`smuggle` and `sabotage`),
+      booked against the Syndicate. Finishing one is +3 Syndicate standing,
+      and the fee goes through the fine garnish like any other.
+    - Once you take it, the fixer says when the next one comes.
+  - **Where can I buy a gun nobody certified?** "Right here" when this
+    system's corruption opens the grey shelf. Otherwise the nearest systems
+    within 10 ly whose corruption does, with distances. Forged papers are
+    never for sale: the fixer says the overboss gives them to people who
+    see the Long Arrangement through, which is how the game already works.
+  - **Can anyone here change a ship's papers?** The old PAPERS line, moved
+    into the sheet.
+  - **Is anyone looking for me?** Your fines, by faction and amount, and
+    any navy whose notoriety for you is at or near sending hunters.
+  - **How do I get in with the Syndicate?** The old standing line, plus how
+    many jobs short of the Long Arrangement's gate you are. At the gate it
+    tells you the favour is on the contract board. It also covers a navy
+    allegiance (the door is shut), a pirate mark, a chain in progress or
+    done, and a chain on cooldown.
+  - The fixer's top list is now *Who are you / What have you heard / What
+    can you do for me / tithe / friends*. PAPERS and STANDING live in the
+    sheet, so nothing fell off the five-line list.
+- **A noticeboard in the concourse:** cork in a wooden frame, at eye
+  height west of the door in from the cargo hall.
+  - One paper slip per contract the port is letting, dealt exactly as the
+    F7 board deals them (chains first, less what you have signed).
+  - Each slip shows its headline and fee, readable within a few metres.
+    From across the room the slips are blank paper.
+  - E on it opens the contract board.
+  - First draft: Astra saw the slips' text overlapping itself, in a font far
+    too large. It is now small handwriting: three lines at most, an
+    ellipsis when it runs long, and the fee on its own line. The board's tag
+    floats above its frame instead of across its header (items can now
+    carry their own `labelY`).
+- The two boards share one sight-line test (`boardSightClear` in main.js).
+- Tests: `test/fixer.test.js` (34). Probe: `tools/probe-notices.js`.
+- Not done: "collection" jobs (collecting a debt for the fixer). They need
+  a settlement path the ledger does not have yet.
+
+### Changed (2026-11-19, menus show where you are)
+
+Astra: "make menus show where the player is."
+
+- **On a station's deck** (and in a sea platform's tube), any page of the
+  pause menu now sits over the deck you are standing on: the Esc menu, the
+  options, "Last time on...", being detained. Before, it swapped the deck
+  for the cockpit view behind its dimming. The title card still covers
+  everything: it is not anywhere.
+- **Fixed on the way: aboard on foot and in the suit, the pause menu was
+  open but invisible.** Both views return before the flight HUD, which is
+  where the menu was drawn. Esc stopped the world and showed nothing; a
+  second Esc closed what you couldn't see. Each of those views now draws
+  the menu itself, and so does the deck.
+- The menu clears the click list as it draws, so nothing on the deck behind
+  it can be clicked (the probe counts five hotspots with it open: its own
+  rows).
+- The board's line-of-sight height went from 2.9 m to 3.4 m: the concourse
+  kiosk's canopy stands taller than 2.9, and the rows were written over it.
+- Seen in the real build: `tools/probe-menudeck.js` (the Esc menu over the
+  concourse) and `tools/probe-menuaboard.js` (over the cockpit room aboard).
+- Aboard, the first Esc only releases the mouse from mouselook; the second
+  opens the menu. That is the browser's pointer lock, not this change.
+
+### Added (2026-11-19, detained when wanted, and working a fine off)
+
+Astra: "security should detain you when you're wanted, but if you don't have
+enough money to pay your fine that shouldn't be game breaking, instead, the
+option to run missions for that station/faction until your fine is paid off,
+and the missions pay half as much?"
+
+- **Detained on the deck.**
+  - With a bounty on you with a port's faction, the port's law comes for you
+    a few seconds after you step onto its deck. This happens every time,
+    with no roll.
+  - The nearest officer walks over and follows you as you move.
+  - With nobody on watch, the PA pages you and the next officer through the
+    door comes for you.
+  - The detention page gives two choices:
+    - **pay** the settle cost: the bounty plus costs, 1.6x, as on the police
+      channel;
+    - **work it off.**
+  - Esc does not let you leave the page.
+  - A bounty past what a port will overlook still gets the dock refused, as
+    before. Settle that one from the police channel at a port that will take
+    you.
+- **Working it off** (combat.js `workOff`, `garnish`):
+  - What settling would have cost becomes a debt to that faction (1.2x for a
+    fugitive turning themselves in).
+  - The bounty and any fugitive flag clear at once, so their ports open and
+    their police stop asking.
+  - Every contract for that faction then pays you half, and the other half
+    goes to the debt, never more than is owed. The contract's completion
+    line says how much went to the fine and how much is left.
+  - When the debt is paid, their contracts pay in full again.
+  - Standing still moves the way a contract moves it.
+  - Every contract payment goes through one place (missions.js `creditFor`):
+    hauls, passages, sabotage, carrier deliveries, intel and fieldwork.
+  - Campaign chapter bonuses (arcs.js) are not garnished.
+- **The police channel** gets the same way out: when the quote is more than
+  you have, a second Y agrees to work it off.
+- The debt shows on the contracts screen's standing list ("working off
+  960"), and in "Last time on..." under THE LAW.
+- Saves: `workoff` is additive. Older careers load with no debts, and there
+  is no version bump.
+- `test/workoff.test.js` (17); probe `tools/probe-detain.js`. In the real
+  build at Threshold, with a 600 cr bounty and 100 cr: Zeke Lund of port
+  security came for you, Esc was refused, and working it off left a 960 cr
+  debt and no bounty. You were not detained again.
+- The board, the PA and the approaches read the port's faction as the law
+  does (`port.faction`). The first draft read a field ports don't carry and
+  fell back to the star's faction.
+
+### Added (2026-11-19, the sound of a station)
+
+Astra, on station sound: "sound effects, yes." Synthesised, like every other
+sound in the game (sound.js):
+
+- **A bed per room**, crossfaded as you walk through a door. It has five
+  layers:
+  - mains hum (50 and 100 Hz);
+  - a crowd murmur (band-passed noise, breathing on a slow LFO so voices
+    come and go);
+  - machinery rumble through the deck;
+  - ventilation air;
+  - in the bar only, soft music: a slow walk round A minor, one note at a
+    time.
+- Levels per room kind: bar, concourse, crew hall, cargo hall, spine, L
+  port, berth/hangar, tube.
+- **Now and then:** freight clanking in the cargo hall, the L port and the
+  hangar, and a forklift's reverse beeps in the cargo hall.
+- **The PA chimes** (two notes) before it speaks. **Detention** has its own
+  sound.
+- Only on a station's deck: aboard, in flight and on the title card there is
+  no bed. Mute silences it as it does everything else.
+- Not checked by ear: the probes run muted, and I can't hear the game.
+
+### Added (2026-11-18, the station speaks)
+
+Astra: "I want the first person stations to be more engaging", and of what
+that means, all four of: people doing things, places to use, a lived-in
+look, things happening. The plan is in `claude/engaging-stations-plan.md`;
+this is its first slice. Everything the station says is read off the game,
+the rule the signs already keep.
+
+- **A departures and arrivals board** over the door from the cargo hall into
+  the concourse. Real ships, real destinations, real times, off the traffic
+  timetable: AT BERTH and BOARDING agree with the berth queue
+  (`Sim.berthOccupants`); SCHEDULED, EXPECTED and APPROACH are the routes'
+  own arithmetic. The foot carries the station clock and, when there is a
+  bounty on you here, port security's notice of it. E at the board reads out
+  the next sailing and the next arrival.
+  - It replaces a stand-in on the same wall that was rows of random-length
+    bars. The three hanging signs by the door (< BAR, ^ BERTHS, CREW >)
+    moved to 1 m in from the wall, so they no longer hang across the board.
+  - The rows are drawn in 2D over the GPU view, in perspective on the
+    screen. A column is left off when a counter or prop stands between you
+    and it below 2.9 m. People standing in front are not tested, so the rows
+    still draw over them.
+- **The PA**, now and then (75-120 s apart, real time), and never over a
+  conversation, a menu or a line still on screen:
+  - a sailing due in the next ten minutes;
+  - an arrival on final approach;
+  - your bounty ("Port security: be advised, a Talon Courier in port is
+    flagged, 600 credits outstanding");
+  - what the market desk is short of;
+  - how many hands the crew hall has;
+  - the next sailing.
+
+  Each is said once a visit, and a sailing once per sailing.
+- **Overheard as you pass** (within 2.4 m, once a person a visit):
+  - docked crews talk about their own ship's sailing ("We are out for Halden
+    Depot in 2.4 h. Drink up.");
+  - others say what this port has heard about you, in the rumour network's
+    own words, or what the market is short of.
+
+  Staff at counters and the law don't chatter.
+- **Somebody comes over**, now and then. Astra: "it should be a nice
+  surprise; not super often, more with higher notoriety."
+  - At most once a visit, from one roll seeded by port and game day.
+  - The chance is 8% when nobody here knows you. It rises 10% per point of
+    how known you are here, capped at 60%. That score is the rumour
+    network's weighted count of everything this port has heard of you, plus
+    a tenth of the navy's notoriety, plus one if there is a bounty on you
+    here.
+  - The nearest person who might, within 22 m, walks over by the deck's own
+    routing, stops facing you, and says the loudest true thing about you
+    here, in the rumour network's own words, with their reaction:
+    - grateful for a rescue or a dead raider;
+    - wary of a pirate or a killer;
+    - a warning that security or the navy are asking after you.
+  - Anyone not hostile adds a true tip: a port in this system short of
+    something in your hold ("If that is wine in your hold, Halden Depot is
+    crying out for it"), or short of anything at all.
+  - If there is nothing true to say, nobody comes. E talks to them as to
+    anyone else.
+  - Staff, the law and your own crew never come over.
+  - npc.js `approach`; main.js `stepApproach`; probe
+    `tools/probe-approach.js`.
+- The ship is named as the game names her elsewhere (`shipName`).
+- `src/concourse.js` (`Concourse`), pure; main.js `updateConcourse` and
+  `drawInfoBoards`. `test/concourse.test.js` (31). Probes:
+  `tools/probe-concourse.js`, `tools/probe-approach.js`.
+- Not in this slice: sound (that waits on Astra's answer about generated or
+  recorded), and wanted posters of other people (the game keeps bounties
+  only for you).
+
+### Fixed (2026-11-18, the ramp flickered from inside the ship)
+
+Astra: "the ramp into the station has flickering textures when looking down
+it from inside the ship". Walking aboard while berthed, the view drew both
+the walk hangar (down her ramp, out of her windows) and the station model.
+That was harmless while the walk hangar was a box of her own size inside
+the model's bay; since the hangar became the berth itself (below), its floor
+and walls lie exactly on the bay's, and the two fought beside the ramp.
+
+- **On foot in a berth hangar the station model is not drawn**, as the chase
+  camera and the seat already did not draw it (main.js `hangarAboard`).
+- Checked in the real build (tools/probe-rampflicker.js): the comb pattern
+  either side of the ramp is gone and two frames are identical. The hangar
+  floor past the ramp now reads darker - the model's brighter floor had been
+  showing through it.
+
+### Added (2026-11-18, "Last time on..." when you pick a career back up)
+
+Astra liked the idea of a recap on loading a career. A card over the stopped
+world, once per launch on Resume and on every slot load: where you are, the
+ship and the money, open contracts (overdue first, each with its live
+distance and trip time), hands outside or adrift, bounties by faction,
+favours owed either way, and the last few journal lines with how long ago.
+A section with nothing to say is left out; a career with nothing on any list
+gets no card. Any key or a click closes it.
+
+- `src/recap.js` (`Recap.build`) reads only through the functions the other
+  screens use (`Missions.reach`, `Outside.statusOf`, `Journal.debts` and
+  `entries`), so it cannot disagree with them, and writes nothing.
+- A page of the pause menu (main.js `openRecap`, `drawRecapPage`), so the
+  world is stopped while you read it.
+- `test/recap.test.js` (13). Probe: `tools/probe-recap.js`.
+
+### Added (2026-11-18, missions say how far away the target is)
+
+Astra: "I also want the missions to describe how far away the target is."
+Every row on the F7 board and every active contract now has a line: the
+distance from where your ship is now and the trip time, or light years for
+another system ("8.1 ly away, in the Cyynx system").
+
+- **Live, not written into the text**: planets move, and a number fixed when
+  the job was posted is wrong by the time you have flown half of it.
+- **The time is the intercept pip's own solve** (main.js `etaTo`, published
+  as `MissionEta`): the faster of cruise and thrusters, as you would fly it,
+  with the drive assumed even on the clamps. The first draft used a
+  flip-and-burn on thrusters and said "2.2 days" for a hop the cruise drive
+  makes in a minute. Cached 3 s per port and at most one fresh solve every
+  40 ms; measured 0.2 ms a solve.
+- Rows on the board are one line taller, so a long board shows one row
+  fewer before it is cut off.
+- `Missions.reach(G, m)`; `test/reach.test.js` (11).
+
 ### Fixed (2026-11-18, nothing fires on the rail)
 
 Astra, on the lift at Threshold: jets showing "when nothing should be

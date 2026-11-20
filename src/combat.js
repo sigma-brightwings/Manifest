@@ -6368,6 +6368,56 @@
     return cost;
   }
 
+  /* ---- WORKING IT OFF (2026-11-18) -------------------------------------------
+   * Astra: "security should detain you when you're wanted, but if you don't
+   * have enough money to pay your fine that shouldn't be game breaking,
+   * instead, the option to run missions for that station/faction until
+   * your fine is paid off, and the missions pay half as much."
+   *
+   * So a fine you cannot pay becomes a debt to that faction, of exactly
+   * what settling it would have cost (the same 1.6x, or 1.2x for a
+   * fugitive turning themselves in). Agreeing to it clears the bounty and
+   * the fugitive flag at once - you are on terms with them, their ports
+   * open and their police stop asking - and from then on every contract
+   * for that faction pays you half; the other half goes to the debt until
+   * it is gone. Nothing else changes: their standing still moves the way
+   * a contract moves it.
+   *
+   * `G.workoff[fac]` = credits still owed. Saved (save.js). */
+  function settleCost(G, faction) {
+    var owed = (G.wanted || {})[faction] || 0;
+    var fug = G.fugitive && G.fugitive.faction === faction;
+    if (fug && !owed) owed = G.fugitive.amount || 0;
+    return owed ? Math.round(owed * (fug ? 1.2 : 1.6)) : 0;
+  }
+  function workOff(G, faction) {
+    var cost = settleCost(G, faction);
+    if (!cost) return 0;
+    G.workoff = G.workoff || {};
+    G.workoff[faction] = (G.workoff[faction] || 0) + cost;
+    if (G.wanted) delete G.wanted[faction];
+    if (G.fugitive && G.fugitive.faction === faction) G.fugitive = null;
+    jot(G, 'law', 'Agreed to work off ' + cost + ' cr owed to ' + facName(G, faction) +
+        ': their contracts pay half until it is cleared');
+    return cost;
+  }
+  function workOffOwed(G, faction) { return Math.round((G.workoff || {})[faction] || 0); }
+  /* A contract fee for `faction`: what you keep, what went to the debt, and
+   * what is left. The debt takes half (rounded up), never more than it is
+   * owed, so the last contract pays you the rest. */
+  function garnish(G, faction, pay) {
+    var owed = (G.workoff || {})[faction] || 0;
+    if (!(owed > 0) || !(pay > 0)) return { kept: pay, took: 0, left: 0 };
+    var take = Math.min(owed, Math.ceil(pay / 2));
+    var left = Math.max(0, Math.round(owed - take));
+    if (left > 0) G.workoff[faction] = left;
+    else {
+      delete G.workoff[faction];
+      jot(G, 'law', 'Worked off the debt to ' + facName(G, faction) + '. Their contracts pay in full again');
+    }
+    return { kept: pay - take, took: take, left: left };
+  }
+
   /* ---- searches ----------------------------------------------------------
    * Sim.updateEncounters hands back a one-shot `scanNow` the instant a
    * police patrol has held alongside long enough to inspect you — no
@@ -10341,6 +10391,7 @@
     capitalShadow: capitalShadow, CAPITAL_WATCH: CAPITAL_WATCH,
     contrabandAboardFor: contrabandAboardFor,
     dockRefused: dockRefused, dockRefusal: dockRefusal, payBounty: payBounty,
+    settleCost: settleCost, workOff: workOff, workOffOwed: workOffOwed, garnish: garnish,
     demandFrom: demandFrom, syndicateStanding: syndicateStanding,
     /* Boarding part 3 (2026-10-31): her drive, her nerve. */
     demandSurrender: demandSurrender, surrenderOdds: surrenderOdds, disableNpc: disableNpc,

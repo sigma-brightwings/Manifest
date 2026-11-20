@@ -686,7 +686,10 @@
    * contract types cannot drift apart on any of the three. */
   function pay(G, m, cr, hooks, line) {
     var M = global.Missions;
-    G.ship.credits += cr;
+    /* Through the one place a fine being worked off takes its half
+     * (missions.js creditFor, 2026-11-18). */
+    var g = M && M.creditFor ? M.creditFor(G, m, cr) : (G.ship.credits += cr, { note: '' });
+    line = line + (g.note || '');
     if (M && M.bumpStanding) M.bumpStanding(G, m.faction, STANDING_WIN[m.type] || 3);
     if (global.Tutorial) global.Tutorial.note(G, 'contract', { id: m.id, pay: cr });
     jot(G, line);
