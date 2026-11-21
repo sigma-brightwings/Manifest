@@ -125,8 +125,21 @@ check('none is left flagged coastal', coastalLeft === 0, coastalLeft + ' left');
  *        them. A 6% drift in a count of this size is the expected shape
  *        of re-rolling the whole stellar population; the pass itself is
  *        untouched, and every other check in this file still holds.
+ *   223  stars stage 3 (2026-11-20): the living moons under warm giants
+ *        are new worlds with new pads (ids b0cp*), and 9 of those pads
+ *        have nowhere dry to stand. The 214 older platforms are the same
+ *        ports as before; the bit-for-bit checks above still hold.
+ *   233  resorts (2026-11-20, worlds worth visiting slice 3): a postcard
+ *        world short of two ground ports gets one, built last, and 10 of
+ *        them have only the sea to stand on (ids <world>rs). Every older
+ *        platform is the same port.
  */
-check('the kawartha count is the one the inland pass reported (214)', platforms.length === 214, String(platforms.length));
+check('the kawartha count is the one the inland pass reported (233)', platforms.length === 233, String(platforms.length));
+var onCompanion = platforms.filter(function (x) { return /^b0cp/.test(x.p.id); }).length;
+var resortsAtSea = platforms.filter(function (x) { return x.p.resort; }).length;
+check('the platforms added since 214 are the companions\' moons\' and the resorts\'',
+      onCompanion + resortsAtSea === 233 - 214,
+      onCompanion + ' on companion moons, ' + resortsAtSea + ' resorts');
 check('only on water, never on lava', waterOnly);
 check('never on a desert: a salt basin is ground, and its ports stay buried', !platforms.some(function (x) { return x.p.parentBody.type === 'desert'; }) &&
       noDesertCoastal, 'desert pads flagged coastal anywhere: ' + (noDesertCoastal ? 0 : 'some'));

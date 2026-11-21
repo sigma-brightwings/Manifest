@@ -52,7 +52,7 @@ var GROUPS = {
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
     'test/magnetosphere.test.js', 'test/magnetometer.test.js',
-    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js',
+    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js', 'test/multiples.test.js',
     'test/saveroundtrip.test.js'
   ],
   render: ['test/render.test.js'],
@@ -80,24 +80,24 @@ var GROUPS = {
     'test/rendezvous.test.js', 'test/hunters.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
-    'test/wars.test.js', 'test/workoff.test.js'
+    'test/wars.test.js', 'test/workoff.test.js', 'test/scars.test.js', 'test/conversions.test.js', 'test/milsats.test.js'
   ],
   economy: [
     'test/economy.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
     'test/shiptrade.test.js', 'test/analysers.test.js', 'test/farms.test.js',
     'test/growth.test.js', 'test/construction.test.js', 'test/stations.test.js',
     'test/city-sites.test.js', 'test/upkeep.test.js', 'test/parcel.test.js',
-    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js',
-    'test/catalogue.test.js', 'test/lore.test.js'
+    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js', 'test/comsats.test.js', 'test/icons.test.js', 'test/islands.test.js',
+    'test/appeal.test.js', 'test/tourism.test.js', 'test/resorts.test.js', 'test/seams.test.js', 'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [
     'test/arcs.test.js', 'test/patronage.test.js', 'test/fieldwork.test.js',
     'test/guild.test.js', 'test/dawdle.test.js', 'test/poaching.test.js',
-    'test/captains.test.js', 'test/captain-stories.test.js',
+    'test/captains.test.js', 'test/captain-stories.test.js', 'test/shipai.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',
     'test/journal.test.js', 'test/recap.test.js', 'test/reach.test.js', 'test/concourse.test.js', 'test/fixer.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',
     'test/cruisedrive.test.js', 'test/intercept.test.js'

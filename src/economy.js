@@ -317,6 +317,20 @@
   }
   registerContraband();
 
+  /* ---- RTG fuel (2026-11-20, comsats.js slice 2) -------------------------
+   * Astra, 2026-11-19: mil-sats and com-sats burn the same fuel, and it is
+   * refined out of the mildrive's waste - "it is only the mildrive that
+   * uses fuel that produces waste." An isotope refinery buys the waste and
+   * sells this. Registered after the fact, like contraband, so no market,
+   * tier order or route the generator builds moves: it enters a market only
+   * where comsats.js adds it (a reprocessing port's production, at the time
+   * the system is handed out). Legal, as fissiles are: nothing on the
+   * contraband ladder sits below them, so this does not either. */
+  var RTG_FUEL = { id: 'rtgfuel', name: 'RTG fuel', tier: 3, base: 1400, cat: 'special', rtg: true,
+                   shelfDays: 10, shelfMax: 24,
+                   blurb: "Isotope pellets in shielded cans, bred out of other people's drive waste. What keeps a relay talking and a defence platform awake, years at a time." };
+  BY_ID[RTG_FUEL.id] = RTG_FUEL;
+
   var FUEL_ID = 'hydrogen';
   var SPREAD = 0.09;            // bid/ask gap, fraction of mid price
   var LEDGER_HALFLIFE = 4 * DAY; // how fast a market forgets what you did
@@ -2355,8 +2369,11 @@
     for (var i = 0; i < ports.length; i++) {
       var port = ports[i], mkt = port.market;
       if (!mkt || !mkt.order) continue;
+      /* `opts.seenAt(port)`: when this port's figures were last known
+       * (an island's, by courier - comsats.js). Absent: live. */
+      var seen = opts && opts.seenAt ? opts.seenAt(port) : t, past = seen < t - 1;
       for (var j = 0; j < mkt.order.length; j++) {
-        var cid = mkt.order[j], p = price(port, cid, t);
+        var cid = mkt.order[j], p = past ? priceAt(port, cid, seen) : price(port, cid, t);
         if (!p) continue;
         var com = BY_ID[cid];
         if (com.waste) {

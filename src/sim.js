@@ -965,19 +965,81 @@
    * Softened at 0.35 radii so a trajectory that clips a body's centre
    * produces a large-but-finite force rather than NaN; impacts are detected
    * separately and honestly. */
+  /* WHAT THE SHIP FEELS IS WHAT THE RAILS ASSUME (stars stage 3, 2026-11-20;
+   * claude/stars-and-systems-plan.md 2.3 - doctrine 3 applied to the stars).
+   *
+   * Every planet of a close pair rides a Kepler rail about a POINT MASS at
+   * the barycentre. A ship that summed both stars where they really are
+   * would feel the pair's quadrupole - about 1% of the stellar pull at a
+   * planet's distance - and the planet would not: a ship parked round a
+   * circumbinary world would drift off it by hundreds of km a day. So past
+   * MONO_IN binary separations from the pair the two stars blend into one
+   * point at their barycentre, completely by MONO_OUT. No planet sits inside
+   * 2.8 separations (the circumbinary cut), so near any world the ship
+   * feels exactly the mass its rail circles; close to the pair it feels the
+   * stars where they are.
+   *
+   * A DISTANT companion is the same idea from the other side: the planets'
+   * rails ignore her (she is hundreds of AU off and the whole inner system
+   * falls toward her together), so until a ship is COMP_IN of the way from
+   * the root to her she ignores her too, and feels her fully past COMP_OUT,
+   * out where her own well and her own worlds are.
+   *
+   * With one star neither applies: k is exactly 1 and every float is the
+   * float it was. */
+  var MONO_IN = 1.5, MONO_OUT = 2.5, COMP_IN = 0.4, COMP_OUT = 0.6;
+  function smooth01(lo, hi, x) {
+    if (x <= lo) return 0;
+    if (x >= hi) return 1;
+    var u = (x - lo) / (hi - lo);
+    return u * u * (3 - 2 * u);
+  }
   function acceleration(pos, sys, t, out) {
     var ax = 0, ay = 0, az = 0;
     var list = sys.gravBodies;
+    var pair = sys.pairBary || null, comp = sys.companion || null;
+    var wMono = 0, wComp = 1, pp = null;
+    if (pair && pair.separation > 0) {
+      pp = bodyPosition(pair, sys, t);
+      wMono = smooth01(MONO_IN * pair.separation, MONO_OUT * pair.separation, V.dist(pos, pp));
+    }
+    if (comp && comp.orbit) {
+      /* Measured as a share of the way from the root to her, not in AU: her
+       * orbit can be eccentric, and the stable zones of both ends (each
+       * under 0.37 of the separation, Holman & Wiegert) must stay outside
+       * the blend wherever she is. */
+      var rootP = bodyPosition(sys.root, sys, t), compP = bodyPosition(comp, sys, t);
+      var rr = V.dist(pos, rootP), rc = V.dist(pos, compP);
+      wComp = smooth01(COMP_IN, COMP_OUT, rr / Math.max(1e-9, rr + rc));
+      /* And out by her, the frame's own fall. Her rail is the RELATIVE orbit
+       * (mu = root + her), so she and her worlds fall toward the root as if
+       * it weighed both; a ship out there must too, or she parks beside a
+       * world of hers and drifts off it. */
+      if (wComp > 0) {
+        var cx = rootP.x - pos.x, cy = rootP.y - pos.y, cz = rootP.z - pos.z;
+        var c2 = cx * cx + cy * cy + cz * cz, cd = Math.sqrt(c2);
+        var cf = comp.mu / (c2 * cd) * wComp;
+        ax += cx * cf; ay += cy * cf; az += cz * cf;
+      }
+    }
     for (var i = 0; i < list.length; i++) {
       var b = list[i];
+      var k = b.inPair ? 1 - wMono : b.distant ? wComp : 1;
+      if (k <= 0) continue;
       var bp = bodyPosition(b, sys, t);
       var dx = bp.x - pos.x, dy = bp.y - pos.y, dz = bp.z - pos.z;
       var d2 = dx * dx + dy * dy + dz * dz;
       var soft = b.radius * 0.35;
       if (d2 < soft * soft) d2 = soft * soft;
       var d = Math.sqrt(d2);
-      var f = b.mu / (d2 * d); // mu / d^3, ready to multiply by the vector
+      var f = b.mu / (d2 * d) * k; // mu / d^3, ready to multiply by the vector
       ax += dx * f; ay += dy * f; az += dz * f;
+    }
+    if (wMono > 0) {
+      var mx = pp.x - pos.x, my = pp.y - pos.y, mz = pp.z - pos.z;
+      var m2 = mx * mx + my * my + mz * mz, md = Math.sqrt(m2);
+      var mf = pair.mu / (m2 * md) * wMono;
+      ax += mx * mf; ay += my * mf; az += mz * mf;
     }
     if (out) { out.x = ax; out.y = ay; out.z = az; return out; }
     return { x: ax, y: ay, z: az };
@@ -1025,7 +1087,9 @@
   function frameBody(pos, sys, t) {
     var dom = dominantBody(pos, sys, t);
     var b = dom;
-    while (b && (b.kind === 'star' || b.kind === 'barycentre') &&
+    /* A DISTANT companion (stage 3) circles the whole system from hundreds
+     * of AU: near her you are in her well, never the pair's. */
+    while (b && (b.kind === 'star' || b.kind === 'barycentre') && !b.distant &&
            b.parentBody && b.parentBody.kind === 'barycentre') {
       var bc = b.parentBody;
       if (!(bc.separation > 0) ||

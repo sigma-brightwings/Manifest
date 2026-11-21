@@ -180,6 +180,33 @@
     } catch (e) { return false; }
   }
 
+  /* ---- A SAVE AS A FILE (2026-11-19) ------------------------------------
+   * Astra asked for a test career built for her. Slots live in the
+   * browser's storage, which nothing outside the game can write to, so a
+   * career goes in and out as a file: the slot's own record, as JSON. The
+   * same record a slot holds, so it is checked the same way - a file from
+   * another build's save VERSION is refused rather than half-loaded. */
+  function recordText(G, label) {
+    return JSON.stringify({ v: VERSION, label: String(label || autoLabel(G)).slice(0, 40),
+                            meta: describe(G), data: snapshot(G) });
+  }
+  /* Parse a file's text into a slot record, or say why not. */
+  function parseRecord(text) {
+    var rec;
+    try { rec = JSON.parse(text); } catch (e) { return { ok: false, why: 'that file is not a Manifest save' }; }
+    if (!rec || typeof rec !== 'object' || !rec.data || !rec.meta) return { ok: false, why: 'that file is not a Manifest save' };
+    if (rec.v !== VERSION || rec.data.v !== VERSION) {
+      return { ok: false, why: 'that save is from another version of the game (save v' + rec.v + ', this build reads v' + VERSION + ')' };
+    }
+    return { ok: true, rec: rec };
+  }
+  /* Put a parsed record into slot n. */
+  function writeRecord(n, rec) {
+    var st = storage();
+    if (!st || !slotValid(n)) return false;
+    try { st.setItem(slotKey(n), JSON.stringify(rec)); return true; } catch (e) { return false; }
+  }
+
   function readSlot(n) {
     var st = storage();
     if (!st || !slotValid(n)) return null;
@@ -371,7 +398,7 @@
           return out;
         })(),
         missileSeq: s.missileSeq,
-        cargo: s.cargo, credits: s.credits, drones: s.drones || 0,
+        cargo: s.cargo, credits: s.credits, drones: s.drones || 0, comsats: s.comsats || 0,
         hot: s.hot || {}, hotDrones: s.hotDrones || 0,
         /* WHO IS IN THE BACK. Seats are derived from the fitting and come
          * back on their own; people are not, so they are written. A save
@@ -414,6 +441,9 @@
          * it was doing before the update. No version bump: a bump does not
          * migrate old saves, it deletes them. */
         groups: s.groups || {},
+        /* Hardpoints cut out of her hold (combat.js HOLD INTO A HARDPOINT,
+         * 2026-11-20). Additive: an older career has none, which it had. */
+        conv: s.conv || null,
         /* Named things belong to the pilot, not the hull. */
         reg: s.reg || null, shipName: s.shipName || null,
         /* WHAT SHE IS PRETENDING TO BE (captains.js, step 2). Additive: an
@@ -578,6 +608,15 @@
       drones: G.drones || [],
       /* Outposts the drones built (outposts.js): plain records on the rails. */
       outposts: G.outposts || [],
+      /* What you changed about the world's digs (digs.js): supplies delivered. */
+      digs: G.digs || {},
+      /* Your com-sats in orbit (comsats.js): orbits on the rails. */
+      comsats: G.comsats || [],
+      /* Relay lapses you fuelled (comsats.js): the only RTG state. */
+      rtgFixed: G.rtgFixed || {},
+      /* Defence platforms you have damaged or destroyed (milsats.js):
+       * their hull, their death, how recently you angered them. */
+      milsats: G.milsats || {},
       /* Other prospectors' drones are derived from the seed; only what
        * YOU did to them is written, and the thefts not yet reported. */
       npcDrones: G.npcDrones || {},
@@ -678,6 +717,13 @@
     /* The arms are not saved, so nor is a crate in them: it is back in her ring. */
     G.stations.forEach(function (st) { if (st) st.held = null; });
     if (global.Stations && G.sys && G.here) global.Stations.inject(G, G.sys, G.here.id);
+    /* And the world's digs, for the same reason (bug hunt 2026-11-21): a
+     * save docked at a dig's port came back undocked, at the foot of its
+     * shaft. The start system was built at t = 0, before any dig opened,
+     * and G.digs (supplies that bring a dig forward) was only put back
+     * after the system had been entered. Both before the dock, now. */
+    G.digs = (data.digs && typeof data.digs === 'object' && !Array.isArray(data.digs)) ? data.digs : {};
+    if (global.Digs && G.sys && G.here) global.Digs.inject(G, G.sys, G.here.id);
 
     for (var i = 0; i < (data.visited || []).length; i++) G.visited[data.visited[i]] = true;
     /* An old save has no charted list, and everywhere it had BEEN is
@@ -812,11 +858,13 @@
     s.missileSeq = d.missileSeq;
     s.cargo = d.cargo || {}; s.credits = d.credits;
     s.drones = d.drones || 0;
+    s.comsats = d.comsats || 0;
     s.hot = (d.hot && typeof d.hot === 'object') ? d.hot : {};
     s.hotDrones = d.hotDrones || 0;
     s.passengers = d.passengers || 0;
     s.hullId = d.hullId; s.hullHp = d.hullHp;
     if (d.meshKind) s.meshKind = d.meshKind;
+    s.conv = (d.conv && Array.isArray(d.conv.list)) ? d.conv : null;
     s.gun = d.gun; s.turret = d.turret; s.shield = d.shield;
     s.heatshield = d.heatshield || null;
     s.shieldHp = d.shieldHp || 0; s.missiles = d.missiles || 0;
@@ -911,6 +959,10 @@
     G.claims = (data.claims && typeof data.claims === 'object') ? data.claims : {};
     G.drones = Array.isArray(data.drones) ? data.drones : [];
     G.outposts = Array.isArray(data.outposts) ? data.outposts : [];
+    G.digs = (data.digs && typeof data.digs === 'object' && !Array.isArray(data.digs)) ? data.digs : {};
+    G.comsats = Array.isArray(data.comsats) ? data.comsats : [];
+    G.rtgFixed = (data.rtgFixed && typeof data.rtgFixed === 'object' && !Array.isArray(data.rtgFixed)) ? data.rtgFixed : {};
+    G.milsats = (data.milsats && typeof data.milsats === 'object' && !Array.isArray(data.milsats)) ? data.milsats : {};
     G.npcDrones = (data.npcDrones && typeof data.npcDrones === 'object') ? data.npcDrones : {};
     G.thefts = Array.isArray(data.thefts) ? data.thefts : [];
     G.shattered = (data.shattered && typeof data.shattered === 'object') ? data.shattered : {};
@@ -1016,7 +1068,8 @@
     loadPrefs: loadPrefs, savePrefs: savePrefs,
     SLOT_COUNT: SLOT_COUNT,
     DEPRECATED: DEPRECATED, slots: slots, readSlot: readSlot,
-    writeSlot: writeSlot, clearSlot: clearSlot, autoLabel: autoLabel, describe: describe
+    writeSlot: writeSlot, clearSlot: clearSlot, autoLabel: autoLabel, describe: describe,
+    recordText: recordText, parseRecord: parseRecord, writeRecord: writeRecord
   };
   global.Save = Save;
   if (typeof module !== 'undefined' && module.exports) module.exports = Save;

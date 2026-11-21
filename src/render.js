@@ -1128,6 +1128,8 @@
       var at = [mt.at[0] * (1 + 0.5 * wrap), mt.at[1], mt.at[2]];
       /* A wrapped mount stepped outboard stays inside her box. */
       if (bare.span) at[0] = Math.max(-0.45 * bare.span[0], Math.min(0.45 * bare.span[0], at[0]));
+      /* Concealed: flush hull, and the shot leaves from the mount itself. */
+      if (guns[h] === '~') { m._muzzles.push([[at[0], at[1], at[2] + 0.1 * mt.len]]); continue; }
       var gun = guns[h] ? itemMesh(guns[h], true) : null;
       if (!gun || !gun.foot) {
         /* An empty acceptor: a plate where a gun bolts on, with a lit
@@ -1174,6 +1176,11 @@
     var keys = C.slotKeys(ship), fit = ship.fit || {}, out = [];
     for (var i = 0; i < keys.length; i++) {
       if (C.slotType(keys[i]) !== 'hardpoint') continue;
+      /* A mount still behind its panel (combat.js HOLD INTO A HARDPOINT)
+       * shows nothing at all - not even the acceptor plate - until the
+       * first shot opens it. '~' keeps its place in the order, and in the
+       * cache key, so its muzzle is still where the gun is. */
+      if (C.isHiddenKey && C.isHiddenKey(ship, keys[i])) { out.push('~'); continue; }
       var id = fit[keys[i]], it = id && C.EQUIPMENT && C.EQUIPMENT[id];
       out.push(it && (it.kind === 'gun' || it.slot === 'hardpoint') && itemKey(id) ? id : null);
     }
@@ -3458,6 +3465,79 @@
     /* A floor, because a couple of the imported models are nearly flat on
      * one axis and a zero semi-axis is a degenerate surface. */
     return [Math.max(hx, 0.02), Math.max(hy, 0.02), Math.max(hz, 0.02)];
+  }
+
+  /* ---- where a scar sits (scars.js, 2026-11-20) --------------------------
+   * The hull a kind draws, the same pick shellMesh makes. */
+  function hullMeshFor(kind) {
+    var k = kind || 'courier';
+    return k.indexOf('hull:') === 0 ? hullPreviewMesh(k.slice(5))
+                                    : (shipMeshes()[k] || shipMeshes().courier);
+  }
+  /* The nearest face a ray meets, in the mesh's own units: Moller-Trumbore
+   * over every triangle. Only ever asked once per shot or once per scar per
+   * hull kind, never per frame, so the plain loop is the right price.
+   * Returns { t, p: [x,y,z], n: [x,y,z] (the face normal, turned to face
+   * back along the ray) } or null. */
+  function rayMesh(mesh, o, d) {
+    if (!mesh || !mesh.f || !mesh.v) return null;
+    var best = null, bt = Infinity, v = mesh.v;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i];
+      for (var k = 1; k + 1 < f.length; k++) {
+        var a = v[f[0]], b = v[f[k]], c = v[f[k + 1]];
+        var e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+        var e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+        var px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+        var det = e1x * px + e1y * py + e1z * pz;
+        if (det > -1e-12 && det < 1e-12) continue;
+        var inv = 1 / det;
+        var tx = o[0] - a[0], ty = o[1] - a[1], tz = o[2] - a[2];
+        var u = (tx * px + ty * py + tz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        var qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+        var w = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        var tt = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (tt > 1e-9 && tt < bt) {
+          bt = tt;
+          var nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+          var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+          nx /= nl; ny /= nl; nz /= nl;
+          if (nx * d[0] + ny * d[1] + nz * d[2] > 0) { nx = -nx; ny = -ny; nz = -nz; }
+          best = { t: tt, p: [o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt], n: [nx, ny, nz] };
+        }
+      }
+    }
+    return best;
+  }
+  /* A ship scar's place on the plating: in from three hull lengths out
+   * along its direction until the ray meets the hull. A ray that misses
+   * (a direction past a thin hull's edge) falls back to the box-ish shell
+   * the shield is fitted to, pulled in to sit on the plating. Remembered on
+   * the scar per hull kind - a hull does not change shape mid-fight. */
+  function hullScarPoint(kind, sc) {
+    if (sc._pk === kind && sc._p) return sc;
+    var n = sc.n, o = [n.x * 3, n.y * 3, n.z * 3], d = [-n.x, -n.y, -n.z];
+    var hit = rayMesh(hullMeshFor(kind), o, d);
+    if (hit) { sc._p = hit.p; sc._n = hit.n; }
+    else {
+      var e = halfExtents(hullMeshFor(kind)), P = SHELL_P;
+      var tt = Math.pow(Math.pow(Math.abs(n.x / e[0]), P) + Math.pow(Math.abs(n.y / e[1]), P) +
+                        Math.pow(Math.abs(n.z / e[2]), P), -1 / P) * 0.92;
+      sc._p = [n.x * tt, n.y * tt, n.z * tt]; sc._n = [n.x, n.y, n.z];
+    }
+    sc._pk = kind;
+    return sc;
+  }
+  /* The mesh a port's hull is drawn with (drawStationModel's pick, doors
+   * shut), for a shot to land on. */
+  function portHullMesh(model) {
+    var d = portDoors(model);
+    if (d && d.hull) return d.hull;
+    var meshes = stationMeshes(), mesh = meshes[model];
+    if (!mesh) { var lp = libPort(model); if (lp && lp.shell && lp.shell.f.length) mesh = lp.shell; }
+    return mesh || meshes.orbital;
   }
 
   function shellMesh(kind) {
@@ -17373,14 +17453,17 @@
 
       // Transmission tint. Source-over on purpose: real glass takes a
       // little light away, and the sky behind should sit slightly back.
-      ctx.fillStyle = 'rgba(96,150,150,0.055)';
+      /* LIGHTER (2026-11-20, Astra: "glass tint is too dark"): the tint
+       * from 0.055 to 0.025 and the edge darkening from 0.42 to 0.16, so a
+       * ship or a station seen through the pane keeps its own colours. */
+      ctx.fillStyle = 'rgba(96,150,150,0.025)';
       ctx.fillRect(b.minX, b.minY, b.w, b.h);
 
       // Thickness: darker toward the frame, where the path length is longer.
-      var vig = ctx.createRadialGradient(b.cx, b.cy, Math.min(b.w, b.h) * 0.18,
-                                         b.cx, b.cy, Math.max(b.w, b.h) * 0.72);
+      var vig = ctx.createRadialGradient(b.cx, b.cy, Math.min(b.w, b.h) * 0.25,
+                                         b.cx, b.cy, Math.max(b.w, b.h) * 0.75);
       vig.addColorStop(0, 'rgba(6,14,18,0)');
-      vig.addColorStop(1, 'rgba(6,14,18,0.42)');
+      vig.addColorStop(1, 'rgba(6,14,18,0.16)');
       ctx.fillStyle = vig;
       ctx.fillRect(b.minX, b.minY, b.w, b.h);
 
@@ -19101,6 +19184,7 @@
      * for the same reason boltRibbon is: they are the parts a test can hold
      * to account without a canvas. */
     shellMesh: shellMesh, drawShellField: drawShellField,
+    hullMeshFor: hullMeshFor, rayMesh: rayMesh, hullScarPoint: hullScarPoint, portHullMesh: portHullMesh,
     shieldTint: shieldTint, shellFlare: shellFlare,
     drawReentryPlasma: drawReentryPlasma, plasmaRGB: plasmaRGB, plasmaVis: plasmaVis,
     SHIELD_STANDOFF: SHIELD_STANDOFF, SHIELD_FLASH_LIFE: SHIELD_FLASH_LIFE,

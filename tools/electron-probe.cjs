@@ -78,9 +78,19 @@ function send(method, params) {
   /* The in-page helpers: shots go back out through a binding. */
   await send('Runtime.addBinding', { name: '__probeShot' });
   await send('Runtime.addBinding', { name: '__probeKey' });
+  /* A file out of the page (2026-11-19): `file(name, text)` writes text
+   * into outdir, for a probe that builds something to keep (a test save). */
+  await send('Runtime.addBinding', { name: '__probeFile' });
   const shots = [];
   ws.addEventListener('message', async ev => {
     const m = JSON.parse(ev.data);
+    if (m.method === 'Runtime.bindingCalled' && m.params.name === '__probeFile') {
+      try {
+        const f = JSON.parse(m.params.payload);
+        fs.writeFileSync(path.join(outdir, path.basename(f.name)), f.text, 'utf8');
+        console.log('  file ' + path.basename(f.name) + ' (' + f.text.length + ' chars)');
+      } catch (e) { console.log('  file failed: ' + e.message); }
+    }
     if (m.method === 'Runtime.bindingCalled' && m.params.name === '__probeShot') shots.push(m.params.payload);
     if (m.method === 'Runtime.bindingCalled' && m.params.name === '__probeKey') {
       /* A real key press, through the input pipeline the player uses. */
@@ -92,7 +102,8 @@ function send(method, params) {
     }
   });
   const body = '(async function(){ const log=(...a)=>console.warn("[probe] "+a.join(" ")); const wait=ms=>new Promise(r=>setTimeout(r,ms));' +
-               ' const shot=async n=>{ __probeShot(n); await wait(600); }; const key=async k=>{ __probeKey(k); await wait(300); };' + script + '})()';
+               ' const shot=async n=>{ __probeShot(n); await wait(600); }; const key=async k=>{ __probeKey(k); await wait(300); };' +
+               ' const file=async (n,t)=>{ __probeFile(JSON.stringify({name:n,text:t})); await wait(800); };' + script + '})()';
   const pump = setInterval(async () => {
     while (shots.length) {
       const name = shots.shift();

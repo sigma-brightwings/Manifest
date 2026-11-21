@@ -507,7 +507,10 @@
           : body.habitable ? 'HZ' : '',
       air: body.composition || (body.atmosphere ? 'thin atmosphere' : 'no atmosphere'),
       moons: body.kind === 'planet' && row ? row.moons : 0,
-      ports: row ? (body.kind === 'planet' ? row.ports : null) : null,
+      /* A moon's own docks, counted off her children: the manifest row is
+       * her planet's, and every moon card used to say 0 whatever was there. */
+      ports: body.kind === 'planet' ? (row ? row.ports : null)
+           : (body.children || []).filter(function (c) { return c.docking || c.surface; }).length,
       gravity: gSurf,
       dayHours: per ? per / 3600 : null,
       retrograde: !!(per && per < 0),
@@ -515,8 +518,18 @@
        * is not the interesting fact; that it never ends is. */
       day: body.kind === 'planet' && body.tidallyLocked ? 'tidally locked' : null,
       tiltDeg: body.rotation ? body.rotation.tilt * 180 / Math.PI : null,
-      notes: [BAND_NOTES[body.habitableBand], body.lifeNote, body.cultureNote].filter(function (s) { return !!s; })
+      /* Would anyone come here for the pleasure of it (appeal.js)? First,
+       * because it is the line a passenger agent would read first. */
+      appeal: global.Appeal ? global.Appeal.of(sys, body) : null,
+      notes: [appealNote(sys, body), BAND_NOTES[body.habitableBand], body.lifeNote, body.cultureNote]
+        .filter(function (s) { return !!s; })
     };
+  }
+  function appealNote(sys, body) {
+    var A = global.Appeal, a = A ? A.of(sys, body) : null;
+    if (!a) return null;
+    var tier = a.tier.charAt(0).toUpperCase() + a.tier.slice(1);
+    return 'For visitors: ' + tier + (a.why.length ? ' - ' + a.why.slice(0, 4).join(', ') : '') + '.';
   }
 
   /* --- F3: local navigation ---------------------------------------------
@@ -545,7 +558,24 @@
     ctx.restore();
 
     var list = navList();
-    var rowH = 16, avail = Math.floor((colH - 40) / rowH);
+    /* THE KEY (icons.js): every shape and what it means, under the list -
+     * five to a row, room taken from the bottom of the list. */
+    var Ick = global.Icons, keyRows = Ick ? Math.ceil(Ick.LEGEND.length / 5) : 0, keyH = keyRows * 16 + 10;
+    var rowH = 16, avail = Math.floor((colH - 40 - keyH) / rowH);
+    if (Ick) {
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      var kx0 = pad + 12, ky0 = top + pad + colH - keyH + 4, kw = (listW - 24) / 5;
+      ctx.strokeStyle = 'rgba(74,151,176,0.35)';
+      ctx.beginPath(); ctx.moveTo(pad + 8, ky0 - 4); ctx.lineTo(pad + listW - 8, ky0 - 4); ctx.stroke();
+      Ick.LEGEND.forEach(function (lg, li) {
+        var kx = kx0 + (li % 5) * kw, ky = ky0 + 10 + Math.floor(li / 5) * 16;
+        Ick.draw(ctx, lg[0], kx + 4, ky - 4, 4.4, '#b4f0ff');
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText(lg[1], kx + 13, ky);
+      });
+      ctx.restore();
+    }
     var sel = -1, i;
     if (G.navTarget) {
       for (i = 0; i < list.length; i++) {
@@ -732,6 +762,11 @@
    * the row's. `ink` is the row's colour so the mark and the name agree. */
   function markAt(ctx, x, y, e, ink) {
     var cx = x + 4, cy = y - 4;
+    /* WHAT IT IS, by shape (icons.js, 2026-11-20): a port by who runs it
+     * and what it does, a hull by her flag and trade. Anything icons.js
+     * does not know keeps the mark below. */
+    var Ic = global.Icons, ik = Ic ? Ic.kindOf(e, G.sys) : null;
+    if (ik) { Ic.draw(ctx, ik, cx, cy, 4.8, ink); return; }
     ctx.save();
     ctx.fillStyle = ink;
     ctx.strokeStyle = ink;
@@ -767,7 +802,7 @@
       /* A ring with nothing in it - a bearing, not a thing. */
       ctx.beginPath(); ctx.arc(cx, cy, 3.6, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(cx, cy, 0.9, 0, Math.PI * 2); ctx.fill();
-    } else if (kind === 'authority' || kind === 'comsat') {
+    } else if (kind === 'authority' || kind === 'comsat' || kind === 'mysat') {
       /* A mast with two arcs coming off it: a frequency, not a place. */
       ctx.beginPath(); ctx.moveTo(cx, cy + 4); ctx.lineTo(cx, cy - 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(cx, cy - 2, 2.4, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
@@ -887,6 +922,20 @@
                  color: '#ffd36b' });
     }
 
+    /* YOUR COM-SATS (comsats.js): the cradle aboard and the ones in orbit,
+     * as a channel of your own. Range 0, with the other frequencies. */
+    var CsC = global.Comsats;
+    if (CsC && ((G.ship.comsats || 0) > 0 || CsC.sats(G).length)) {
+      var rch = CsC.reachHere(G, G.galaxy, G.here);
+      /* This system's uplink dark: the chain is broken here. */
+      var upD = G.here && G.here.factionId && CsC.uplinkDark(G, G.here.id, G.t);
+      out.push({ kind: 'mysat', obj: null, name: 'Your com-sats', range: 0,
+                 who: (G.ship.comsats || 0) + ' aboard, ' + CsC.sats(G).length + ' in orbit' +
+                      (rch ? (rch.on ? '  ·  LIVE, ' + rch.n + ' stars' : rch.dark ? '  ·  DARK - out of fuel' : '  ·  off your network here') : '') +
+                      (upD ? '  ·  uplink here DARK - chain broken' : ''),
+                 color: '#7dffb0' });
+    }
+
     /* Police channels, one per faction flying a flag here.
      *
      * Range 0 on purpose, so they sort to the top of a list that is
@@ -928,8 +977,19 @@
       if (!shown(b)) continue;
       var range = V.dist(Sim.bodyPosition(b, G.sys, G.t), G.ship.pos);
       var fac = G.sys.factionById && G.sys.factionById[b.faction];
+      /* An island (comsats.js): no relay can see it, so its news comes by
+       * courier. Said on its row, where you would look for it. */
+      var CsI = global.Comsats;
+      var starI = (G.here && G.here.id) || G.sys.starId;
+      var island = CsI && b.market && CsI.isIsland(G, G.sys, starI, b, G.t);
+      /* Why: its world's relays are dark (an RTG tender late), or simply
+       * none can see it from where they are. */
+      var darkI = island && b.parentBody ? CsI.darkSpan(G, starI, b.parentBody.id, G.t) : null;
       out.push({ kind: 'station', obj: b, name: b.name, range: range,
-                 who: b.market ? b.market.roleName : 'Station',
+                 who: (b.market ? b.market.roleName : 'Station') +
+                      (b.isotopeRefinery ? '  ·  isotope refinery' : '') +
+                      (darkI ? '  ·  ISLAND - relays dark, tender due day ' + Math.ceil(darkI.to / 86400)
+                       : island ? '  ·  ISLAND - no relay sees it' : ''),
                  color: fac ? fac.color : '#7dffb0' });
     }
     /* A quiet transfer you are close enough to be part of
@@ -1823,6 +1883,46 @@
       return opts;
     }
 
+    /* YOUR COM-SATS: launch one into the orbit you are flying, at your
+     * height; and where the ones you have are. */
+    if (c.kind === 'mysat') {
+      var CsO = global.Comsats, here0 = (G.here && G.here.id) || 'sys';
+      var lw = CsO.launchRefusal(G, G.sys, G.t);
+      var dom0 = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+      opts.push({
+        label: 'Launch a com-sat here',
+        enabled: !lw,
+        note: lw || 'round ' + dom0.name + ', at your height - your terminal into the relay network',
+        fn: function () {
+          var rl = CsO.launch(G, G.sys, here0, G.t, G.here && G.here.name);
+          say(rl.ok ? rl.text : 'Com-sat: ' + rl.why, rl.ok ? 8 : 5);
+          if (rl.ok && global.Save) global.Save.store(G);
+        }
+      });
+      /* Refuelling one: a tonne of RTG fuel, in orbit round its world. */
+      if (CsO.sats(G).length) {
+        var rf = CsO.refuelRefusal(G, G.sys, here0, G.t);
+        opts.push({
+          label: 'Refuel a com-sat',
+          enabled: !rf.why,
+          note: rf.why || 'the one over ' + rf.sat.bodyName + ' - ' + CsO.SAT_FUEL_T + ' t of RTG fuel, ' + CsO.SAT_LIFE + ' days',
+          fn: function () {
+            var rr = CsO.refuel(G, G.sys, here0, G.t);
+            say(rr.ok ? rr.text : 'Com-sat: ' + rr.why, rr.ok ? 7 : 5);
+            if (rr.ok && global.Save) global.Save.store(G);
+          }
+        });
+      }
+      CsO.sats(G).forEach(function (s) {
+        var live = CsO.satLive(s, G.t), left = Math.ceil((CsO.satFuelTo(s) - G.t) / 86400);
+        opts.push({ label: 'Com-sat over ' + s.bodyName, enabled: false,
+                    note: (s.star === here0 ? 'in this system' : 'at ' + (s.starName || s.star)) +
+                          ', ' + Math.round(s.a).toLocaleString('en-US') + ' km out  ·  ' +
+                          (live ? 'fuel for ' + left + ' days' : 'DARK - out of fuel'), fn: function () {} });
+      });
+      return opts;
+    }
+
     if (c.kind === 'crew') {
       var Sx = global.Stations, Cx = global.Construction;
       if (Cx.isCrawler(G.ship)) {
@@ -2275,6 +2375,21 @@
               : Cl.DRONE_PRICE + ' cr - ' + nd + ' aboard, ' + Cl.HOPPER + ' t hopper',
           fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
         });
+      }
+      /* A COM-SAT (comsats.js): your terminal into the relay network, sold
+       * where ships are built. Launched from the planetary scanner. */
+      var CsB = global.Comsats;
+      if (CsB && CsB.yardAt(c.obj)) {
+        var csWhy = CsB.buyRefusal(G, c.obj), ncs = G.ship.comsats || 0;
+        opts.push({
+          label: 'Buy com-sat',
+          enabled: !csWhy,
+          note: csWhy && !/^[\d,]+ cr$/.test(csWhy) ? csWhy
+              : CsB.SAT_PRICE.toLocaleString('en-US') + ' cr - ' + ncs + ' aboard; launch it from orbit on the planetary scanner',
+          fn: function () { var got = CsB.buy(G, c.obj); say(got.ok ? got.text : 'Com-sat: ' + got.why, 5); }
+        });
+      }
+      if (Cl && Sv) {
         /* A stolen drone, to the back room - only where there is one. */
         if ((G.ship.hotDrones || 0) > 0 && Cl.isFence && Cl.isFence(c.obj)) {
           var fdp = Cl.fenceDronePrice(G.sys);
@@ -3867,7 +3982,7 @@
     }
 
     var cardH = 0;
-    if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
+    if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s, port);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
     else if (G.yardTab === 'crew') drawYardCrew(ctx, x, w, row, s, port);
     else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
@@ -4030,6 +4145,7 @@
             function () {
               if (p.out) {
                 say('Not while ' + p.name + (p.out === 'hull' ? ' is out on the hull' :
+                    p.out === 'outpost' ? ' is down at the outpost - fetch them back first' :
                     ' is adrift - go and get them first'), 5);
                 return;
               }
@@ -4845,7 +4961,7 @@
   }
 
   /* --- FITTING: what is bolted on, and what it costs you ------------------ */
-  function drawYardFit(ctx, x, w, row, s) {
+  function drawYardFit(ctx, x, w, row, s, port) {
     var keys = Combat.slotKeys(s);
     var map = s.fit || {};
     var shown = 0;
@@ -4859,6 +4975,13 @@
       var type = Combat.slotType(key);
       var label = (Combat.SLOT_LABEL[type] || type).toUpperCase() + ' ' +
                   (parseInt(key.replace(/\D+/g, ''), 10) + 1);
+      /* One cut out of her hold says so, and a concealed one says whether
+       * its panel has opened yet (HOLD INTO A HARDPOINT). */
+      var convAt = convIndexOfKey(s, key);
+      if (convAt >= 0) {
+        label += Combat.convList(s)[convAt] === 'hidden'
+          ? (Combat.isHiddenKey(s, key) ? ' (CONCEALED)' : ' (CONCEALED, SEEN)') : ' (CONVERTED)';
+      }
       var id = map[key], item = id && Combat.EQUIPMENT[id];
       /* The slipspace drive is replaced, never sold off - without one she
        * cannot leave the system (combat.js THE SLIPSPACE BAY). Its row
@@ -4913,6 +5036,56 @@
       shown++;
     }
     if (!shown) row('THIS HULL HAS NO SLOTS', null, function () {}, true);
+    drawYardConversions(row, s, port);
+  }
+
+  function convIndexOfKey(s, key) {
+    if (!Combat.convList) return -1;
+    var l = Combat.convList(s);
+    for (var i = 0; i < l.length; i++) if (Combat.convKey(s, i) === key) return i;
+    return -1;
+  }
+
+  /* --- HOLD INTO A HARDPOINT (combat.js, 2026-11-20) -----------------------
+   * Under the slots, because what it changes is the slot list: one row to
+   * cut each kind of new hardpoint, one to cut each existing one back out.
+   * The registered row is drawn everywhere with its reason when a yard
+   * cannot do it, so the option is findable; the concealed one appears
+   * only where a crew can be paid to forget, the way the grey shelf does. */
+  function drawYardConversions(row, s, port) {
+    if (!Combat.convert || !port) return;
+    var list = Combat.convList(s);
+    for (var i = 0; i < list.length; i++) {
+      (function (idx, kind) {
+        var n = parseInt(Combat.convKey(s, idx).replace(/\D+/g, ''), 10) + 1;
+        var cost = Math.round(Combat.convPrice(s, kind) * Combat.CONV_REMOVE);
+        var why = Combat.unconvertRefusal(G, port, idx);
+        row('- CUT OUT ' + (kind === 'hidden' ? 'CONCEALED ' : '') + 'HARDPOINT ' + n + ' — ' + cost + ' cr',
+            why || 'gives her ' + Combat.convHold(s, kind) + ' t of hold back',
+            function () {
+              var r = Combat.unconvert(G, port, idx);
+              say(r.ok ? 'Hardpoint cut out — ' + r.hold + ' t of hold back, ' + r.price + ' cr'
+                       : 'No: ' + r.why, 5);
+            }, !!why);
+      })(i, list[i]);
+    }
+    if (list.length >= Combat.CONV_MAX) return;
+    var kinds = ['open'];
+    if (G.sys && Combat.systemCorruption(G, G.sys) >= Combat.CONV_HIDDEN_CORRUPT) kinds.push('hidden');
+    kinds.forEach(function (kind) {
+      var price = Combat.convPrice(s, kind), hold = Combat.convHold(s, kind);
+      var why = Combat.convRefusal(G, port, kind);
+      row(kind === 'hidden' ? '+ CUT A CONCEALED HARDPOINT — ' + price + ' cr  ·  grey market'
+                            : '+ CUT A NEW HARDPOINT — ' + price + ' cr',
+          why || (hold + ' t of hold  ·  ' + (kind === 'hidden'
+            ? 'no papers: pirates sizing her up do not see it until it fires; if the law sees it fire, that is a charge'
+            : 'registered: on her papers, and any pirate sizing her up sees the gun')),
+          function () {
+            var r = Combat.convert(G, port, kind);
+            say(r.ok ? 'A new hardpoint is cut — ' + r.hold + ' t of hold gone, ' + r.price + ' cr. Fit a gun to it from BUY.'
+                     : 'No: ' + r.why, 6);
+          }, !!why);
+    });
   }
 
   /* --- BUY: what this port will sell you, and why it will not -------------
@@ -6653,11 +6826,21 @@
       return;
     }
 
-    var oy = top + pad + 40;
+    /* THE BOARD SCROLLS (2026-11-20). It used to stop drawing at the panel's
+     * foot without a word, and the kinds of work appended last (digs,
+     * relays, mail, the holiday trade) were the first to vanish from a
+     * long board, which reads as "there is none". Same machinery as the
+     * notes log: the wheel over the board, a bar only when something is
+     * out of view, and a count at the end that is hiding rows. */
+    var boardKey = (G.here ? G.here.id : '') + '|' + docked.id;   // port ids repeat between systems
+    if (boardView.port !== boardKey) { boardView.port = boardKey; boardView.top = 0; }
+    boardView.top = Math.max(0, Math.min(offers.length - 1, boardView.top));
+    var oy = top + pad + 40, boardY0 = oy - 14, boardBottom = top + pad + colH - 6, shownB = 0;
     var sawCampaignBoardHdr = false, sawContractBoardHdr = false;
-    for (var o = 0; o < offers.length; o++) {
+    for (var o = boardView.top; o < offers.length; o++) {
       var off = offers[o];
-      if (oy + 58 > top + pad + colH - 6) break;
+      if (oy + 58 > boardBottom) break;
+      shownB++;
       if (off.campaign && !sawCampaignBoardHdr) {
         sawCampaignBoardHdr = true;
         ctx.save();
@@ -6770,7 +6953,28 @@
         oy += lines.length * 13 + 18;
       }
     }
+    var hiddenAbove = boardView.top, hiddenBelow = offers.length - boardView.top - shownB;
+    boardView.below = hiddenBelow;     // the wheel stops once the last row is showing
+    if (hiddenAbove > 0 || hiddenBelow > 0) {
+      drawScrollbar(ctx, rx + rw - 12, boardY0, 6, boardBottom - boardY0, offers.length,
+                    Math.max(1, shownB), boardView.top,
+                    function (p) { boardView.top = Math.max(0, Math.min(offers.length - 1, p)); });
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.75)';
+      ctx.textAlign = 'right';
+      if (hiddenAbove > 0) ctx.fillText('▲ ' + hiddenAbove + ' more', rx + rw - 22, boardY0 + 4);
+      if (hiddenBelow > 0) ctx.fillText('▼ ' + hiddenBelow + ' more  ·  wheel to scroll', rx + rw - 22, boardBottom - 6);
+      ctx.restore();
+    }
+    if (overRect(rx, boardY0, rw, boardBottom - boardY0)) {
+      setScrollRegion(rx, boardY0, rw, boardBottom - boardY0, function (d) {
+        if (d > 0 && !(boardView.below > 0)) return;
+        boardView.top = Math.max(0, Math.min(Math.max(0, offers.length - 1), boardView.top + d));
+      });
+    }
   }
+  var boardView = { top: 0, port: null, below: 0 };
 
   /* Greedy word wrap. The panel is monospaced, so a character budget is an
    * honest measure of width and there is no need to measure text. */
@@ -7227,6 +7431,40 @@
     var z = stops[stops.length - 1];
     return [z[1], z[2], z[3]];
   }
+  /* LEGIBLE OVER ANY COLOUR THE MAP USES (Astra, 2026-11-19: the selected
+   * point, the grid lines and the font "need to be dynamically chosen to be
+   * visible on the scanner display in any of the colors it uses").
+   *
+   * The map runs from near-black teal through green, yellow and red to a
+   * white-hot magenta, so no single ink reads on all of it: yellow vanishes
+   * on yellow, white on the hot end, the dim blue grid on everything. So
+   * every mark over the map is drawn twice, the way map labels are - a dark
+   * halo first, then its own colour on top. Over a dark cell the light line
+   * carries it; over a bright one the dark halo does. That is "chosen for
+   * the colour under it" without reading a pixel back, and it cannot pick
+   * wrong, because both answers are always there. */
+  function scanHalo(ctx, path, col, w, haloA) {
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(2,8,12,' + (haloA == null ? 0.85 : haloA) + ')';
+    ctx.lineWidth = w + 2.5;
+    ctx.beginPath(); path(); ctx.stroke();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = w;
+    ctx.beginPath(); path(); ctx.stroke();
+    ctx.restore();
+  }
+  function scanText(ctx, s, x, y, col) {
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(2,8,12,0.9)';
+    ctx.lineWidth = 3.5;
+    ctx.strokeText(s, x, y);
+    ctx.fillStyle = col;
+    ctx.fillText(s, x, y);
+    ctx.restore();
+  }
+
   /* The five pictographs: what a cell holds, drawn small enough to sit on
    * the map and legible when it does. Each is a path, not a font glyph, so
    * it draws the same everywhere. */
@@ -7928,19 +8166,21 @@
     /* graticule: every 30 degrees at 1x, finer as you go in */
     var step = vw.z >= 8 ? 5 : vw.z >= 4 ? 10 : vw.z >= 2 ? 15 : 30;
     ctx.font = '10px ui-monospace, monospace';
-    ctx.strokeStyle = 'rgba(120,190,220,0.14)';
-    ctx.lineWidth = 1;
+    /* Dark under, pale over (scanHalo): one of the two always reads, from
+     * the dark teal ground to the white-hot end of the scale. Kept faint -
+     * a grid is a ruler, not a feature. */
     var gLab = [];
+    var gridCol = 'rgba(225,240,250,0.42)', gridHalo = 0.38;
     for (var gi = 0; gi < 360; gi += step) {
       var gpx = sxc(gi);
       if (gpx < mapX - 1 || gpx > mapX + mapW + 1) continue;
-      ctx.beginPath(); ctx.moveTo(gpx, mapY); ctx.lineTo(gpx, mapY + mapH); ctx.stroke();
+      scanHalo(ctx, function () { ctx.moveTo(gpx, mapY); ctx.lineTo(gpx, mapY + mapH); }, gridCol, 1, gridHalo);
       gLab.push([gpx, gi]);
     }
     for (var gy = -90 + step; gy < 90; gy += step) {
       var gpy = syr((90 - gy) * nLat / 180);
       if (gpy < mapY || gpy > mapY + mapH) continue;
-      ctx.beginPath(); ctx.moveTo(mapX, gpy); ctx.lineTo(mapX + mapW, gpy); ctx.stroke();
+      scanHalo(ctx, function () { ctx.moveTo(mapX, gpy); ctx.lineTo(mapX + mapW, gpy); }, gridCol, 1, gridHalo);
     }
     ctx.restore();
 
@@ -7973,14 +8213,18 @@
           var X = sxLon(pts[i][1]), Y = syLat(pts[i][0]);
           var ok = cellsM[cl];
           if (ok && pen && Math.abs(X - px0) < mapW * 0.5) {
-            ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(X, Y); ctx.stroke();
+            (function (ax, ay, bx2, by2) {
+              scanHalo(ctx, function () { ctx.moveTo(ax, ay); ctx.lineTo(bx2, by2); }, 'rgba(235,245,255,0.85)', 1.1, 0.6);
+            })(px0, py0, X, Y);
             if (i === mid) {
               var ang = Math.atan2(Y - py0, X - px0);
               ctx.beginPath();
               ctx.moveTo(X, Y);
               ctx.lineTo(X - 7 * Math.cos(ang - 0.45), Y - 7 * Math.sin(ang - 0.45));
               ctx.lineTo(X - 7 * Math.cos(ang + 0.45), Y - 7 * Math.sin(ang + 0.45));
-              ctx.closePath(); ctx.fill();
+              ctx.closePath();
+              ctx.save(); ctx.strokeStyle = 'rgba(2,8,12,0.75)'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+              ctx.fill();
             }
           }
           pen = !!ok; px0 = X; py0 = Y;
@@ -7989,11 +8233,9 @@
       fl.poles.forEach(function (pl, n) {
         if (!cellsM[Sv.cellOfLatLon(pl[0], pl[1])]) return;
         var X = sxLon(pl[1]), Y = syLat(pl[0]);
-        ctx.strokeStyle = n === 0 ? '#ff7a4a' : '#5fb4ff';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(X, Y, 5, 0, 6.2832); ctx.stroke();
-        ctx.fillStyle = ctx.strokeStyle;
-        ctx.fillText(n === 0 ? 'N' : 'S', X + 8, Y + 4);
+        var pcol = n === 0 ? '#ff7a4a' : '#5fb4ff';
+        scanHalo(ctx, function () { ctx.arc(X, Y, 5, 0, 6.2832); }, pcol, 2);
+        scanText(ctx, n === 0 ? 'N' : 'S', X + 8, Y + 4, pcol);
       });
     }
 
@@ -8007,8 +8249,10 @@
         var tc = trk[ti];
         var TX = sxc(scanX(tc % nLon, flip, nLon) + 0.5), TY = syr(nLat - 0.5 - Math.floor(tc / nLon));
         if (prevX !== null && Math.abs(TX - prevX) < mapW * 0.4 && Math.abs(TY - prevY) < mapH * 0.5) {
-          ctx.strokeStyle = 'rgba(255,255,255,' + (0.12 + 0.75 * ti / nT).toFixed(2) + ')';
-          ctx.beginPath(); ctx.moveTo(prevX, prevY); ctx.lineTo(TX, TY); ctx.stroke();
+          (function (ax, ay, bx2, by2, a) {
+            scanHalo(ctx, function () { ctx.moveTo(ax, ay); ctx.lineTo(bx2, by2); },
+                     'rgba(255,255,255,' + a.toFixed(2) + ')', 2, a * 0.8);
+          })(prevX, prevY, TX, TY, 0.12 + 0.75 * ti / nT);
           if (ti % 70 === 0 || ti === nT - 1) {
             var ta = Math.atan2(TY - prevY, TX - prevX);
             ctx.fillStyle = 'rgba(255,255,255,' + (0.3 + 0.7 * ti / nT).toFixed(2) + ')';
@@ -8016,7 +8260,9 @@
             ctx.moveTo(TX + 5 * Math.cos(ta), TY + 5 * Math.sin(ta));
             ctx.lineTo(TX - 5 * Math.cos(ta - 0.6), TY - 5 * Math.sin(ta - 0.6));
             ctx.lineTo(TX - 5 * Math.cos(ta + 0.6), TY - 5 * Math.sin(ta + 0.6));
-            ctx.closePath(); ctx.fill();
+            ctx.closePath();
+            ctx.save(); ctx.strokeStyle = 'rgba(2,8,12,0.75)'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+            ctx.fill();
           }
         }
         prevX = TX; prevY = TY;
@@ -8039,10 +8285,8 @@
     }
     function droneMark(cell, col) {
       var X = sxc(scanX(cell % nLon, flip, nLon) + 0.5), Y = syr(nLat - 0.5 - Math.floor(cell / nLon));
-      ctx.strokeStyle = col; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(X, Y, 6, 0, 6.2832); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(X - 3, Y); ctx.lineTo(X + 3, Y);
-      ctx.moveTo(X, Y - 3); ctx.lineTo(X, Y + 3); ctx.stroke();
+      scanHalo(ctx, function () { ctx.arc(X, Y, 6, 0, 6.2832); }, col, 2);
+      scanHalo(ctx, function () { ctx.moveTo(X - 3, Y); ctx.lineTo(X + 3, Y); ctx.moveTo(X, Y - 3); ctx.lineTo(X, Y + 3); }, col, 2);
     }
     theirs.forEach(function (c) { droneMark(c, '#ff9f7a'); });
     mine.forEach(function (c) { droneMark(c, '#7dffb0'); });
@@ -8052,13 +8296,29 @@
     if (opM) {
       var oc = Sv.cellOfLatLon(opM.at.lat, opM.at.lon);
       var OX = sxc(scanX(oc % nLon, flip, nLon) + 0.5), OY = syr(nLat - 0.5 - Math.floor(oc / nLon));
-      ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2.5;
-      if (!OpM.standing(opM, G.t)) ctx.setLineDash([5, 4]);
-      ctx.strokeRect(OX - 15, OY - 15, 30, 30);
+      var dashed = !OpM.standing(opM, G.t);
+      scanHalo(ctx, function () {
+        if (dashed) ctx.setLineDash([5, 4]);
+        ctx.rect(OX - 15, OY - 15, 30, 30);
+      }, '#ffd36b', 2.5);
       ctx.setLineDash([]);
       ctx.font = 'bold 10px ui-monospace, monospace';
-      ctx.fillStyle = '#ffd36b';
-      ctx.fillText('OUTPOST', OX + 19, OY + 4);
+      scanText(ctx, 'OUTPOST', OX + 19, OY + 4, '#ffd36b');
+    }
+    /* The world's own drilling teams at work here (digs.js): a diamond on
+     * the dig's cell and how far through it is. */
+    var DgM = global.Digs;
+    if (DgM && Sv.cellOfLatLon && T.body) {
+      DgM.active(G, G.sys, (G.here && G.here.id) || G.sys.starId, G.t).forEach(function (dg) {
+        if (dg.body !== T.body.id) return;
+        var dc = Sv.cellOfLatLon(dg.lat, dg.lon);
+        var DX = sxc(scanX(dc % nLon, flip, nLon) + 0.5), DY = syr(nLat - 0.5 - Math.floor(dc / nLon));
+        scanHalo(ctx, function () {
+          ctx.moveTo(DX, DY - 12); ctx.lineTo(DX + 12, DY); ctx.lineTo(DX, DY + 12); ctx.lineTo(DX - 12, DY); ctx.closePath();
+        }, '#9fd8ff', 2.5);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        scanText(ctx, 'DIG ' + Math.floor(DgM.progress(G, dg, G.t) * 100) + '%', DX + 16, DY + 4, '#9fd8ff');
+      });
     }
 
     /* the ship */
@@ -8068,11 +8328,11 @@
         ctx.fillStyle = 'rgba(255,255,255,0.10)';
         ctx.fillRect(shx - cw * 1.5, mapY, cw * 3, mapH);
       }
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(shx, shy, 6, 0, 6.2832); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(shx - 10, shy); ctx.lineTo(shx + 10, shy);
-      ctx.moveTo(shx, shy - 10); ctx.lineTo(shx, shy + 10); ctx.stroke();
+      scanHalo(ctx, function () { ctx.arc(shx, shy, 6, 0, 6.2832); }, '#ffffff', 1.5);
+      scanHalo(ctx, function () {
+        ctx.moveTo(shx - 10, shy); ctx.lineTo(shx + 10, shy);
+        ctx.moveTo(shx, shy - 10); ctx.lineTo(shx, shy + 10);
+      }, '#ffffff', 1.5);
     }
     ctx.restore();
 
@@ -8115,8 +8375,20 @@
     if (show) {
       ctx.save();
       ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
-      ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 1;
-      ctx.strokeRect(sxc(scanX(show.lo, flip, nLon)) - 2, syr(nLat - 1 - show.la) - 2, cw + 4, ch + 4);
+      /* THE SELECTED POINT: a box round the cell, never smaller than a
+       * fingertip (a cell is three pixels wide at 1x), and four ticks
+       * pointing in at it from outside, so it can be found at a glance on
+       * any colour - each drawn with its dark halo (scanHalo). Warm white
+       * rather than the old amber, which vanished on yellow ground. */
+      var selX = sxc(scanX(show.lo, flip, nLon)) + cw / 2, selY = syr(nLat - 1 - show.la) + ch / 2;
+      var hb = Math.max(cw, ch, 10) / 2 + 2, tick = 7;
+      scanHalo(ctx, function () { ctx.rect(selX - hb, selY - hb, hb * 2, hb * 2); }, '#fff4c8', 1.5);
+      scanHalo(ctx, function () {
+        ctx.moveTo(selX - hb - tick, selY); ctx.lineTo(selX - hb - 2, selY);
+        ctx.moveTo(selX + hb + 2, selY); ctx.lineTo(selX + hb + tick, selY);
+        ctx.moveTo(selX, selY - hb - tick); ctx.lineTo(selX, selY - hb - 2);
+        ctx.moveTo(selX, selY + hb + 2); ctx.lineTo(selX, selY + hb + tick);
+      }, '#fff4c8', 1.5);
       ctx.restore();
     }
 
@@ -8180,6 +8452,52 @@
                          Op.dronesOn(G, T.key).length + ' drones build it in about ' +
                          Math.round(Op.daysFor(Op.dronesOn(G, T.key).length)) + ' days',
                        mapX + 200, ry + 56);
+          /* THE DRILLING TEAM (outposts.js): your engineers set down at a
+           * standing outpost to dig it out into a port, or fetched back.
+           * Only from the ground there; the line says why not otherwise. */
+          if (opHere && Op.standing(opHere, G.t) && !opHere.port) {
+            var mineDown = Op.teamAboardBooks(G, opHere).length;
+            var fetch = mineDown > 0 && !Op.recallRefusal(G, G.sys, G.t);
+            var tWhy = fetch ? null : Op.postRefusal(G, G.sys, G.t);
+            btn(ctx, mapX, ry + 70, 190, 24, fetch ? 'FETCH THE TEAM BACK' : 'SET ENGINEERS DOWN TO DIG', function () {
+              var rr = fetch ? Op.recallTeam(G, G.sys, G.t) : Op.postTeam(G, G.sys, G.t, { say: say });
+              say(rr.ok ? rr.text : 'Drilling team: ' + rr.why, rr.ok ? 9 : 5);
+              if (rr.ok && global.Save) global.Save.store(G);
+            }, { bold: true, font: 11, disabled: !!tWhy });
+            ctx.font = 'bold 10px ui-monospace, monospace';
+            ctx.fillStyle = tWhy ? '#ff9f7a' : '#7dffb0';
+            var eN = Op.engineersAboard(G).length;
+            ctx.fillText(tWhy ? tWhy
+                         : fetch ? mineDown + ' of your crew down there'
+                         : eN + ' engineer' + (eN === 1 ? '' : 's') + ' aboard dig it out into a port of yours' +
+                           (!opHere.dig || !opHere.dig.paid
+                             ? '  ·  it eats ' + Op.DIG_STORES + ' t of structural alloys' +
+                               (global.Licence && global.Licence.needed && global.Licence.needed(G.sys) ? ', and needs a station licence' : '')
+                             : ''),
+                         mapX + 200, ry + 86);
+            /* THE DIG'S STORES: alloys hauled down and unloaded, or the
+             * Guild paid to bring the shortfall in. One button: unload when
+             * there are alloys in the hold, otherwise the contract. */
+            var hold = (G.ship && G.ship.cargo && G.ship.cargo[Op.STORE_GOOD]) || 0;
+            var needT = opHere.dig ? Op.storesNeeded(opHere, G.t) : Op.DIG_STORES;
+            if (needT > 0) {
+              var unload = hold > 0;
+              var sWhy = unload ? Op.unloadRefusal(G, G.sys, G.t) : Op.contractRefusal(G, G.sys, G.t);
+              var price = Op.contractPrice(needT);
+              btn(ctx, mapX, ry + 100, 190, 24,
+                  unload ? 'UNLOAD ALLOYS FOR THE DIG' : 'GUILD BRINGS STORES IN', function () {
+                var rs = unload ? Op.unloadStores(G, G.sys, G.t) : Op.contractStores(G, G.sys, G.t);
+                say(rs.ok ? rs.text : 'Stores: ' + rs.why, rs.ok ? 8 : 5);
+                if (rs.ok && global.Save) global.Save.store(G);
+              }, { bold: true, font: 11, disabled: !!sWhy });
+              ctx.font = 'bold 10px ui-monospace, monospace';
+              ctx.fillStyle = sWhy ? '#ff9f7a' : '#7dffb0';
+              ctx.fillText(sWhy ? sWhy
+                           : unload ? 'unload ' + Math.floor(Math.min(hold, needT)) + ' t  ·  dig wants ' + Math.ceil(needT) + ' t'
+                           : Math.ceil(needT) + ' t for ' + price.toLocaleString('en-US') + ' cr',
+                           mapX + 200, ry + 116);
+            }
+          }
         }
       }
     } else {

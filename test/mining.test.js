@@ -337,8 +337,14 @@ var hot = starOf.A || starOf.B || starOf.O;
 if (hot) check('a hot star is dangerous deep even under one',
   Sim.heatFlux(inCorona(hot, 1.5, t0), hot, t0) > shield, hot.root.type + ': ' + Sim.heatFlux(inCorona(hot, 1.5, t0), hot, t0).toFixed(0) + ' > ' + shield);
 var noCorona = gal.stars.filter(function (st, i) { return i < 120; }).filter(function (st) {
+  /* Every sun, not the root: in a close pair the root is the barycentre
+   * the two stars swing round, and has no surface to skim. */
   var sy = Gen.generateSystem(st.seed, { empty: true });
-  return !Sim.coronaContext(V.add(Sim.bodyState(sy.root, sy, 0).pos, { x: sy.root.radius * 2, y: 0, z: 0 }), sy, 0);
+  var suns = sy.stars || [sy.root];
+  return suns.some(function (s) {
+    var c = Sim.coronaContext(V.add(Sim.bodyState(s, sy, 0).pos, { x: s.radius * 2, y: 0, z: 0 }), sy, 0);
+    return !c || c.body !== s;
+  });
 });
 check('every star has a corona to skim', noCorona.length === 0, noCorona.length + ' without');
 

@@ -73,5 +73,22 @@ G.t = o.outpost.doneAt + 30 * 86400;
 await wait(1200);
 await shot('outpost-standing');
 out.push('status: ' + Op.statusLine(G, o.outpost, G.t));
+/* Landed at it with two engineers aboard: the drilling team. */
+G.ship.docked = null;
+G.ship.landed = true; G.ship.crashed = false;
+G.ship.landedAt = { body: world.id, lat: o.outpost.at.lat, lon: o.outpost.at.lon, elevation: 0.004 };
+Sim.updateLandedShip(G.ship, G.sys, G.t);
+G.ship.crew = (G.ship.crew || []).filter(p => p.role !== 'engineer')
+  .concat([window.Crew.make('Kes Lund', 'engineer', 3, 'pe1'), window.Crew.make('Mira Sable', 'engineer', 4, 'pe2')]);
+G.forgedBlanks = 1;
+G.ship.credits = Math.max(G.ship.credits, 120000);
+await wait(1200);
+await shot('drill-button');
+out.push('post refusal: ' + Op.postRefusal(G, G.sys, G.t));
+const pt = Op.postTeam(G, G.sys, G.t, { say: () => {} });
+out.push('post: ' + (pt.ok ? pt.text : pt.why));
+await wait(1200);
+await shot('drill-digging');
+out.push('status: ' + Op.statusLine(G, o.outpost, G.t));
 G.panel = 0;
 return out.join('\n');

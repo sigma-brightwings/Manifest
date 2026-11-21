@@ -40,6 +40,1010 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-21, the bug hunt: where the new systems meet)
+
+Astra: *"before I do that I want you to embark once more on the great bug
+hunt"*. It covers everything since the last hunt (Nov 14–15), looking at
+the seams between systems. Each system's own suite was green; all five
+bugs were where two of them meet. Each was measured before it was fixed,
+and `test/seams.test.js` pins it. Every check in that file was run with
+its fix undone, to show it fails without the fix.
+
+- **Com-sats × world digs: relay cover depended on when you last
+  loaded.** Public relays are laid over every world with a port and then
+  cached. A dig that opened while you were in the system came after
+  that, so a dig on a bare world had no relays until you reloaded, and
+  then six. This was true of all 130 such digs.
+  - **Now:** the public network serves the worlds the system was
+    generated with ports on. A dig's world, or a station you found on a
+    bare world, is off the network until a sat goes up over it, and your
+    own com-sat does exactly that.
+  - **Your call to reverse:** relays could instead be pre-placed over
+    every planned dig.
+- **Mil-sats × late ports: a companion moon's station took platforms off
+  older ports.** Platforms are capped per system and handed out by id,
+  and `'b0cp1'` sorts before `'b12'`. In 3 of 53 guarded systems (Unis,
+  Belora, Sytar) a pair moved to the moon. Ports the system was
+  generated with now come first.
+- **Mil-sats × late routes: platforms moved after a reload.** A
+  platform sits on its port's busiest approach corridor, which is
+  counted from the traffic and then cached. Routes added later (a dig's,
+  a resort's, a companion moon's, your own station's) shifted it: one
+  platform moved 6 km, and a dig opening mid-session would have moved
+  others on the next reload. Corridors now count only the timetable the
+  system was generated with. All 318 platforms are back where they were.
+- **Saves × digs: docked at a dig's port, saved, reloaded, and you came
+  back undocked at the foot of its shaft.** The start system is built
+  at t = 0, before any dig is open. Your dig state (supplies that bring
+  an opening forward) was also put back only after the system had been
+  entered. Both now come back before the dock, the same way the
+  stations you found always have.
+- **Slipspace × binaries: a distant companion star dragged the jump
+  ring, and every wake, out with her.** The ring is the farthest orbit
+  round the root, and a companion orbits the root. It moved in all 76
+  systems with one: Mirven's went from 2.2 AU to 9.4, Dratara's from
+  27 AU to 3,450, and wakes were scattered out there with it. Only
+  worlds count now.
+- **Checked and fine:**
+  - the barycentre stays off the F3 list and can't be locked;
+  - resorts and companion ports join the relay network as often as any
+    other port;
+  - the four EVA and crew issues from the last hunt were already fixed
+    in an earlier release.
+- **Tools:**
+  - `hunt-islands.js`, `hunt-digrelays.js`, `hunt-digdock.js` and
+    `probe-barycentre.js`;
+  - `test/seams.test.js` (6 checks, in the economy group).
+
+### Added (2026-11-20, worlds worth visiting, slice 3: the resort pad)
+
+The plan: "The most appealing worlds get a guaranteed second ground port,
+off their own forked substream so no existing pad moves."
+
+- **Every postcard world a ship can land on now has at least two ground
+  ports.** Where it had fewer, it gets an open-air resort, the last port
+  built in the system.
+  - **Where:** only postcard worlds (appeal 0.7 and up), never a buried
+    bay. A resort with no dry ground to stand on is built as a sea
+    platform, like any other pad.
+  - **Names:** a stock of its own ("Larkspur Resort", "Halcyon Retreat",
+    "Long Light Terraces"), not the working pads' "Groundside" and "Low".
+  - **The rest:** its own id (`<world>rs`), market, dressing and routes.
+    Its ferries carry people, and the holiday hops on the passage board
+    can now land there.
+  - **Faction:** the world's own where it has ports, else the system's.
+- **Measured** (`tools/diag-resorts.js`, 120 claimed systems): 13 resorts
+  in 13 systems. 7 are on the new companion moons, 4 stand on the sea.
+  Home has one: Larkspur Resort, on Mirven II.
+- **Nothing that existed moves.** Every body (4,748 in 120 systems) and
+  every older route is identical, field by field, with and without
+  resorts (`opts.noResorts`).
+- **One shared path for late ports.** The companion moons' ports and the
+  resorts are settled by the same code, `settleLatePorts`: the walk
+  inland, the sea platform, then market, dressing and routes, each from
+  a stream named for the feature and the port. The companion's seed
+  strings are unchanged.
+- **Tests:**
+  - `test/resorts.test.js`: 15 checks, in the economy group.
+  - `seaplatform.test.js`'s count of sea platforms moves from 223 to 233.
+    A check now accounts for all 19 added since 214: 9 on companion
+    moons, 10 resorts.
+  - `multiples.test.js` and `tools/diag-multiples.js` now leave resorts'
+    routes out of "what existed", as they already did the companion
+    moon's. A resort's timetable is built after the companion, so it may
+    call at her ports. Every older route is still compared.
+  - `twilight.test.js` builds both sides of its old-versus-new comparison
+    without resorts. Resorts follow a world's pad count, and the twilight
+    pass is what changes that count. Its check "new ports only take ids
+    after the old ones" had been passing by default since the first named
+    id (`b0a`) arrived: `+'0a'` is NaN, and `Math.max(-1, NaN)` is NaN.
+    It counts only plain `b<n>` ids now, and it still passes.
+- **Saves:** additive. A career loads into the same systems, with the
+  resorts added.
+
+### Fixed (2026-11-20, other people's ships counted as yours)
+
+- **Found by `stations.test.js` once resorts arrived.** `addPortRoutes`
+  was written for the stations you found, and stamped every route it
+  made `playerPort`. Three later kinds of port reuse it: the world's own
+  digs (2026-11-19), the companion moons' ports and the resorts
+  (2026-11-20). Their NPC ships were read as your own lines, so:
+  - never raided (`attachRaids`);
+  - never held at a lonely pad (`Sim.arrivalHold`);
+  - never an aggression target (`aggression.js`).
+- **Now:** a route is `playerPort` only if its port is a station you
+  founded. A seized station keeps the flag, as before. Every other late
+  route is marked `latePort` and raided at the system's own odds. The
+  per-route half of `attachRaids` is now `raidRoute`, with no RNG draws,
+  so nothing generated earlier moves.
+- **Measured** over 150 systems: 168 late routes, none flagged as yours,
+  and 794 of their deliveries raidable.
+- **Pinned in `resorts.test.js`:** "a resort's ships are not counted as
+  yours", and "they are raided at the system's odds, like everyone
+  else's".
+
+### Added (2026-11-20, worlds worth visiting, slice 2: the passage board follows appeal)
+
+The second slice of `claude/after-mining-roadmap.md` item 8. The agreed
+shape is in `claude/worlds-people-and-infrastructure.md`: "more short
+station ↔ ground passages (low pay per soul, quick, repeatable); more
+inbound passengers from the rest of the system and from other stars."
+
+- **Hops.** On a world rated pleasant or better, the sky and the ground
+  trade tourists.
+  - Any port there can post a passage to a port on the other side
+    (station to pad, or pad to station). A pleasant world posts up to one
+    a window, a postcard up to two.
+  - Each is 3–8 day-trippers, tour parties or wedding parties, due within
+    a day.
+  - It pays less per head than an ordinary local passage: a median of 258
+    cr against 552. Small, quick and repeatable, which is the shuttle's
+    trade.
+- **Inbound.** Ports on every other world in the system book holidaymakers
+  for the system's best world (pleasant or better). One chance a window,
+  as likely as the world is appealing (60% of its score). The pay is the
+  local passage rate, nudged up by appeal.
+- **Going home.** An appealing world's ports post passages for tourists
+  heading back to a neighbouring star, at the interstellar rate. This is
+  the inbound trade from other stars, seen from the end that knows it. A
+  port can't judge a world in a system nobody has generated, so the
+  appealing end posts the work.
+- **The board says why.** For example: "People come for 2 big moons and
+  the aurorae." It names only the draws (clear skies, a giant overhead,
+  big moons, aurorae, a sun that never sets), never the drawbacks.
+  Leaving: "They came for <world>, and the holiday is over."
+- **Measured** over 50 claimed systems, 4 windows each (3,132 boards):
+  1,187 holiday offers (321 hops, 696 inbound, 170 going home). A postcard
+  world's board averages 2.40 passage offers against a harsh world's 1.22.
+- **Nothing that was on a board moves.** The holiday trade has its own
+  stream (`'tourism|'`) and is appended after every other kind of work,
+  with its own ids (`tr|…`). A test builds 448 boards both with and
+  without the holiday trade, and every older offer is identical, field by
+  field, text included.
+- **Fixed before it shipped:** "5 aboard, a honeymoon couple". A couple
+  is two people now, whatever the roll said.
+- **The F7 board scrolls (fixed: it used to drop rows silently).**
+  - A board longer than the panel stopped drawing at the foot without a
+    word. The kinds of work added last (digs, relays, mail, platforms,
+    and now holidays) were the first to vanish, which reads as "there
+    is none".
+  - Hold left Alt for the cursor and roll the wheel over the board, the
+    same as the notes log.
+  - A scrollbar shows only when something is out of view, with "▲ N more"
+    and "▼ N more · wheel to scroll" at whichever end is hiding rows.
+  - The wheel stops once the last row is showing, and the board starts
+    from the top again at each new port.
+  - Seen working in `tools/probe-tourism.js`: an open DETAILS row pushes
+    the holiday offer off the foot, the count says so, and real wheel
+    events bring it back into view.
+- **Tests:** `test/tourism.test.js`, 19 checks, in the economy group.
+  `tools/diag-boardfit.js` counts how many boards outgrow the panel.
+- **Saves:** unaffected. Boards are generated per port and window, and
+  nothing new is stored.
+
+### Added (2026-11-20, more than one sun, and a giant over a living moon)
+
+Astra: *"yeah, add both changes please"*. That means binary stars (stage 3
+of `claude/stars-and-systems-plan.md`), and a postcard world: a habitable
+moon with a giant filling its sky.
+
+**Nothing that already existed moves.** Every planet, moon, port, route,
+patrol, market and ring is identical with and without the new stars, so
+saves carry on. This was checked body by body, 0 moved of 1,529, by
+`tools/diag-multiples.js` and `test/multiples.test.js`.
+
+- **Measured before building** (`tools/diag-stars3.js`, 200 systems):
+  - A close pair (orbiting at least once a week) fits inside the innermost
+    planet in 128 of them.
+  - A companion far enough out to disturb no planet sits a few tens of AU
+    out at the median.
+  - No warm chain of planets has a gap wide enough for a Jupiter, so a
+    giant cannot be added among the existing planets without moving them.
+- **Close pairs.** In some systems the star you knew is now two stars,
+  orbiting each other.
+  - Their masses and light add up exactly to the old star's, so every
+    planet orbits them as it orbited the star, under the same light. The
+    orbits, habitable zone, world types and ports are all unchanged.
+  - The system's root is now their shared centre of mass (still `b0`). The
+    stars are `b0a` and `b0b`, opposite each other through it.
+  - A pair only forms where it fits: it orbits no faster than once a week,
+    and every planet stays outside 1.15× the critical radius for stable
+    orbits round two stars (Holman & Wiegert 1999). Pair separations are
+    0.08–0.37 AU (p10–p90).
+- **Distant companions.** A second sun circles the whole system, mostly
+  tens to hundreds of AU out (median 72 AU).
+  - No planet is left outside the zone the companion lets stay stable.
+  - Where the real separation would have disturbed a planet, the companion
+    is pushed outward instead. So the closest companions are
+    under-counted; that is what keeping every world in place costs.
+  - Her light is kept out of the planets' insolation on purpose, because
+    at that distance it is a few thousandths of Earth's sunlight.
+- **Triples.** A close pair plus a distant third star.
+- **How many.** In 120 claimed systems: 69 single, 34 with a distant
+  companion, 4 close pairs, and 13 triples (43% with more than one sun).
+- **On screen.**
+  - Each star is drawn as a star, so from the innermost world of Linira
+    you see Linira A and Linira B side by side
+    (`probe-multiples/1-two-suns.png`).
+  - The F2 BODIES list names every star, and the SYSTEM panel reads
+    "Linira (F+M+M)".
+  - The galaxy chart still shows one star per system; companions on the
+    chart are not done yet.
+- **What the ship feels matches the orbits the worlds follow.**
+  - Every planet of a close pair orbits a single point mass at the
+    barycentre. So once a ship is past 1.5–2.5 pair separations, the two
+    stars pull on her as one point there. Without this, a ship parked
+    round a circumbinary world would drift off it by hundreds of km a
+    day. Beside a world the match is exact (1e-15).
+  - A distant companion is ignored until a ship is 40–60% of the way out
+    to her. Out by her, the ship also falls toward the main system as her
+    own worlds do.
+  - Single-star systems feel exactly what they did, to the last bit.
+- **A giant in a warm zone, and the moon under it.**
+  - A companion with room for it may have a gas giant that migrated into
+    her own warm zone. About 1 system in 10 gets one: 7 of 120 in the
+    tests, 20 of 212 measured.
+  - The giant has one moon worth living on: terran or ocean, Earth-heavy,
+    with real air, and the giant 8–21° across its sky.
+  - Most of those giants are ringed, and appeal reads every such moon as a
+    postcard, 0.81–0.94 ("a ringed giant overhead").
+  - Each such moon gets a station and a pad, built the way a dig's port is,
+    with their own markets, dressing and routes, plus ferries that carry
+    people.
+  - Rings for the companion's giant come from the same per-giant stream as
+    every other ring.
+- **Tuned after the first probe.**
+  - At first 41 of 150 systems had a postcard moon, which is no longer a
+    postcard, so the chance is now 0.35.
+  - The moon first sat 14–32 giant radii out, which showed a 4° coin, so
+    it is now 6–14 radii.
+  - Round small companions, the moon could be dragged inside two giant
+    radii, inside the Roche limit, with the giant 50° across. Those are now
+    not generated.
+- **Fixed on the way:** a moon's world card always said "ports 0". It now
+  counts the moon's own docks.
+- **Found by the full suite (124 of 127 green on the first run):**
+  - Every habitable world should have at least two ports, but five
+    companion moons had one. Their giant's pull left no room for a
+    station, so they now get a second station or a second pad.
+  - One companion moon's pad stood in a sea. Those pads are made after the
+    usual walk inland, so they now take that walk themselves (and skip it
+    under `noInland`, as every other pad does). Where no dry ground exists,
+    they become sea platforms, the same as every other pad.
+    `seaplatform.test.js` pins the galaxy's count of platforms, which went
+    from 214 to 223. A new check shows the 9 extra are all on companion
+    moons.
+  - `mining.test.js` "every star has a corona to skim" looked only at the
+    root, which in a close pair is now the empty point between the two
+    stars. It now checks every sun, and each has its own corona; the game
+    already skimmed any of them.
+- **Tests:**
+  - `test/multiples.test.js`: 17 checks.
+  - `stars.test.js`: its single-star section now builds with
+    `noMultiples`, because it is the single-star guarantee.
+  - `physics.test.js`: the orbit-crossing check now compares neighbours
+    round the same parent, and the far-field 1/r² check runs on a lone
+    star. Kawartha's companion sits exactly where it sampled.
+  - `tools/probe-multiples.js` shows a pair from its innermost world, its
+    F2 map, the giant from its moon, and the moon's card.
+
+### Added (2026-11-20, worlds worth visiting, slice 1: appeal, and ferries that carry people)
+
+Astra, 2026-10-17: *"HZ worlds, especially worlds which have nice weather
+and a good view have more passenger destinations ... This also gives the
+shuttle a purpose."* The next stage after mining (`claude/after-mining-roadmap.md`
+item 8). New file `src/appeal.js`.
+
+- **Every world with air gets an appeal score from 0 to 1**, banded as
+  postcard, pleasant, livable or harsh. It is built from three parts:
+  - **Earthlike.** Gravity, air and warmth near home, and how much of the
+    world is livable: all of it, a tipped world's equator, or a locked
+    world's twilight ring. One hostile number sinks the lot.
+  - **Climate.** The world's own cloud cover, the same figure the
+    renderer draws. A little cloud is free; constant cover costs.
+  - **View.**
+    - a giant overhead, worth more if it is ringed;
+    - big moons, close enough to see as discs;
+    - aurorae, where a magnetic field sits over real air;
+    - the twilight ring's sun that never sets.
+  - The view lifts a livable world but cannot rescue a lethal one.
+  - It is worked out from what the generator already wrote, so it moves
+    no seed and is never saved.
+- **Measured over 160 claimed systems** (`tools/diag-appeal2.js`). Of the
+  1,028 worlds with air, 430 are habitable:
+
+  | | Postcard | Pleasant | Livable | Harsh |
+  |---|---|---|---|---|
+  | Habitable worlds | 24 | 146 | 178 | 82 |
+
+  - **Best:** Mirven II, where you start, at 0.85 (two big moons and
+    aurorae).
+  - **Worst:** twilight-ring worlds with thin air and the wrong sun,
+    around 0.02.
+- **Ferries carry people.** A shuttle running between two docks over the
+  same world now carries passengers in proportion to that world's appeal:
+  none below 0.3, and up to 24 on a postcard world.
+  - Across 60 systems, 7,056 of 10,344 ferries carry people. At Mirven it
+    is 96 of 156, for example the *Lodestar Drover* with 28 aboard.
+  - The passengers are what everything that already reads passenger counts
+    sees:
+    - a ferry with people aboard is a passenger ship to the ship AI;
+    - the crew you meet aboard are counted from them;
+    - a rescue of one is about the people.
+  - Generated in its own seeded stream after everything else.
+    `tools/fingerprint.cjs` gives identical hashes for five seeds with and
+    without it, so no route, time or hold moved.
+- **On the world's card (F3, NAV → WORLD), the first note** now reads,
+  e.g., "For visitors: Postcard - 2 big moons, aurorae."
+- **Found while measuring:**
+  - None of the 10 moons that orbit gas giants is livable. Giants form
+    past the frost line, so every one of those moons is cold, with thin
+    air and light gravity. The postcard Astra described (a habitable moon
+    under a giant) does not occur in this galaxy yet.
+  - There are no binary stars either: 120 of 120 claimed systems have a
+    single star.
+- **Tests:** `test/appeal.test.js` (21 checks), `tools/probe-appeal.js`.
+
+### Added (2026-11-20, hold into a hardpoint)
+
+Astra: *"adding another gun hardpoint in exchange for cargo space?"* I asked
+four questions and she chose: a flat cost by hull size, up to two per hull,
+both a registered and a concealed kind, and shuttles allowed too.
+
+- **What a conversion is.** It is one more hardpoint, added after the
+  hull's own, so nothing already fitted moves. In exchange it takes a fixed
+  bite of the hold.
+  - **Hold cost by hull size:** S 6 t, M 10 t, L 16 t, XL 24 t.
+  - **Price by hull size:** S 9,000 cr, M 15,000 cr, L 26,000 cr,
+    XL 45,000 cr.
+  - **Why flat and not a share of the hold:** a share would charge a
+    Leviathan about 100 t for one gun. Flat, a big freighter barely
+    notices, and an interceptor gives up half of very little.
+  - **Buying the gun:** you buy and fit it from BUY like any other gun,
+    against the same reactor and mass budget. That budget is usually the
+    real limit, so two conversions is a ceiling, not a recommendation.
+- **Registered.** Cut at a shipyard and on her papers. Pirates sizing her
+  up see the gun.
+- **Concealed.** Cut at any port where corruption is 60 or more, the
+  grey shelf's own threshold.
+  - It costs 1.6 times the price and takes three quarters of the hold
+    (5 t on a Talon), because nobody builds the certified magazine
+    bulkhead.
+  - **Behind its panel:** nothing is drawn on the hull, not even the
+    empty mount plate, and pirates and runners judging whether you're
+    armed don't count it.
+  - **The first shot opens the panel for good.** If a cutter or warship is
+    in sight when it fires, that's a charge (2,500 cr bounty) with its
+    faction. The Syndicate's own heavies don't care.
+- **Shuttles.** The Wren and the heavy shuttle, which have no hardpoints,
+  can take one.
+- **Cutting one back out** costs a quarter of its price, and the hold
+  comes back exactly. The mount must be empty first. Any conversions
+  above it move down a slot, taking their guns and fire groups with
+  them.
+- **It belongs to the frame.** A conversion is tied to the hull it was
+  cut into. A different hull has none, and a new hull bought at the yard
+  starts with none. It goes with her into the fleet, back out of it, and
+  into the save. Older saves load with no conversions.
+- **Where to find it:** at the bottom of the yard's FITTING tab.
+  - The registered row is always shown, with the reason when a port
+    can't do it.
+  - The concealed row only appears where one can be had.
+  - Converted slots are labelled CONVERTED, CONCEALED, or CONCEALED, SEEN.
+- **Tests:** `test/conversions.test.js` (40 checks).
+  `tools/probe-conversions.js` shows the FITTING tab at Halden Yard with
+  one of each cut and a gun in both.
+
+### Added (2026-11-20, ship AI slice 1: six roles and a captain's character)
+
+Astra asked for AI ship behaviours and for "scared", "loyal", "angered",
+"trader", "passenger", "police", "syndicate", "pirate" and "navy"
+profiles, modified by how corrupt the system is and how corrupt each
+captain is. The design is in the project doc `claude/ship-ai-profiles.md`.
+Nothing behaves differently yet. This slice gives every captain the
+numbers that later decisions will read. New file `src/shipai.js`.
+
+- **Six roles, read off the ship** (`ShipAI.roleOf`):
+  - trader;
+  - passenger (a liner, i.e. a ship with souls aboard; a feeder shuttle
+    carries freight, so it counts as a trader);
+  - police;
+  - navy;
+  - syndicate (the heavies and anything flying the outlaw flag that
+    isn't a raider; a heavy used to read as a cop);
+  - pirate.
+  - Across the first 140 claimed systems of the test galaxy there are
+    32,728 traders, 1,563 passenger ships, 909 Syndicate, 433 pirates,
+    385 police and 43 navy.
+- **Six dials per captain** (`ShipAI.dials`), each from 0 to 1:
+  - nerve, greed, probity, discipline, heat and cohesion;
+  - built from the role and from the temper and values captains already
+    had, plus a seeded wobble;
+  - worked out on demand, never saved, and no generator stream moved.
+- **Probity is the captain's own corruption**, and what it means depends
+  on the role: an honest or bent cop, a pirate with a code or one who
+  shoots the witnesses, a Syndicate captain who keeps the mob's word or
+  skims.
+  - The system's corruption pulls probity but does not set it. Bribes and
+    holdings count, since it reads `Combat.systemCorruption`.
+  - Measured on police: almost none bent at corruption 15, 37% bent at
+    80. The design's first figure (a pull of 0.5) bent only 10% in a
+    bought system, so the police pull is 1.0.
+  - Astra on the Navy: *"A few."* 4 of 43 navy captains are bent.
+  - A pirate's code doesn't move with the system, because pirates answer
+    to no institution.
+- **Cohesion** is how firmly a captain holds to her flight leader. Astra:
+  loyalty *"isn't in relation to the player, but to the 'flight leader'
+  of the group"*. Syndicate and navy captains hold together; pirates and
+  traders less so. Flights themselves are slice 2.
+- **The dials are not shown anywhere.** Astra agreed you learn a captain
+  from her tells, the dock talk and what she does.
+- **Tests:** `test/shipai.test.js` (27 checks).
+
+### Changed (2026-11-20, Astra's notes on slices 3 and 4)
+
+- **Rumours go over the wire between linked ports.** Astra: *"yes."*
+  Two ports in the same system that both reach the relay network share
+  what they hear within 10 minutes (`WIRE_S`), instead of waiting for a
+  ship to carry it. A port cut off by a dark relay (an island) does not
+  get it. In the test system all 10 linked ports heard inside 10
+  minutes, and the island only heard 38.8 hours later.
+- **The relay network has a hop limit, so hubs matter.** Astra: *"hop
+  limit to enforce the development of hub systems."*
+  - A signal can make 3 relay hops (`SAT_HOPS`) from a hub before it
+    stops. Each com-sat of yours that is live is a hub, and the count
+    starts again there.
+  - One hub reaches 25 of the 54 stars in the test galaxy; a second hub
+    raises that to 27. Where you put a hub now decides what your news
+    can reach.
+- **The canopy glass is lighter.** Astra: *"glass tint is too dark."*
+  The tint is cut by more than half (alpha 0.055 → 0.025), and so is the
+  dark vignette at the edges (0.42 → 0.16). A ship 80 m off the nose now
+  reads clearly through it.
+- **Cockpit mouselook is quicker and smoother.** Astra: *"cockpit
+  mouselook is sluggish."*
+  - The look rate is up to 0.0062 radians a pixel.
+  - Right-Alt free look in the cockpit now captures the pointer and
+    reads raw mouse movement. It used to read the cursor's position,
+    which stalls at the screen's edge and lags a frame.
+  - Frame rate was measured first and was not the cause: 55 fps in open
+    space at Mirven.
+- **Platform marks sit to the left of their station's name on the F2
+  map.** Astra: *"put icons to the left of the station's name."* Each
+  mark steps 11 px further out, so a pair reads as a pair.
+- **The start's "Docked at Threshold Dock" line is cleared once you are
+  not docked there.** The probe that showed it: launch, and the message
+  is gone.
+- **Tests:**
+  - comsats, 52 checks (the hop limit added);
+  - islands, 25 checks (the wire added);
+  - milsats, 29 checks (corridors added).
+  - `tools/probe-fixes-1120.js` shows the glass, the F2 marks at Noolm,
+    and the message clearing. The probe now opens F2 with a key press,
+    because setting the panel directly skipped the map's camera.
+
+### Added (2026-11-20, com-sats slice 4: armed defence platforms)
+
+Astra, 2026-11-19: *"a mil-sat is just an armed defense platform. We'll
+have those in high-authority systems and along the border with no-man's
+land."* New file `src/milsats.js`.
+
+- **Where they are.** I measured 120 claimed systems before setting any
+  threshold (`tools/diag-milsats.js`).
+  - **High authority:** crime score 20 or less with development 0.6 or
+    more, or a navy garrison in the system. That is 24 of 120.
+  - **The border:** an empire's star with an unclaimed star within 8 ly.
+    That is 9 of 120; the frontier is thin.
+  - None in pirate or Syndicate holds. About a quarter of claimed systems
+    have platforms; Mirven, where you start, does not (Noolm does).
+- **What they are.** A pair to each civilian orbital port, at most six
+  to a system, owned by the system's power. Astra, 2026-11-20: *"a pair
+  of them that guard the most probable insertion trajectories toward
+  that station."*
+  - The corridors are measured, not guessed. Every scheduled arrival's
+    last approach (the final 4% of the leg) is taken in the station's
+    own orbital frame, the directions are clustered, and the two
+    busiest bundles each get a platform 45 km out along them. Where all
+    traffic comes in one way, the pair flank that corridor 10 km to
+    either side.
+  - On the rails: the offset is held in the station's frame, so the
+    pair ride its orbit and keep facing the way ships come in.
+  - At Noolm, all three guarded ports turned out to have two corridors.
+    In the test system, 6 of 9 later arrivals pass within reach of a
+    platform; the two in a pair sit 88 km apart.
+- **What they shoot.** 30 km reach, 12 damage a shot, one shot every
+  1.5 s.
+  - You, only when the owner wants you (the same test its police use) or
+    when you have fired on it in the last half hour.
+  - Pirates and Syndicate raiders in reach, always. A pirate it kills is
+    not your kill.
+  - It never fires on an innocent: your standing decides whether it is
+    protection or a threat.
+- **Their RTG goes dark like a relay's.** Each platform has its own
+  service cycle. A late tender leaves it dark and unarmed.
+  - The fuel contract is military work: posted only at the owner's ports
+    and its navy's, delivered to the guarded port, at double a relay's pay
+    (24,640 cr).
+  - Cutting that supply takes a platform down without a fight.
+- **You can shoot one.** A shot down your nose that meets a platform
+  first lands on it. The first hit is assault (300 cr bounty) and it
+  answers; destroying it is a navy-class kill (12,000 cr, standing −30).
+  Its hull and death are saved (`G.milsats`).
+- **Seen:**
+  - In space: a dark armoured drum with radiators and a turret, the
+    owner's colour on its band.
+  - Far off and on the map: a new icon, solid when armed, slashed when
+    dark, dashed when destroyed, red when it is after you. It is in the
+    F3 legend.
+- **Not built yet:** hacking or bribing one, and salvage. The RTG core in
+  a dead platform is the dangerous prize.
+- **Tests:** `test/milsats.test.js` (27 checks). `tools/probe-milsats.js`
+  shows one in Noolm firing on a wanted pilot and holed.
+
+### Added (2026-11-20, weapon hits leave hot metal and wounds)
+
+Astra: *"heated metal from weapon fire striking a station or ship, as well
+as damage decals which show a glowing, arcing interior, or which show gas
+venting from the ship's interior."* New file `src/scars.js`.
+
+- **Hot metal.** Every hit that gets through a shield leaves a spot on the
+  hull, in the hull's own frame, that glows and cools over about twenty
+  seconds of game time, from white through yellow and orange to dull red.
+  - Hits close together heat the same spot, so a beam held on one place
+    cooks it white, while a spray of pulses leaves freckles.
+- **Wounds.** Enough damage in one spot (14% of the hull) opens it: a
+  dark ragged hole with a hot lip. Which kind of hole it is comes from the
+  ship and the spot, so the same fight leaves the same wounds.
+  - **Arcing:** the interior glows and the wiring shorts across the hole
+    in blue-white fits. It is fierce at first and settles to every so
+    often.
+  - **Venting:** gas streams out along the hull's normal, thinning as the
+    compartment empties over about two and a half minutes, then it is a
+    dark hole.
+  - The worst damage stays. When a hull is full the oldest cold marks go
+    first, at most ten on one hull.
+- **On ships, yours included:** each scar is placed on the actual hull
+  model by a ray against its mesh, and one on the far side is not drawn.
+  A hull repaired to full has no scars.
+- **On stations:** a shot down your nose that meets a station now stops on
+  its plating. It is tested against the station's real mesh, so a shot
+  through a wheel's spokes still goes on through.
+  - The plating heats and in the end opens, and the station logs you: an
+    assault bounty, once per ten minutes of fire. Your own stations scar
+    but do not book you.
+  - Station crews patch a cold scar after two days.
+- **The scars are not saved.** A reload is a fresh look at a patched hull.
+- **Tests:** `test/scars.test.js` (27 checks). `tools/probe-scars.js`
+  shows your hull holed, arcing and venting; a trader worked over; and a
+  station holed.
+
+### Added (2026-11-20, com-sats slice 3: islands felt everywhere)
+
+Astra, 2026-11-19: knocking a relay out *"turns a station into an island
+which gets its news by courier."* Until now an island was only a word on
+the COMMS page. Now it changes what you can see and what work there is.
+
+- **An island's prices are courier-old** (`Comsats.seenAt`).
+  - Seen from anywhere else, an island's market is as the last ship out
+    of it left it, worked out in closed form from the timetable (the same
+    berthing network rumours ride). Before it went dark its figures were
+    on the wire, so they are never older than the day it went dark.
+  - Docked at an island, it is the other way round: everyone else is as
+    the last ship in brought them, and the relay chain to other stars
+    does not reach the desk (those reports come by freighter).
+  - Your own visit counts as a courier: dock at an island and you carry
+    its prices out as they stood when you left (`G.portSeen`, not saved).
+  - Lanes between worlds are slow, so this bites. Measured over 478
+    island-moments in 60 systems: median 4 days old, and one in ten as old
+    as the dark itself.
+- **Where it shows:**
+  - **Trade analyser:** the head line turns amber and reads "ISLAND ·
+    8.0 days old, by courier"; the graph's end is marked "courier" and the
+    axis counts back from now; a locked island's bid reads "(... by
+    courier)" in the break-even.
+  - **Survey array (TRADE page):** islands are read at their courier age
+    too, so its shortages and best run are what you could actually know.
+  - **Orbit map BODIES list:** a slashed relay, amber, at the end of an
+    island's row. COMMS already said ISLAND.
+- **An island's mail** (missions.js `mailOffers`). While a world's relays
+  are dark (an RTG lapse; a geometry island is over in an hour and posts
+  nothing):
+  - each of its ports posts its own sacks (1 to 3 t) to the main port
+    still on the wire;
+  - every other desk holds the mail for it, one job per island posted at
+    them all;
+  - "Mail sacks" are freight no market lists, like the courier parcel;
+  - the pay grows with the dark: 700 cr plus 90 a day, capped at 6,500,
+    scaled by tonnage, never under a leg's floor. Ten days in, about
+    1,800 cr for 2 t.
+- **Not changed, decided by me (say if you want it otherwise): word of
+  you.** Rumours already travel only on ships (rumours.js: "no
+  faster-than-ship comms"), so an island hears of you exactly as late as
+  it always did. Gossip is people in bars, not relay traffic, so relays
+  do not speed it up anywhere. The alternative is for linked ports to
+  share what they hear over the wire, which would make your reputation
+  travel much faster everywhere except islands.
+- **Tests:** `test/islands.test.js` (23 checks: the timetable sums, an
+  island's age both ways, your visit, fuelled again, the analyser and the
+  survey array, the mail). `tools/probe-islands.js` shows it in the game;
+  `tools/diag-islands.js` measures the ages.
+
+### Added (2026-11-20, drawn icons for what things are; relays in space and on the map; the RELAY panel)
+
+Astra: relays and sats should be *"both models in space as well as on the
+map."* She asked for *"another panel selectable for the MFDs which tells
+you which sat you're connected to, and shows which links are up"*, and
+for *"small icons which indicate this information without using ascii
+characters."* Also: *"icons for the comms menu and the nav menu which
+shows what is a spaceport and what is a ship and what is a pirate ship
+and what is a planetary starport or a mining facility, or navy, or
+syndicate."*
+
+- **New code: `src/icons.js`.** It is one set of small drawn shapes, in
+  the row's own colour, so the colour still says whose a thing is and the
+  shape says what it is.
+  - **Ports, by who runs it first, then by what it does:**
+    - a shield for navy;
+    - a hexagon with a cross for the Syndicate;
+    - a pennant for yours;
+    - a ring for a station;
+    - a ring with spokes for a highport;
+    - a crane for a yard;
+    - a drop for a refinery;
+    - a pick for mining;
+    - a leaf for agri;
+    - a dome on its ground line for a planetary starport.
+    - Mining and agri ports on the ground stand on a ground line.
+  - **Ships, as chevrons:**
+    - filled for a trader;
+    - with barbs for a pirate;
+    - hollow with a bar for a warship;
+    - with a beacon for police;
+    - with a cross for a Syndicate runner.
+  - Stars, planets and moons are drawn too.
+- **Where the icons are used:**
+  - the COMMS channel list;
+  - the F3 nav list, which now has a key underneath;
+  - the CONTACTS page on the MFDs, which used to type `> * O o #`;
+  - the orbit map's BODIES list, which used to type the same marks.
+  - Measured over 30 stars: 275 ports in 11 kinds, and 4,374 hulls across
+    traders, runners, police, pirates and warships.
+- **Two shapes redrawn after looking at them:** the mining pick read as a
+  letter T at list size, so it is tilted now; the yard read as a Π, so it
+  is a crane with a hook now.
+- **Relays and your com-sats in space.**
+  - They are a small model: a foil-wrapped body, two solar wings, and a
+    dish facing the world. They are about 12 m across, and the model
+    shows once one is close enough to resolve.
+  - Further out, up to 25,000 km, a faint drawn mark stands in for one:
+    blue for a public relay, green for yours, grey and slashed for a dark
+    one.
+  - **On the orbit map** they show at any range, but only once they stand
+    clear of their world on the screen.
+- **The RELAY panel.** It is a new page, selectable for any dashboard MFD.
+  - **Who you are talking to:** the nearest live relay, or com-sat of
+    yours, with a clear line to your ship, and how far away it is.
+  - **This system:** how many of its worlds' relays are lit, which are
+    dark, and whether the uplink is lit.
+  - **The chain**, drawn with icons:
+    - a sat for each star it runs through;
+    - a line for each link;
+    - a slashed sat for one that is down;
+    - drifting wings for one destroyed but still expected;
+    - a cut, dashed line where a link is out.
+    - A marker shows where you are, and a dotted gap stands in for the
+      middle of a chain too long to show.
+  - **Which chain:** to your com-sat, else to your plotted star, else to
+    the nearest claimed star.
+  - **The bottom line** says LIVE and how many hops and hours, or where it
+    is broken and that the far end is on the other chain.
+  - **Destroyed relays:** nothing can destroy a relay yet. The state is
+    read from `G.relaysGone` for when something can.
+- Tests: `test/icons.test.js` (13 checks) runs every icon through a canvas
+  that refuses text. `test/comsats.test.js` is up to 49 checks with the
+  panel's helpers. Probes: `tools/probe-icons.js` and
+  `tools/probe-relays.js` (the model up close, the chain whole and broken,
+  the map).
+
+### Added (2026-11-20, com-sats, slice 2: RTGs, dark relays, a broken chain, RTG fuel)
+
+Astra, 2026-11-19: mil-sats and com-sats burn one fuel, refined out of
+the mildrive's waste. Her correction on 2026-11-20: *"a break in the
+relay chain turns the chain into two chains which can be re-connected."*
+
+- **RTG fuel.**
+  - It is a new good (`rtgfuel`, base 1,400 cr/t) and it is legal. Fissiles
+    are not contraband, and nothing on the ladder sits below them.
+  - It is registered the way contraband is, after the main list, so no
+    existing market, tier order or route moves.
+  - **Isotope refineries:** every reprocessing port, which already buys
+    waste, now makes 0.8 t a day. It sells for about 900 cr/t at source.
+    The COMMS row says "isotope refinery". The production is added when the
+    system is handed out, after its traffic is built.
+- **Relays go dark.**
+  - Each world's relays share an RTG service cycle: a tender every 260 to
+    620 days, seeded.
+  - About one tender in five is late, by 12 to 75 days. For that time the
+    world's relays are dark and its ports are islands. The COMMS row says
+    "ISLAND - relays dark, tender due day N".
+  - Measured: dark about 2% of world-days.
+  - It all runs on the rails: hashes of star, world and cycle number.
+- **A relay serves its own world.** It links the ports on it and over it,
+  not the next planet. The first test found Mirven I's port still linked
+  through Mirven II's relays while its own were dark.
+- **Six relays a world, not three:** three orbital planes, with an
+  opposite pair in each. With three, a ground pad saw none overhead about
+  one time in eight and flickered in and out of the network through its
+  day. A pair is almost always half above the horizon. With every relay
+  alive, islands are now nearly all RTG lapses (21 in 1,095
+  port-moments, about 2%).
+- **The chain breaks in two.**
+  - Each claimed system talks to its neighbours through one long-range
+    **uplink**, with an RTG cycle of its own.
+  - While the uplink is dark, the star drops out of the chain, which
+    splits into two chains. Each half still works on its own.
+  - **Two ways to rejoin them:** fuel the uplink, or have a live com-sat of
+    yours in that system to bridge the gap.
+  - Measured: with Mirven's uplink dark on day 532, its neighbour's chain
+    reaches 37 stars instead of 53, and two of its six neighbours land in
+    the other half.
+  - "Your com-sats" says "uplink here DARK - chain broken" when you are in
+    such a system.
+- **Refuelling contracts.**
+  - From 30 days before a dark date until the tender would have come,
+    every port in the system posts **"4t RTG fuel for the relays over X"**
+    to that world's port. Uplinks get one too, to the system's main port
+    (the highport if there is one), paying half as much again.
+  - **You bring the fuel yourself.** The contract hands you nothing at the
+    desk (a new `bring` flag on a haul).
+  - **Pay:** 2.2 × the fuel's base a tonne, 12,320 cr for a world's 4 t.
+  - **One job, not one per port:** taking it at one desk takes it off all
+    of them.
+  - **Delivered in time:** the relays never go dark. **Delivered late:**
+    they light again that day.
+  - The only state is `G.rtgFixed`.
+- **Your com-sat's fuel.**
+  - A load lasts 365 days from launch or the last refuel. After that the
+    sat is DARK and reads nothing.
+  - **Refuelling:** "Refuel a com-sat" on your COMMS channel takes 1 t of
+    RTG fuel, in orbit round its world.
+  - The channel shows each sat's days of fuel left.
+- All numbers are Claude's.
+- Tests: `test/comsats.test.js` now has 45 checks: dark rates, islands
+  during a lapse, posting, fixing in time and late, the chain splitting
+  and rejoining both ways, the contract, the refinery and the sat's fuel.
+
+### Added (2026-11-20, com-sats, slice 1: the relay network and your own com-sat)
+
+Astra, 2026-11-19: *"you can own a com-sat, keeps you updated with trade
+prices along the comsat's line of sight, basically, even across
+systems."* A dead relay *"turns a station into an island which gets its
+news by courier."* She agreed the model the same day: a chain of relays,
+8 ly a hop, an hour a hop, in two layers. The public network is the
+stations'; your com-sat is your terminal into it.
+
+- **New code: `src/comsats.js`.**
+- **The public relays.**
+  - There are three in circular orbits round every world with a port,
+    owned by whoever holds the system.
+  - They are seeded (`relays|<star>`), so where each one is at any
+    moment is a formula.
+  - They are not bodies, so no port, route or fingerprint moves.
+  - There are none in nobody's systems.
+- **Linked and island ports.**
+  - A port is linked while a relay (or a com-sat of yours) in its system
+    has line of sight to it. Any world or star between them blocks it,
+    and a surface port needs the relay above its horizon.
+  - A port no relay can see is an **island**, and its COMMS row says so.
+  - Measured over 40 stars: 5 islands in 1,095 port-moments, so islands
+    are rare while every relay is alive.
+  - Relays do not die yet. Slice 2 brings their RTG dark dates.
+- **The chain between stars.** Any star a power claims is a node, and so
+  is any star with a com-sat of yours over it. Nodes within 8 ly are
+  joined.
+- **Your com-sat.**
+  - **Buying one:** at shipyards and highports, from the port's COMMS
+    channel, for 85,000 cr. You can carry two.
+  - **Launching it:** from your own COMMS channel, **"Your com-sats"**,
+    while in orbit round a world. It goes into the orbit you are flying,
+    at your height and in your plane.
+  - It has to go at least 1.6 world radii out, and it cannot be launched
+    from a deck or the ground.
+  - The channel lists each sat you own, and whether you are LIVE and to
+    how many stars.
+- **Live prices.** With a com-sat on the network and your ship somewhere
+  on that same network, the trade analyser reads every connected star's
+  prices at **an hour a hop**. Its AGE column shows those in green hours,
+  and its header line says LIVE. Off the network, or with no sat, news
+  still rides the freighters at about 11.8 h per light year.
+  - From Mirven, one sat reaches 53 stars, so one sat on a big empire's
+    network covers all of it.
+- **Saves:** your sats in orbit (`G.comsats`) and those aboard
+  (`ship.comsats`). An old save has neither.
+- **Why launching is on COMMS.** The first cut put **LAUNCH COM-SAT
+  HERE** on the planetary scanner. The probe showed the scanner will not
+  open without a survey instrument fitted, so a pilot without one could
+  never launch, and the button moved.
+- All numbers are Claude's except the 8 ly and the hour, which are
+  Astra's.
+- Tests: `test/comsats.test.js` (22 checks, in the economy group). The
+  launch checks prove the sat starts exactly where the ship was, at its
+  height, moving the way it was. Probe: `tools/probe-comsats.js`.
+
+### Added (2026-11-19, the world's own drilling teams: new ground ports on a dated schedule)
+
+Astra, 2026-10-17: drilling teams work for "both" the player and the world;
+"there can and should be more than one land port per world sometimes";
+and the dig is mission content ("3 and 4 are good": ferry the crew, supply
+the dig). This is the world's side. The player's side is the drilling
+team at your outpost.
+
+- **New code: `src/digs.js`.** Each star has its own schedule of NPC
+  digs, built from its own seeded stream (`digs|<star>`) and the system
+  it generated. A dig has a world, a dry spot on it, a start date and a
+  finishing date. On the finishing date a ground port opens there, with
+  its own market and its own routes, whose first ships leave that day.
+- **The extra ground ports from day one.** These are simply the digs
+  that finished before day 0, so the same mechanism covers both. Measured
+  over 60 stars: about 0.75 digs per system across roughly five and a
+  half years of game time, and about 0.35 extra ports per inhabited
+  system at the start.
+- **Where digs happen:**
+  - only landable worlds (the gravity rule comes first);
+  - only dry ground (`Weather.dryAt`);
+  - never in nobody's systems;
+  - mostly worlds nobody lives on, where the new port is a mining head.
+- **Nothing else moves.** The generator is untouched. A dug port is put
+  into its system when it is open, the same way a station of yours is.
+  Every existing port, route and seed fingerprint stays as it was.
+- **Seeing them.**
+  - The planetary scanner marks a dig in progress with a blue diamond
+    and "DIG nn%".
+  - If you are in the system on the day a port opens, you hear about it
+    and it goes in the journal. A port that opened long ago is simply
+    there.
+- **Dig work on the mission board.** Ports in the system post jobs for a
+  dig in progress, delivered to the dig's **depot**: the nearest civilian
+  port on or over the same world. Navy carriers are excluded; the first
+  probe had picked FNS Sovereign.
+  - **Shoring:** structural alloys in 8 t batches, paying a quarter
+    over an ordinary haul.
+  - **Relief crew:** a passage for the drillers.
+  - Each batch delivered, and each relief crew, brings the opening day
+    **6 days** forward. It never goes earlier than the day of delivery,
+    or than half way through the dig.
+  - `G.digs` saves this, and it is the only state the digs keep.
+- **Not built:** protecting a dig. Nothing attacks one yet.
+- All numbers are Claude's.
+- Tests: `test/digs.test.js` (32 checks, in the ground group). Probe:
+  `tools/probe-digs.js` covers the scanner mark, the board and the port
+  opening on its day.
+
+### Added (2026-11-19, drilling teams: an outpost dug out into a port of yours)
+
+Astra: "Drilling teams are engineers that can be ordered to work on the
+surface at an outpost." What they do there was agreed on 2026-10-17: dig
+the outpost out into a ground port of your own.
+
+- **Setting them down.** Land at your standing outpost, pin its cell on
+  the planetary scanner, and click **SET ENGINEERS DOWN TO DIG**.
+  - Every engineer aboard goes down.
+  - They stay on your books and draw their wage. The crew screen says
+    "DRILLING ON …", and they cannot be dismissed while they are down.
+  - Your ship flies without them.
+- **What it costs:**
+  - its stores, 40 t of structural alloys over the whole dig, hauled
+    down (see "the dig's stores" below);
+  - a station licence where the law wants one, the first time. A port is
+    a station, and a Syndicate forged blank serves, as it does for a
+    Crawler.
+- **How fast.** Each engineer digs 0.6 + 0.2 × their rating a day, out of
+  120 in all:
+  - one good engineer takes about 100 days;
+  - an excellent and an exceptional together take about 40.
+- **Fetching them back.** **FETCH THE TEAM BACK** brings them aboard, and
+  the dig keeps what they did; it does not move without them. Setting a
+  team down again costs no more supplies.
+- **On the rails.** The dig is a record of the work done by a given moment
+  and the team's rate since. Every change to the team re-bases it, so the
+  finishing day is a formula and skipping time is exact.
+- **When it finishes,** wherever you are, the outpost opens as a **mining
+  station of yours** (`Stations.foundDug`):
+  - it stands on the outpost's spot, open from the day the dig finished;
+  - it has its own NPC traffic from that day, as any station of yours does;
+  - it has no Crawler over it, so there is no orbital half;
+  - its upkeep runs on a 300,000 cr build cost.
+  - Your engineers wait there: dock (or land at the outpost) and they come
+    aboard.
+- **The ground pointer** at a standing outpost now says "N empty the claim
+  at the outpost", not one drone's keys.
+- All numbers are Claude's.
+- Tests: `test/outposts.test.js` now has 43 checks. Probe:
+  `tools/probe-outpost.js` (the button, the team down, the status line).
+  stations, construction, crew, rescue, claims and the save round trip
+  all pass.
+
+### Changed (2026-11-19, the dig's stores are hauled, not a flat fee)
+
+The first cut charged 60,000 cr up front for "the dig's supplies". Astra
+left the choice between that and hauled tonnage to Claude, and Claude chose
+hauled tonnage. Supplying your own holdings is one of the three loops she
+asked for (2026-10-18), and the dig is the first holding that needs
+supplying.
+
+- **What the dig eats.** 40 t of **structural alloys** over the whole dig,
+  a third of a tonne per unit of work, eaten as the work is done.
+- **Two ways to get them there**, both from the scanner strip while you
+  are landed at the outpost:
+  - **UNLOAD ALLOYS FOR THE DIG** takes what is in your hold, up to what
+    the dig still wants. Bought at market, 40 t is about 10,600 cr.
+  - **GUILD BRINGS STORES IN** pays for the whole shortfall delivered, at
+    three times the going rate: 31,800 cr for all 40 t. It is the
+    convenient way, and the dear one.
+- **Running out.** When the stores run out the dig **stalls**: the team
+  waits there and still draws its wage. You hear about it once, wherever
+  you are, and the status line says STALLED and how many tonnes it is
+  short.
+  - A team set down with no stores at all is told so straight away, and
+    is not announced a second time.
+- **On the rails.** The record also keeps the stock on site at its
+  moment. Work done is capped by what that stock can shore, so the stall
+  day is a formula like the finishing day.
+- **Setting a team down is now free.** It needs only the licence, the
+  first time.
+- **Older saves.** A dig started before this change has no stock field.
+  It reads as fully supplied, because it was paid for in full.
+- The mining test save's shuttle, Groundbreaker, now carries 30 t of
+  alloys, so both routes can be tried: unload those 30 t, then either fly
+  back for 10 t more or contract the rest in.
+- All numbers are Claude's.
+- Tests: `test/outposts.test.js` now has 58 checks, covering unloading,
+  the stall, the contract, the legacy dig and recall keeping the stores.
+
+### Fixed (2026-11-19, the planetary scanner's marks are legible over every colour)
+
+Astra: "on the scanner display the selected point, the grid lines and the
+font need to be dynamically chosen to be visible on the scanner display in
+any of the colors it uses. They aren't, currently."
+
+- Rather than pick a colour per pixel underneath, every mark is now drawn
+  twice: a dark halo first, then the coloured stroke on top
+  (`scanHalo`, `scanText` in `src/screens.js`). A light line with a dark
+  edge reads on black, teal, green, orange and the white-pink "richest"
+  alike, so nothing has to sample the map.
+- **Grid lines** are a brighter white (0.42 alpha) with a faint dark edge.
+- **The selected point** is a warm-white box with four outward ticks, all
+  haloed. It stays visible when it sits on the brightest ore.
+- **Text and lines** on the map get the same treatment: field lines and
+  their arrowheads, pole rings and N/S, the ground track and its arrows,
+  drone marks, the outpost square and its label, and the ship marker.
+- Checked by eye at 1×, 4× and 8× over a rich deposit
+  (`tools/probe-scanner.js`).
+
+### Added (2026-11-19, saves to and from a file; a mining test save)
+
+Astra asked for a save "with a ship that has all the right gear, crew and
+another ship for sending my engineers down to the planet to test the
+mining stuff with".
+
+- **Export and import.** On the pause menu's save page, **X** writes the
+  highlighted slot to `manifest-<label>.json`. On the load page, **I**
+  picks a `.json` file and puts it in the highlighted empty slot (or the
+  first empty one), then loads it. The record keeps its version check.
+  The footer names both keys. (`Save.recordText`, `parseRecord`,
+  `writeRecord`.)
+- **`tools/make-mining-test-save.js`** builds the test save through the
+  game's own code and writes it with the probe's new `file()` helper:
+  - Mirven system, docked at Halden Depot, 748,678 cr, tutorial done;
+  - the Mule **Prospect**: deep-survey scanner, 2 drones, pilot Teo Brill
+    and engineer Ama Hoyt. Mirven I a is fully surveyed, the claim is
+    filed, and a real station licence is held;
+  - the heavy shuttle **Groundbreaker**, parked at the same port, with
+    engineers Kes Lund (3) and Mira Sable (4). Crew can't move between
+    hulls, so the drilling team rides the hull that lands.
+- **`tools/electron-probe.cjs`** gives probes a `file(name, text)` helper
+  that writes into the probe's output folder.
+
 ## 1.5.2 "Rhombicuboctahedron" (2026-11-19)
 
 The stations come alive, and the first piece of mining's last stage. A

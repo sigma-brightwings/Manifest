@@ -51,6 +51,9 @@
       liveryFaction: ship.liveryFaction || null,
       /* A Crawler's craft bay loadout goes with her (construction.js). */
       craftBay: ship.craftBay || null,
+      /* And the hardpoints cut out of her hold (combat.js HOLD INTO A
+       * HARDPOINT): they are part of her frame, and her fit is keyed to them. */
+      conv: ship.conv ? JSON.parse(JSON.stringify(ship.conv)) : null,
       fit: fit,
       cargo: cargo,
       fuel: ship.fuel, thrusterFuel: ship.thrusterFuel,

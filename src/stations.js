@@ -462,7 +462,8 @@
     port.livery = 'civ';
     /* The orbital half, before the routes: her shuttle's run down to the
      * pad is a local hop like any two ports over one world. */
-    if (st.kind === 'surface') {
+    /* A dug port has no Crawler over it, so no up-port either. */
+    if (st.kind === 'surface' && !st.dug) {
       var up = upPortFor(st, host);
       Gen.attachPort(sys, host, up);
       up.market = port.market;
@@ -711,6 +712,8 @@
   var CRAWLER_PRICE = 450000;
 
   function buildCost(st) {
+    /* A port dug out of an outpost (outposts.js) cost what its dig did. */
+    if (st.dug) return st.cost || 0;
     var Cn = C(), cr = CRAWLER_PRICE;
     (st.crates || []).forEach(function (id) { var c = Cn.BY_ID[id]; if (c) cr += c.price; });
     return cr;
@@ -1356,6 +1359,46 @@
     return G.sys && starOf(G, G.sys) === star ? G.sys : null;
   }
 
+  /* ---- A PORT DUG OUT OF AN OUTPOST (outposts.js, 2026-11-19) -------------
+   * Astra: "Drilling teams are engineers that can be ordered to work on the
+   * surface at an outpost." When their dig is done the outpost is a ground
+   * port: a mining station of yours, standing where the outpost does, open
+   * from the day the dig finished, with NPC traffic from that day like any
+   * station of yours. No Crawler, so no up-port and no crates to unpack: her
+   * founding crates are written in as already in (`hand`), which is what
+   * makes her open on the day. Her books run on what the dig cost. */
+  var DUG_CRATES = ['oreworks', 'warehouse', 'quarters'];
+  function foundDug(G, op, t, opts) {
+    opts = opts || {};
+    G.stations = G.stations || [];
+    var sys = sysOfStar(G, op.star);
+    var host = sys && sys.byId ? sys.byId[op.body] : null;
+    var id = 'st' + Math.round(t) + '-' + G.stations.length;
+    var hand = {};
+    DUG_CRATES.forEach(function (c, i) { hand[i] = t; });
+    var lic = op.licence || null;
+    var st = {
+      id: id, name: opts.name || (host ? nameFor(G, 'mining', host) : op.name + ' Orehead'),
+      star: op.star, starName: opts.starName || null,
+      type: 'mining', typeName: TYPE_NAME.mining, kind: 'surface', dug: true, outpost: op.id,
+      host: op.body, hostName: op.name,
+      crates: DUG_CRATES.slice(), recs: [], order: [0, 1, 2], rates: { unpack: 1, ferry: 1 }, bay: null,
+      foundN: DUG_CRATES.length, added: [], startedAt: t, hand: hand, held: null,
+      /* outposts.js says she is open, with the team's news; once is enough. */
+      announced: true, seized: false, seizedBy: null,
+      licence: lic,
+      faction: (lic && lic.fac) || opts.faction || (sys && sys.ports && sys.ports[0] && sys.ports[0].faction) || null,
+      crawler: null, crew: [], stock: {},
+      at: { lat: op.at.lat, lon: op.at.lon, elevation: 0 },
+      cost: opts.cost || 0
+    };
+    st.seedKey = siteKey(op.star, op.body, 'surface', 'mining', st.at);
+    G.stations.push(st);
+    if (sys) inject(G, sys, op.star);
+    journal(G, st.name + ' dug out of the outpost on ' + op.name + ' - a mining station of yours, open from today');
+    return st;
+  }
+
   function mineAt(G, port) { return port && port.playerStation ? byId(G, port.playerStation) : null; }
   function owns(G, port) { var st = mineAt(G, port); return !!st && !st.seized; }
 
@@ -1369,6 +1412,7 @@
     installByHand: installByHand, atFrame: atFrame,
     typeFor: typeFor, nearestType: nearestType, refusal: refusal, found: found,
     makePort: makePort, inject: inject, update: update, seize: seize, mineAt: mineAt, owns: owns,
+    foundDug: foundDug, DUG_CRATES: DUG_CRATES,
     WEEK: WEEK, MARGIN: MARGIN, BERTH_FEE: BERTH_FEE, UPKEEP_SHARE: UPKEEP_SHARE, RESERVE: RESERVE,
     TANK_WEEKS: TANK_WEEKS, FORECLOSE_WEEKS: FORECLOSE_WEEKS,
     buildCost: buildCost, takeBooks: takeBooks, forecast: forecast, tankWeeks: tankWeeks,

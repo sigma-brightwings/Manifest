@@ -36,8 +36,11 @@ var ringSys = null, bandSys = null, padSunOK = true, worstSun = 0;
 
 for (var s = 0; s < gal.stars.length; s++) {
   var st = gal.stars[s];
-  var a = Gen.generateSystem(st.seed, optsFor(st));
-  var b = Gen.generateSystem(st.seed, optsFor(st, { noTwilight: true }));
+  /* Resorts (2026-11-20) are newer than the twilight pass and follow how
+   * many pads a world has, which is what twilight changes; resorts.test.js
+   * holds them, so both builds leave them out. */
+  var a = Gen.generateSystem(st.seed, optsFor(st, { noResorts: true }));
+  var b = Gen.generateSystem(st.seed, optsFor(st, { noTwilight: true, noResorts: true }));
 
   /* Everything the old generator made is still there, same id, same name,
    * same orbit — the twilight ports only ever ADD ids, after the last. */
@@ -50,10 +53,13 @@ for (var s = 0; s < gal.stars.length; s++) {
      * is the economy answering, not an id moving, so carriers are exempt. */
     if (nb.name !== ob.name && !nb.fleet && !ob.fleet) namesStable = false;
     if (ob.orbit && (nb.orbit.a !== ob.orbit.a || nb.orbit.m0 !== ob.orbit.m0)) orbitsStable = false;
-    maxOld = Math.max(maxOld, +ob.id.slice(1));
+    /* Only the plain b<n> ids are a sequence. A named id (b0a, b0cp1, a
+     * resort's b2rs) is NaN here, and one NaN in Math.max would make
+     * maxOld NaN and this whole check pass by default. */
+    if (/^b\d+$/.test(ob.id)) maxOld = Math.max(maxOld, +ob.id.slice(1));
   });
   a.bodies.forEach(function (nb) {
-    if (!b.byId[nb.id] && +nb.id.slice(1) <= maxOld) extraAtEnd = false;
+    if (/^b\d+$/.test(nb.id) && !b.byId[nb.id] && +nb.id.slice(1) <= maxOld) extraAtEnd = false;
   });
 
   a.bodies.forEach(function (p) {

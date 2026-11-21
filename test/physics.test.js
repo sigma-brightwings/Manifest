@@ -217,8 +217,17 @@ section('Generated systems obey physical constraints (200 seeds)');
 
     // No two planet orbits may overlap: apoapsis of the inner must clear the
     // periapsis of the next one out.
+    /* Neighbours round the SAME parent: a distant companion's warm giant
+     * (stars stage 3) circles her, not the root, and its small a is not a
+     * crossing with the root's inner planets. */
     planets.sort(function (x, y) { return x.orbit.a - y.orbit.a; });
     for (var i = 0; i + 1 < planets.length; i++) {
+      if (planets[i].orbit.parent !== planets[i + 1].orbit.parent) {
+        var nx = planets.slice(i + 1).filter(function (p) { return p.orbit.parent === planets[i].orbit.parent; })[0];
+        if (!nx) continue;
+        if (planets[i].orbit.a * (1 + planets[i].orbit.e) >= nx.orbit.a * (1 - nx.orbit.e)) crossings++;
+        continue;
+      }
       var inner = planets[i].orbit, outer = planets[i + 1].orbit;
       if (inner.a * (1 + inner.e) >= outer.a * (1 - outer.e)) crossings++;
     }
@@ -266,11 +275,14 @@ section('N-body gravity field');
         Math.abs(V.len(acc) - expected) / expected < 0.05,
         V.len(acc).toExponential(3) + ' vs ' + expected.toExponential(3) + ' km/s^2');
 
-  // Acceleration must fall off as 1/r^2 far from everything.
+  // Acceleration must fall off as 1/r^2 far from everything. Built without
+  // a companion (stars stage 3): kawartha's second sun sits in exactly the
+  // region these two points sample, and near her there is no "far".
+  var lone = Gen.generateSystem('kawartha', { noMultiples: true });
   var far1 = { x: 4e9, y: 0, z: 3e9 };
   var far2 = { x: 8e9, y: 0, z: 6e9 };
-  var a1 = V.len(Sim.acceleration(far1, sys, 0));
-  var a2 = V.len(Sim.acceleration(far2, sys, 0));
+  var a1 = V.len(Sim.acceleration(far1, lone, 0));
+  var a2 = V.len(Sim.acceleration(far2, lone, 0));
   check('inverse-square falloff at distance', approx(a1 / a2, 4, 0.02),
         'ratio ' + (a1 / a2).toFixed(4) + ' (expected 4)');
 

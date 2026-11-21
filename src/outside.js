@@ -157,7 +157,9 @@
         }
       }
       if (how) { if (q.out !== how) q.out = how; }
-      else if (q.out) delete q.out;
+      /* A drilling team down at an outpost (outposts.js) is out for its
+       * own reason, not this file's: leave it be. */
+      else if (q.out && q.out !== 'outpost') delete q.out;
     }
     if (changed) s.crew = out;
   }
@@ -165,6 +167,12 @@
   /* What the crew screen says after their name, or null if they are in. */
   function statusOf(G, p) {
     if (!p || !p.out) return null;
+    if (p.out === 'outpost') {
+      var Op = global.Outposts, l = Op && G ? Op.list(G) : [], op = null;
+      for (var k = 0; k < l.length; k++) if (l[k].id === p.outpost) op = l[k];
+      if (!op) return 'down at an outpost';
+      return op.port ? 'waiting at ' + op.portName : 'drilling on ' + op.name;
+    }
     if (p.out === 'hull') {
       var o = current(G);
       return 'outside' + (o && sameHand(o, p) ? (o.tether ? ' on the line' : ' OFF the line') +

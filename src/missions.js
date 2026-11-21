@@ -108,6 +108,10 @@
     if (Eco && !Eco.BY_ID.parcel) {
       Eco.BY_ID.parcel = { id: 'parcel', name: 'Sealed courier parcel', base: 0, tier: 0 };
     }
+    /* An island's mail (mailOffers), the same kind of unsellable freight. */
+    if (Eco && !Eco.BY_ID.mail) {
+      Eco.BY_ID.mail = { id: 'mail', name: 'Mail sacks', base: 0, tier: 0 };
+    }
   }
 
   /* ---- what is in the sealed parcel (2026-11-01) --------------------------
@@ -469,6 +473,7 @@
    * shortage at the far end is not automatic, so that one stays. */
   function reasonPhrase(offer, f) {
     if (offer.type === 'courier') return null;
+    if (offer.type === 'passage' && offer.reason) return offer.reason;   // the holiday trade says why
     if (offer.type === 'disposal') {
       return f.role === 'reprocessing'
         ? 'They hold the licence for it, and nobody nearer does.' : null;
@@ -733,6 +738,18 @@
     /* And the approach, for a career carrying somebody's position in its
      * log (intel.js). Last again, same reason. */
     if (global.Intel) global.Intel.boardAt(G, galaxy, port, sys, t, offers, ctxs);
+    /* And the world's drilling teams (digs.js): supplies and fresh crews
+     * for a dig going on in this system. Last, own stream. */
+    digOffers(port, sys, here, t, G, offers, ctxs);
+    /* And relays about to go dark (comsats.js): RTG fuel wanted. Last. */
+    relayOffers(port, sys, here, t, G, offers, ctxs);
+    /* And an island's mail, while its relays are dark. Last. */
+    mailOffers(port, sys, here, t, G, offers, ctxs);
+    /* And a defence platform's RTG fuel, military work (milsats.js). Last. */
+    platformOffers(port, sys, here, t, G, offers, ctxs);
+    /* And the holiday trade: people going to, round and home from the
+     * worlds worth visiting (appeal.js). Last, own stream. */
+    touristOffers(port, sys, galaxy, here, t, offers, ctxs);
 
     /* Every offer gets its headline generated and capped and its long form
      * written, in one place — so a mission type added later cannot ship
@@ -826,6 +843,422 @@
         core: souls + ' aboard — ' + who + ' for ' + dst.name
       });
       ctxs.push({ fromPort: port, toPort: dst, sys: sys });
+    }
+  }
+
+  /* ---- the holiday trade (worlds worth visiting, slice 2, 2026-11-20) -----
+   * Astra, 2026-10-17: "HZ worlds, especially worlds which have nice weather
+   * and a good view have more passenger destinations." The agreed shape
+   * (claude/worlds-people-and-infrastructure.md): the passage board follows
+   * appeal, with
+   *
+   *   - HOPS: short station <-> ground passages on an appealing world. Low
+   *     pay per head, a day to do it, a fresh lot every window;
+   *   - INBOUND: people elsewhere in the system booking for its best world,
+   *     more of them the better it is;
+   *   - GOING HOME: holidaymakers leaving an appealing world for a
+   *     neighbouring star. That is the inbound trade from other stars seen
+   *     from the end that knows it, because a port cannot judge a world in a
+   *     system nobody has generated.
+   *
+   * All of it is appended after every other stream, from its own seed, so
+   * no board that exists today changes by one line. */
+  var TOUR_FROM = 0.5;                       // pleasant and better (appeal.js tiers)
+  var TOUR_HOP_PER_SOUL = [140, 320];
+  var TOUR_HOP_DEADLINE = 86400;
+  var TOUR_WHO_HOP = ['day-trippers', 'a tour party', 'sightseers', 'hikers', 'a honeymoon couple',
+                      'a school trip', 'spa guests', 'a wedding party'];
+  var TOUR_WHO_IN = ['holidaymakers', 'a tour party', 'a honeymoon couple', 'off-shift crew on leave',
+                     'a retirement club', 'a wedding party'];
+  var TOUR_WHO_HOME = ['holidaymakers going home', 'a tour party heading home', 'sunburnt tourists',
+                       'a honeymoon couple, homeward'];
+  var appealMemo = typeof WeakMap !== 'undefined' ? new WeakMap() : null;
+
+  /* A port's world, scored once per system (appeal reads the weather, so it
+   * is not free) and kept off the system object itself, which tests compare
+   * field by field. */
+  function appealOfWorld(sys, w) {
+    var Ap = global.Appeal;
+    if (!Ap || !w) return null;
+    var memo = appealMemo ? appealMemo.get(sys) : null;
+    if (!memo) { memo = {}; if (appealMemo) appealMemo.set(sys, memo); }
+    if (!(w.id in memo)) memo[w.id] = Ap.of(sys, w);
+    return memo[w.id];
+  }
+  /* Only the draws: appeal's reasons also name the drawbacks ("grey skies",
+   * "heavy gravity"), and nobody books a holiday for those. */
+  var TOUR_DRAWS = /clear skies|giant overhead|big moon|aurorae|never sets/;
+  function appealLine(a) {
+    var draws = (a && a.why || []).filter(function (s) { return TOUR_DRAWS.test(s); }).slice(0, 2)
+      .map(function (s) { return s === 'clear skies' || s === 'aurorae' ? 'the ' + s : s; });
+    return draws.length ? 'People come for ' + draws.join(' and ') + '.'
+                        : 'People come for the air and the weather.';
+  }
+
+  /* A couple is two people, whatever the roll said. */
+  function soulsFor(who, n) { return /couple/.test(who) ? 2 : n; }
+
+  function touristOffers(port, sys, galaxy, here, t, offers, ctxs) {
+    if (!global.Appeal || !port.market || !port.parentBody) return;
+    var win = windowIndex(t);
+    var rng = new RNG('tourism|' + port.id + '|' + win + '|' + sys.seed);
+    var w = port.parentBody, aHere = appealOfWorld(sys, w);
+    var scoreHere = aHere ? aHere.score : 0;
+    var all = (sys.ports || []).filter(function (p) { return p !== port && p.market && !p.dug && p.parentBody; });
+    var k = 0;
+    function idOf() { return 'tr|' + port.id + '|' + win + '|' + (k++); }
+
+    /* HOPS, between the sky and the ground of the same world: the shuttle's
+     * trade. A pleasant world posts up to one, a postcard up to two. */
+    if (scoreHere >= TOUR_FROM) {
+      var sib = all.filter(function (p) { return p.parentBody === w && !!p.surface !== !!port.surface; });
+      var nHop = rng.int(0, 1) + (scoreHere >= 0.7 ? 1 : 0);
+      for (var i = 0; i < nHop && sib.length; i++) {
+        var dst = rng.pick(sib);
+        var souls = rng.int(3, 8);
+        var per = Math.round(rng.range(TOUR_HOP_PER_SOUL[0], TOUR_HOP_PER_SOUL[1]));
+        var who = rng.pick(TOUR_WHO_HOP);
+        souls = soulsFor(who, souls);
+        offers.push({
+          id: idOf(), type: 'passage', cid: null, tonnes: 0, souls: souls, tourist: 'hop',
+          from: port.id, fromName: port.name, toPortId: dst.id, toName: dst.name,
+          faction: port.faction || null,
+          pay: legFloor(souls * per, port, dst, sys, t),
+          deadline: t - (t % WINDOW) + TOUR_HOP_DEADLINE,
+          reason: appealLine(aHere),
+          core: souls + ' aboard — ' + who + ' for ' + dst.name
+        });
+        ctxs.push({ fromPort: port, toPort: dst, sys: sys });
+      }
+    }
+
+    /* INBOUND, from any other world in the system to its best one. One
+     * chance a window, as likely as the world is appealing. */
+    var best = null, bestA = null;
+    all.forEach(function (p) {
+      if (p.parentBody === w) return;
+      var a = appealOfWorld(sys, p.parentBody);
+      if (a && a.score >= TOUR_FROM && (!bestA || a.score > bestA.score)) { best = p.parentBody; bestA = a; }
+    });
+    var roll = rng.next();                       // drawn every window, so the dice never shift
+    if (best && roll < 0.6 * bestA.score) {
+      var there = all.filter(function (p) { return p.parentBody === best; });
+      var dIn = rng.pick(there);
+      var sIn = rng.int(2, 6);
+      var pIn = Math.round(rng.range(PASSAGE_PER_SOUL_LOCAL[0], PASSAGE_PER_SOUL_LOCAL[1]) * (0.8 + 0.4 * bestA.score));
+      var wIn = rng.pick(TOUR_WHO_IN);
+      sIn = soulsFor(wIn, sIn);
+      offers.push({
+        id: idOf(), type: 'passage', cid: null, tonnes: 0, souls: sIn, tourist: 'inbound',
+        from: port.id, fromName: port.name, toPortId: dIn.id, toName: dIn.name,
+        faction: port.faction || null,
+        pay: legFloor(sIn * pIn, port, dIn, sys, t),
+        deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
+        reason: appealLine(bestA),
+        core: sIn + ' aboard — ' + wIn + ' for ' + dIn.name
+      });
+      ctxs.push({ fromPort: port, toPort: dIn, sys: sys });
+    }
+
+    /* GOING HOME, from an appealing world to a neighbouring star with a
+     * port, at the interstellar rate. */
+    var rollHome = rng.next();
+    if (galaxy && scoreHere >= TOUR_FROM && rollHome < 0.45 * scoreHere) {
+      var near = galaxy.stars.filter(function (st) {
+        if (st === here || !st.factionId) return false;
+        var d = global.Galaxy.distance3(here, st);
+        return d > 0 && d < 9;
+      });
+      if (near.length) {
+        var star = rng.pick(near);
+        var sH = rng.int(1, 4);
+        var pH = Math.round(rng.range(PASSAGE_PER_SOUL_STAR[0], PASSAGE_PER_SOUL_STAR[1]));
+        var wH = rng.pick(TOUR_WHO_HOME);
+        sH = soulsFor(wH, sH);
+        offers.push({
+          id: idOf(), type: 'passage', cid: null, tonnes: 0, souls: sH, tourist: 'home',
+          from: port.id, fromName: port.name, toStarId: star.id, toName: star.name + ' system',
+          faction: port.faction || null,
+          pay: sH * pH,
+          deadline: t - (t % WINDOW) + COURIER_DEADLINE,
+          reason: 'They came for ' + w.name + ', and the holiday is over.',
+          core: sH + ' aboard — ' + wH + ', bound for the ' + star.name + ' system'
+        });
+        ctxs.push({ fromPort: port, sys: sys, here: here, toStar: star });
+      }
+    }
+  }
+
+  /* ---- the world's digs (digs.js, 2026-11-19) ----------------------------
+   * Astra, 2026-10-17: drilling teams are mission content - "ferry the crew
+   * and gear, protect the dig, deliver supplies" ("3 and 4 are good").
+   *
+   * A dig has no port of its own until it is through, so its work is
+   * routed through its DEPOT: the nearest port on or over the same world,
+   * or failing that any port in the system. Both kinds reuse a contract
+   * type that already settles at a dock, so nothing new has to be taught
+   * to the hold, the berths or the save:
+   *   - SUPPLY is a haul of structural alloys to the depot. Each eight
+   *     tonnes delivered is a batch, and every batch brings the dig's
+   *     opening day forward (Digs.supply).
+   *   - A RELIEF CREW is a passage to the depot: fresh drillers, one batch.
+   * Offered from any port in the system but the depot itself, while the
+   * dig is going. Protecting the dig is not built: there is nothing yet
+   * that attacks one. */
+  var DIG_BATCH_T = 8;
+  function digDepot(sys, dig) {
+    /* Not a fleet carrier or naval yard: civilian drillers do not ship
+     * through the navy (the first probe found FNS Sovereign as a depot). */
+    var Cb = global.Combat;
+    var ports = (sys.ports || []).filter(function (p) {
+      return p.market && !p.dug && !(Cb && Cb.fleetPort && Cb.fleetPort(p));
+    });
+    var host = sys.byId[dig.body];
+    var on = ports.filter(function (p) { return p.parentBody === host; });
+    if (on.length) return on[0];
+    var par = host && host.parentBody;
+    var over = ports.filter(function (p) { return par && p.parentBody === par; });
+    return over[0] || ports[0] || null;
+  }
+  function digOffers(port, sys, here, t, G, offers, ctxs) {
+    var Dg = global.Digs;
+    if (!Dg || !here || !port.market) return;
+    var digs = Dg.active(G, sys, here.id, t);
+    if (!digs.length) return;
+    var win = windowIndex(t);
+    var rng = new RNG('dig-work|' + port.id + '|' + win + '|' + sys.seed);
+    digs.forEach(function (dig, k) {
+      var depot = digDepot(sys, dig);
+      if (!depot || depot === port) return;
+      /* Work posted while there is a fortnight or more to go. */
+      if (Dg.doneAt(G, dig) - t < 14 * 86400) return;
+      if (rng.chance(0.75)) {
+        var tonnes = DIG_BATCH_T * rng.int(1, 3);
+        offers.push({
+          id: 'dg|' + port.id + '|' + win + '|' + k + '|s', type: 'haul', cid: 'alloys', tonnes: tonnes,
+          from: port.id, fromName: port.name,
+          toPortId: depot.id, toName: depot.name,
+          faction: dig.faction || port.faction || null,
+          dig: dig.id, digBody: dig.bodyName,
+          /* Shoring for a dig is wanted, not just carried: a quarter over a haul. */
+          pay: Math.round(legFee(port, depot, sys, t, tonnes, rng) * 1.25),
+          deadline: t - (t % WINDOW) + HAUL_DEADLINE,
+          core: tonnes + 't shoring for the dig on ' + dig.bodyName + ', to ' + depot.name
+        });
+        ctxs.push({ fromPort: port, toPort: depot, sys: sys });
+      }
+      if (rng.chance(0.4)) {
+        var souls = dig.crew;
+        var per = Math.round(rng.range(PASSAGE_PER_SOUL_LOCAL[0], PASSAGE_PER_SOUL_LOCAL[1]));
+        offers.push({
+          id: 'dg|' + port.id + '|' + win + '|' + k + '|c', type: 'passage', cid: null, tonnes: 0, souls: souls,
+          from: port.id, fromName: port.name,
+          toPortId: depot.id, toName: depot.name,
+          faction: dig.faction || port.faction || null,
+          dig: dig.id, digBody: dig.bodyName,
+          pay: legFloor(souls * per, port, depot, sys, t),
+          deadline: t - (t % WINDOW) + PASSAGE_DEADLINE,
+          core: souls + ' aboard — a relief crew for the dig on ' + dig.bodyName + ', to ' + depot.name
+        });
+        ctxs.push({ fromPort: port, toPort: depot, sys: sys });
+      }
+    });
+  }
+  /* ---- relays going dark (comsats.js slice 2, 2026-11-20) ----------------
+   * A world's relays run on RTGs and the owner's tender is sometimes late.
+   * From a month before the fuel runs out until the tender would have come,
+   * every port in the system posts the job: RTG FUEL TO THE WORLD'S PORT.
+   * You source the fuel yourself - an isotope refinery sells it - which is
+   * the point: the contract hands you nothing at the desk (`bring`), and
+   * pays for the fuel and the trip. Delivered before the dark date, the
+   * relays never go dark; after it, they light again that day. */
+  var RELAY_PAY_PER_T = 2.2;     // x RTG fuel's base, per tonne - the fuel and the errand
+  function relayOffers(port, sys, here, t, G, offers, ctxs) {
+    var Cs = global.Comsats, Eco = global.Economy;
+    if (!Cs || !here || !port.market || !Eco || !Eco.BY_ID.rtgfuel) return;
+    var seen = {};
+    Cs.relaysFor(sys, here.id).forEach(function (rl) {
+      if (seen[rl.body]) return;
+      seen[rl.body] = true;
+      var L = Cs.lapsePosted(G, here.id, rl.body, t);
+      if (!L) return;
+      var w = sys.byId[rl.body];
+      var dest = (sys.ports || []).filter(function (p) { return p.market && p.parentBody === w && !p.dug; })[0];
+      if (!dest) return;
+      var tonnes = Cs.RTG_LOAD_T;
+      var dark = t >= L.from;
+      offers.push({
+        /* One job, posted at every port: the id is the lapse's, not the
+         * port's, so taking it at one desk takes it off all of them. */
+        id: 'rt|' + L.key, type: 'haul', cid: 'rtgfuel', tonnes: tonnes, bring: true,
+        from: port.id, fromName: port.name,
+        toPortId: dest.id, toName: dest.name,
+        faction: rl.owner || port.faction || null,
+        relayLapse: { key: L.key, from: L.from, to: L.to, body: rl.body, bodyName: rl.bodyName },
+        pay: Math.round(tonnes * Eco.BY_ID.rtgfuel.base * RELAY_PAY_PER_T),
+        deadline: L.to,
+        core: tonnes + 't RTG fuel for the relays over ' + rl.bodyName + ', to ' + dest.name +
+              (dark ? ' - they are DARK' : ' - dark in ' + Math.max(1, Math.ceil((L.from - t) / 86400)) + ' days')
+      });
+      ctxs.push({ fromPort: port, toPort: dest, sys: sys });
+    });
+    /* THE SYSTEM'S UPLINK (comsats.js): while it is dark the chain between
+     * stars breaks here, in two. Its fuel goes to the system's main port -
+     * the highport if there is one - and joins the chain again. */
+    var U = Cs.lapsePosted(G, here.id, Cs.UPLINK, t);
+    if (U && here.factionId) {
+      var Cb = global.Combat;
+      var civ = (sys.ports || []).filter(function (p) { return p.market && !p.dug && !p.playerStation && !(Cb && Cb.fleetPort && Cb.fleetPort(p)); });
+      var main = civ.filter(function (p) { return p.market.role === 'highport'; })[0] || civ[0];
+      if (main) {
+        var ut = Cs.RTG_LOAD_T, udark = t >= U.from;
+        offers.push({
+          id: 'rt|' + U.key, type: 'haul', cid: 'rtgfuel', tonnes: ut, bring: true,
+          from: port.id, fromName: port.name, toPortId: main.id, toName: main.name,
+          faction: main.faction || port.faction || null,
+          relayLapse: { key: U.key, from: U.from, to: U.to, body: Cs.UPLINK, bodyName: 'the ' + here.name + ' uplink' },
+          pay: Math.round(ut * Eco.BY_ID.rtgfuel.base * RELAY_PAY_PER_T * 1.5),
+          deadline: U.to,
+          core: ut + 't RTG fuel for the system uplink, to ' + main.name +
+                (udark ? ' - the chain is BROKEN here' : ' - it fails in ' + Math.max(1, Math.ceil((U.from - t) / 86400)) + ' days')
+        });
+        ctxs.push({ fromPort: port, toPort: main, sys: sys });
+      }
+    }
+  }
+  /* ---- an island's mail (comsats.js slice 3, 2026-11-20) -----------------
+   * Astra: knocking a relay out "turns a station into an island which gets
+   * its news by courier." The post goes the same way. While a world's
+   * relays are dark (an RTG lapse - an island by geometry alone is over in
+   * an hour and posts nothing), its ports stack up sacks for the rest of
+   * the system, and every other desk holds the mail for it until a ship is
+   * going that way. A sack is a haul of 'mail', which no market lists
+   * (like the courier parcel), and pays more the longer the world has been
+   * dark: the backlog is bigger and the senders keener. */
+  var MAIL_BASE = 700, MAIL_PER_DAY = 90, MAIL_CAP = 6500;
+  function mailPay(days, tonnes) {
+    return Math.round(Math.min(MAIL_CAP, MAIL_BASE + MAIL_PER_DAY * Math.max(0, days)) * (0.8 + 0.2 * tonnes));
+  }
+  function mailOffers(port, sys, here, t, G, offers, ctxs) {
+    var Cs = global.Comsats, Cb = global.Combat;
+    if (!Cs || !Cs.darkSpan || !here || !port.market || port.dug) return;
+    var win = windowIndex(t);
+    function civil(p) {
+      return p.market && !p.dug && !p.playerStation && !(Cb && Cb.fleetPort && Cb.fleetPort(p));
+    }
+    function spanOf(p) { return p.parentBody ? Cs.darkSpan(G, here.id, p.parentBody.id, t) : null; }
+    if (!civil(port)) return;
+    var ports = (sys.ports || []).filter(civil);
+    var mine = spanOf(port);
+    if (mine) {
+      /* OUT: this port's own sacks, to the main port still on the wire. */
+      var lit = ports.filter(function (p) { return p !== port && !spanOf(p); });
+      if (!lit.length) return;
+      var dest = lit.filter(function (p) { return p.market.role === 'highport'; })[0] || lit[0];
+      var rng = new RNG('mail-out|' + port.id + '|' + win + '|' + sys.seed);
+      if (!rng.chance(0.85)) return;
+      var tn = rng.int(1, 3), days = (t - mine.from) / 86400;
+      offers.push({
+        id: 'ml|o|' + port.id + '|' + win, type: 'haul', cid: 'mail', tonnes: tn,
+        from: port.id, fromName: port.name, toPortId: dest.id, toName: dest.name,
+        faction: port.faction || null, mail: true,
+        pay: legFloor(mailPay(days, tn), port, dest, sys, t),
+        deadline: t - (t % WINDOW) + HAUL_DEADLINE,
+        core: tn + 't of mail off an island, to ' + dest.name + ' - ' + Math.max(1, Math.round(days)) + ' days of it'
+      });
+      ctxs.push({ fromPort: port, toPort: dest, sys: sys });
+      return;
+    }
+    /* IN: the mail waiting here for each island in the system. One job per
+     * island, posted at every desk on the wire (the id is the island's). */
+    ports.forEach(function (isl) {
+      if (isl === port) return;
+      var L = spanOf(isl);
+      if (!L) return;
+      var r2 = new RNG('mail-in|' + isl.id + '|' + win + '|' + sys.seed);
+      if (!r2.chance(0.8)) return;
+      var t2 = r2.int(1, 3), d2 = (t - L.from) / 86400;
+      offers.push({
+        id: 'ml|i|' + isl.id + '|' + win, type: 'haul', cid: 'mail', tonnes: t2,
+        from: port.id, fromName: port.name, toPortId: isl.id, toName: isl.name,
+        faction: isl.faction || port.faction || null, mail: true,
+        pay: legFloor(mailPay(d2, t2), port, isl, sys, t),
+        deadline: t - (t % WINDOW) + HAUL_DEADLINE,
+        core: t2 + 't of mail for ' + isl.name + ' - its relays are dark'
+      });
+      ctxs.push({ fromPort: port, toPort: isl, sys: sys });
+    });
+  }
+
+  /* ---- a defence platform's fuel (milsats.js, 2026-11-20) ----------------
+   * The same RTG and the same late tender as a relay, and the same job -
+   * bring 4 t of RTG fuel - but it is MILITARY work: posted only at the
+   * owner's own desks (its ports, and its navy's), delivered to the port
+   * the platform guards, and paid as the navy pays, double a relay. A
+   * platform left dark is a platform that does not shoot; who wants that
+   * is the other half of the story, and it is why the contract matters. */
+  var PLATFORM_PAY_MUL = 2;
+  function platformOffers(port, sys, here, t, G, offers, ctxs) {
+    var Ms = global.Milsats, Cs = global.Comsats, Eco = global.Economy;
+    if (!Ms || !Cs || !here || !port.market || !Eco || !Eco.BY_ID.rtgfuel) return;
+    var plats = Ms.platformsFor(sys, here, G && G.galaxy);
+    if (!plats.length) return;
+    var owner = plats[0].owner;
+    if (port.faction !== owner && !(global.Combat && global.Combat.fleetPort && global.Combat.fleetPort(port))) return;
+    plats.forEach(function (p) {
+      if (Ms.isDead(G, p)) return;
+      var L = Cs.lapsePosted(G, here.id, p.id, t);
+      if (!L) return;
+      var dest = sys.byId[p.port];
+      if (!dest) return;
+      var tonnes = Cs.RTG_LOAD_T, dark = t >= L.from;
+      offers.push({
+        id: 'rt|' + L.key, type: 'haul', cid: 'rtgfuel', tonnes: tonnes, bring: true,
+        from: port.id, fromName: port.name, toPortId: dest.id, toName: dest.name,
+        faction: owner,
+        relayLapse: { key: L.key, from: L.from, to: L.to, body: p.id, bodyName: p.name, platform: true },
+        pay: Math.round(tonnes * Eco.BY_ID.rtgfuel.base * RELAY_PAY_PER_T * PLATFORM_PAY_MUL),
+        deadline: L.to,
+        core: tonnes + 't RTG fuel for defence platform ' + p.name + ', to ' + dest.name +
+              (dark ? ' - it is DARK and unarmed' : ' - dark in ' + Math.max(1, Math.ceil((L.from - t) / 86400)) + ' days')
+      });
+      ctxs.push({ fromPort: port, toPort: dest, sys: sys });
+    });
+  }
+
+  function relayDelivered(G, m, t, hooks) {
+    var Cs = global.Comsats;
+    if (!Cs || !m.relayLapse) return;
+    if (!Cs.fixLapse(G, m.relayLapse, t) || !hooks || !hooks.say) return;
+    if (m.relayLapse.platform) {
+      /* A defence platform's RTG (platformOffers). */
+      hooks.say(t < m.relayLapse.from ? m.relayLapse.bodyName + ' is fuelled - it stays armed.'
+                                      : m.relayLapse.bodyName + ' is powered again, and armed.', 7);
+      return;
+    }
+    {
+      var up = m.relayLapse.body === Cs.UPLINK;
+      hooks.say(up ? (t < m.relayLapse.from ? m.relayLapse.bodyName + ' is fuelled - the chain will not break here.'
+                                            : m.relayLapse.bodyName + ' is lit again - the two chains are one.')
+                   : t < m.relayLapse.from ? 'The relays over ' + m.relayLapse.bodyName + ' are fuelled - they will not go dark.'
+                                           : 'The relays over ' + m.relayLapse.bodyName + ' are lit again.', 7);
+    }
+  }
+
+  /* A dig contract settled: its batches bring the opening day forward. */
+  function digDelivered(G, m, t, hooks, sys) {
+    var Dg = global.Digs;
+    sys = sys || G.sys;
+    if (!Dg || !m.dig || !sys) return;
+    var star = (G.here && G.here.id) || sys.starId;
+    var dig = Dg.planFor(sys, star).filter(function (d) { return d.id === m.dig; })[0];
+    if (!dig || Dg.isOpen(G, dig, t)) return;
+    var before = Dg.doneAt(G, dig);
+    var batches = m.type === 'passage' ? 1 : Math.max(1, Math.round((m.tonnes || 0) / DIG_BATCH_T));
+    var after = Dg.supply(G, dig, t, batches);
+    var days = Math.round((before - after) / 86400);
+    if (days > 0 && hooks && hooks.say) {
+      hooks.say('The dig on ' + dig.bodyName + ' is ' + days + ' day' + (days === 1 ? '' : 's') + ' nearer for it.', 6);
     }
   }
 
@@ -1228,7 +1661,9 @@
       /* A prospect contract hands you nothing: you are being paid to go
        * and get it off a world. Every other freight contract is loaded at
        * the desk. */
-      if (offer.type !== 'prospect') {
+      /* Nor does a contract that asks you to BRING the goods (a relay's
+       * RTG fuel, relayOffers): you source them. */
+      if (offer.type !== 'prospect' && !offer.bring) {
         G.ship.cargo[offer.cid] = (G.ship.cargo[offer.cid] || 0) + offer.tonnes;
       }
     }
@@ -1265,6 +1700,11 @@
       /* FIELDWORK (fieldwork.js). Absent on every other contract, which
        * is why they are spelled out rather than copied wholesale: a
        * contract is a record, not a view of the offer it came from. */
+      /* A dig's supplies or relief crew (digOffers): which dig it feeds. */
+      dig: offer.dig || null, digBody: offer.digBody || null,
+      /* A relay's RTG fuel (relayOffers): the lapse it fixes, and that the
+       * goods were yours to bring. */
+      relayLapse: offer.relayLapse || null, bring: offer.bring || false,
       hop: offer.hop || false, hours: offer.hours || 0,
       dark: offer.dark || false, foundFrom: offer.foundFrom,
       claimKey: offer.claimKey || null,
@@ -1391,6 +1831,7 @@
         bumpStanding(G, m.faction, cut.standing);
         if (hooks && hooks.say) hooks.say(cut.text + gc.note, 6);
         if (hooks && hooks.sound) hooks.sound(cut.pay > 0 ? 'pay' : 'warn');
+        if (m.dig) digDelivered(G, m, t, hooks, sys);
         if (m.campaign && global.Arcs) global.Arcs.onStepComplete(G, m, port, sys, t, hooks);
         continue;
       }
@@ -1437,6 +1878,8 @@
           ', ' + m.pay + ' cr' + gh.note);
       if (hooks && hooks.say) hooks.say('Contract complete — ' + m.pay + ' cr' + gh.note, gh.took ? 7 : 5);
       if (hooks && hooks.sound) hooks.sound('pay');
+      if (m.dig) digDelivered(G, m, t, hooks, sys);
+      if (m.relayLapse) relayDelivered(G, m, t, hooks);
       /* A campaign chapter settling is what casts the next one — see
        * arcs.js. Ordinary contracts have no `campaign` flag and this is a
        * no-op for them. */
@@ -1792,6 +2235,10 @@
     reach: reach, creditFor: creditFor,
     WINDOW: WINDOW,
     boardAt: boardAt, accept: accept,
+    digDepot: digDepot, digDelivered: digDelivered, DIG_BATCH_T: DIG_BATCH_T,
+    relayDelivered: relayDelivered, RELAY_PAY_PER_T: RELAY_PAY_PER_T,
+    mailOffers: mailOffers, mailPay: mailPay, MAIL_CAP: MAIL_CAP,
+    platformOffers: platformOffers, PLATFORM_PAY_MUL: PLATFORM_PAY_MUL,
     passageRefusal: passageRefusal, passageCut: passageCut,
     licenceRefusal: licenceRefusal,
     passengersUnderFire: passengersUnderFire, passengersWalkOff: passengersWalkOff,

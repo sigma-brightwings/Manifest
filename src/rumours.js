@@ -188,6 +188,27 @@
     return tc;
   }
 
+  /* The wire's edges out of a port: every other port linked at the time.
+   * Only in a system with a relay network at all (a nobody's system has
+   * none, and "not an island" there means silence, not a wire). The
+   * relays' state is read off the live game when there is one (fuelled
+   * lapses, your com-sats); headless, the seed's own schedule. */
+  var WIRE_S = 600;
+  function wireLinked(sys, port, t) {
+    var Cs = global.Comsats;
+    if (!Cs || !port || !port.market || !sys.starId) return false;
+    if (!Cs.relaysFor(sys, sys.starId).length) return false;
+    return !Cs.isIsland(global.Game || {}, sys, sys.starId, port, t);
+  }
+  function wireEdges(sys, pid, ct, net, nb) {
+    if (!sys.byId || !wireLinked(sys, sys.byId[pid], ct)) return;
+    var tw = ct + WIRE_S;
+    for (var q in net.ports) {
+      if (q === pid) continue;
+      if (wireLinked(sys, sys.byId[q], tw)) nb.push({ n: 'P:' + q, t: tw, via: pid });
+    }
+  }
+
   /* EARLIEST ARRIVAL from one node at one moment, over the whole system.
    * Returns { node: { t, via } } where `via` is the port a ship heard it
    * at (null for the ship that started it). A plain O(n²) Dijkstra: a
@@ -214,6 +235,13 @@
           var sh = net.ships[list[i]];
           if (sh) nb.push({ n: list[i], t: contactTime(sh, pid, ct, sys), via: pid });
         }
+        /* OVER THE WIRE (Astra, 2026-11-20: yes to rumours over the relays
+         * for linked ports). A port on the network passes what it has heard
+         * to every other port on the network in WIRE_S - the bar talk goes
+         * out with the mail. An island neither sends nor hears it this way:
+         * news reaches an island only on a ship (comsats.js). Between stars
+         * it still goes with the freighters (starSpread). */
+        wireEdges(sys, pid, ct, net, nb);
       } else {
         var s = net.ships[cur];
         if (s) for (var j = 0; j < s.ports.length; j++) {
@@ -535,6 +563,7 @@
     originFor: originFor, nodeOf: nodeOf, heardAt: heardAt, weightOf: weightOf,
     defer: defer, settle: settle, update: update, onDeath: onDeath, LINES: LINES,
     HALF_LIFE: HALF_LIFE, MAX_HOPS: MAX_HOPS, HOP_FADE: HOP_FADE, COURIER_WAIT: COURIER_WAIT,
+    WIRE_S: WIRE_S, wireLinked: wireLinked,
     _clearCache: function () { _prop = {}; _links = {}; }
   };
   global.Rumours = Rumours;

@@ -444,6 +444,387 @@
     };
   }
 
+  /* ---- MORE THAN ONE SUN (stars plan stage 3, 2026-11-20) ----------------
+   * Astra, 2026-11-20, asked for both: binary stars, and giants in a warm
+   * zone with a moon worth living on. claude/stars-and-systems-plan.md has
+   * the real rates (Offner et al. 2023) and the decisions she delegated on
+   * 2026-11-02. What is NEW here is the constraint the build kept: NOTHING
+   * THAT ALREADY EXISTS MOVES. Measured first (tools/diag-stars3.js, 200
+   * systems): a close pair at P >= 7 d fits inside the innermost planet in
+   * 128 of them, and a companion far enough out to cut no planet sits at a
+   * median of a few tens of AU. So:
+   *
+   *   CLOSE PAIR (P-type). The star you knew is split into two whose masses
+   *   and light SUM to what it was. Every planet orbits the pair exactly as
+   *   it orbited the star - same mass inside it, same light on it - so not
+   *   one orbit, insolation, type or port changes. The root becomes their
+   *   barycentre (still id b0); the stars are b0a and b0b, on override
+   *   orbits (barycentricMu) through it. Only where 1.15 a_crit (Holman &
+   *   Wiegert 1999) fits inside the innermost planet with P >= 7 d (Martin
+   *   et al. 2015); otherwise the draw becomes a distant companion.
+   *
+   *   DISTANT COMPANION (S-type, the plan's "mid" and "wide" pairs). A
+   *   second sun on a relative orbit about the root, no further in than
+   *   the Holman-Wiegert S-type limit allows the outermost planet (x0.8).
+   *   Its light at the planets is a few thousandths of an Earth: kept OUT of
+   *   insolation on purpose (plan 3.3) - it is a light in the sky, not heat.
+   *   The draw is the real lognormal; where that would cut a planet it is
+   *   pushed out to the limit instead, so the closest companions are
+   *   under-counted. Said here so nobody mistakes it for the real rate.
+   *
+   *   TRIPLE. A close pair (where it fits) and a distant third.
+   *
+   * Everything comes off a NEW fork, 'multiplicity', so the 'star' stream -
+   * name, class, colour - is untouched and the chart keeps every name. The
+   * new bodies go at the END of the root's children, after every id, so
+   * any loop over sys.bodies meets them last. opts.noMultiples builds the
+   * system as it was, for the suite to prove exactly that. */
+  var MULT_SHAPES = {      // single, close, distant (mid + wide), triple - in percent
+    M: [73.0, 0.6, 21.4, 5.0], K: [60.0, 2.0, 28.0, 10.0], G: [54.0, 3.5, 30.5, 12.0],
+    F: [45.0, 4.9, 33.1, 17.0], A: [32.0, 7.7, 35.3, 25.0]
+  };
+  var CLOSE_A_MAX = { M: 0.08, K: 0.27, G: 0.50, F: 0.80, A: 1.70 };   // AU, plan 3.1
+  var SEP_LOG = { M: [1.4, 1.3], K: [1.5, 1.4], G: [1.6, 1.5], F: [1.65, 1.5], A: [1.7, 1.5] };  // log10 AU, sigma dex
+  var P_BIN_MIN_D = 7;
+  var CIRCUMBINARY_MARGIN = 1.15;
+  var S_LIMIT_SAFETY = 0.8;
+  var A_OUT_MAX = 3000;    // AU: past this a companion is a bright star, and the cruise drive's problem
+
+  /* Holman & Wiegert 1999. P-type: the innermost stable orbit about a pair,
+   * in binary separations (mu = M_B / M). S-type: the outermost stable
+   * orbit about one star, in companion separations (mu = M_C / M_total). */
+  function aCritP(e, mu) {
+    return 1.60 + 5.10 * e - 2.22 * e * e + 4.12 * mu - 4.27 * e * mu - 5.09 * mu * mu + 4.61 * e * e * mu * mu;
+  }
+  function aCritS(e, mu) {
+    return 0.464 - 0.380 * mu - 0.631 * e + 0.586 * mu * e + 0.150 * e * e - 0.198 * mu * e * e;
+  }
+  function classForMass(m) {
+    for (var i = STAR_CLASSES.length - 1; i >= 0; i--) if (m >= STAR_CLASSES[i].mass[0] * 0.98) return STAR_CLASSES[i];
+    return STAR_CLASSES[0];
+  }
+  function starOfMass(massSol, tFrac, lum) {
+    var k = classForMass(massSol);
+    return { cls: k.cls, color: k.color, massSol: massSol,
+             temp: Math.round(k.temp[0] + (k.temp[1] - k.temp[0]) * tFrac),
+             luminosity: lum !== undefined ? lum : Math.pow(massSol, 3.5),
+             radius: R_SUN * Math.pow(massSol, 0.8) };
+  }
+
+  /* The orbits a system would be built on by default, without building it:
+   * the same draws on the same fork, in the same order, as generateSystem. */
+  function defaultAxesAU(seed, pre) {
+    var pr = new RNG(seed).fork('planet-orbits');
+    var count = pr.int(6, 12);
+    var L = pre.luminosity;
+    return warmChainAxes(pr, count, L, pre.massSol, 1.77 * Math.sqrt(L)).map(function (a) { return a / AU; });
+  }
+
+  function multiplicityOf(seed, pre, axesAU) {
+    var mr = new RNG(seed).fork('multiplicity');
+    /* Every draw first, in a fixed order, whatever the shape turns out to be. */
+    var roll = mr.next() * 100, qClose = mr.range(0.3, 1.0), eBin = mr.range(0, 0.10);
+    var pRoll = mr.next(), tFracA = mr.next(), tFracB = mr.next(), binPhase = mr.angle(), binLan = mr.angle();
+    var qC = mr.range(0.12, 0.95), sepZ = mr.gauss(0, 1), eOut = mr.range(0, 0.35);
+    var incOut = mr.gauss(0, 14) * DEG, lanOut = mr.angle(), argpOut = mr.angle(), m0Out = mr.angle(), tFracC = mr.next();
+    var cls = pre.cls, sh = MULT_SHAPES[cls] || MULT_SHAPES.G;
+    var shape = roll < sh[0] ? 'single' : roll < sh[0] + sh[1] ? 'close'
+              : roll < sh[0] + sh[1] + sh[2] ? 'distant' : 'triple';
+    if (shape === 'single' || !axesAU || !axesAU.length) return { shape: 'single' };
+    var inner = Math.min.apply(null, axesAU), outer = Math.max.apply(null, axesAU);
+    var M = pre.massSol, out = { shape: shape };
+
+    if (shape === 'close' || shape === 'triple') {
+      var mu = qClose / (1 + qClose);
+      var aMax = Math.min(inner / (CIRCUMBINARY_MARGIN * aCritP(eBin, mu)), CLOSE_A_MAX[cls] || 0.5);
+      var pMin = P_BIN_MIN_D / 365.25, aMin = Math.cbrt(M * pMin * pMin);
+      if (aMax > aMin) {
+        var MA = M / (1 + qClose), MB = M * qClose / (1 + qClose);
+        var la = Math.pow(MA, 3.5), lb = Math.pow(MB, 3.5), k = pre.luminosity / (la + lb);
+        out.close = {
+          aBin: aMin * Math.pow(aMax / aMin, pRoll), e: eBin, phase: binPhase, lan: binLan,
+          A: starOfMass(MA, tFracA, la * k), B: starOfMass(MB, tFracB, lb * k)
+        };
+        /* A keeps the system's own name and class - it is the star the
+         * chart always showed, now with a companion pressed against it. */
+        out.close.A.cls = pre.cls; out.close.A.color = pre.color; out.close.A.temp = pre.temp;
+      } else if (shape === 'close') {
+        shape = out.shape = 'distant';          // no room inside: she is a wide pair instead
+      } else {
+        shape = out.shape = 'distant';
+      }
+    }
+    if (shape === 'distant' || shape === 'triple') {
+      var MC = Math.max(0.12, M * qC), muC = MC / (M + MC);
+      var aSmin = outer / (S_LIMIT_SAFETY * Math.max(0.05, aCritS(eOut, muC)));
+      var sp = SEP_LOG[cls] || SEP_LOG.G;
+      var aOut = Math.pow(10, sp[0] + sp[1] * sepZ);
+      out.pushedOut = aOut < aSmin;
+      aOut = Math.min(A_OUT_MAX, Math.max(aOut, aSmin));
+      out.distant = { aOut: aOut, e: eOut, inc: Math.abs(incOut), lan: lanOut, argp: argpOut, m0: m0Out,
+                      C: starOfMass(MC, tFracC) };
+      if (aOut >= A_OUT_MAX && aSmin > A_OUT_MAX) return { shape: out.close ? 'close' : 'single', close: out.close };
+    }
+    return out;
+  }
+
+  /* The bodies for a multiplicity, put into a system's tree. `star` is the
+   * root as generateSystem built it; with a close pair it becomes their
+   * barycentre in place (same object, same id), so everything that already
+   * holds it - every planet's orbit.parent - is still right. */
+  function applyMultiplicity(star, mult, starName) {
+    if (!mult || mult.shape === 'single') return [];
+    var made = [], letter = 'A';
+    if (mult.close) {
+      var c = mult.close, A = c.A, B = c.B;
+      var MA = A.massSol * M_SUN, MB = B.massSol * M_SUN, Mt = MA + MB;
+      var mkStar = function (sid, s, other, a, argp) {
+        return {
+          id: sid, name: starName + ' ' + letter, kind: 'star', type: s.cls,
+          mass: s.massSol * M_SUN, radius: s.radius, color: s.color, temp: s.temp,
+          luminosity: s.luminosity, inPair: true,
+          orbit: { parent: star.id, a: a, e: c.e, inc: 0, lan: c.lan, argp: argp, m0: c.phase,
+                   mu: barycentricMu(s.massSol * M_SUN, other) },
+          children: []
+        };
+      };
+      var aKm = c.aBin * AU;
+      var sa = mkStar('b0a', A, MB, aKm * MB / Mt, 0); letter = 'B';
+      var sb = mkStar('b0b', B, MA, aKm * MA / Mt, Math.PI);
+      star.kind = 'barycentre';
+      /* `type` stays the chart's class (galaxy.test holds the map preview to
+       * the system); Sim.starLabel prints the pair from sys.stars. */
+      star.pairType = A.cls + '+' + B.cls;
+      star.binary = { aBin: c.aBin, e: c.e };
+      star.children.push(sa, sb);
+      made.push(sa, sb);
+      letter = 'C';
+    } else {
+      letter = 'B';
+    }
+    if (mult.distant) {
+      var d = mult.distant, C = d.C;
+      var sc = {
+        id: 'b0c', name: starName + ' ' + letter, kind: 'star', type: C.cls,
+        mass: C.massSol * M_SUN, radius: C.radius, color: C.color, temp: C.temp,
+        luminosity: C.luminosity, distant: true,
+        orbit: { parent: star.id, a: d.aOut * AU, e: d.e, inc: d.inc, lan: d.lan, argp: d.argp, m0: d.m0 },
+        children: []
+      };
+      star.children.push(sc);
+      made.push(sc);
+    }
+    return made;
+  }
+
+  /* ---- A GIANT IN A WARM ZONE, AND THE MOON UNDER IT (2026-11-20) --------
+   * Astra's postcard: a living moon with a giant filling its sky. Measured
+   * first: in this galaxy it never happens. Giants form past the frost
+   * line, every one of the ten moons of a giant in 160 systems was cold,
+   * thin-aired and light, and no gap in any warm chain is wide enough to
+   * hold a Jupiter with ten mutual Hill radii either side (diag-stars3.js,
+   * 0 of 200) - so one cannot be slipped among the planets you already
+   * have without moving them.
+   *
+   * A distant companion's sky is empty, though. So her warm zone is where
+   * it goes: a giant that migrated in to her S0 ~ 0.85-1.25 (hot Jupiters
+   * and warm Jupiters are the commonest giants found around other stars),
+   * inside the Holman-Wiegert limit her partner leaves her, with one moon
+   * that is a world - terran or ocean, Earth-heavy, real air - and a
+   * pebble or two further out. WARM_GIANT_P of the companions that have
+   * room get one. Their own fork, keyed by the companion; ids b0c1.. at
+   * the end of every list. The ports over and on the moon come later
+   * (attachCompanionPorts), once the system's markets and timetable exist,
+   * the way a dig's port does. */
+  /* 0.35, not more: at 0.75 it put a postcard moon in 27% of all systems
+   * (41 of 150), which is not a postcard any more. Warm Jupiters are found
+   * round roughly a tenth of Sun-like stars; this lands near that. */
+  var WARM_GIANT_P = 0.35;
+  function buildCompanionWorlds(C, root, sys0, rng) {
+    if (!C || !C.distant) return [];
+    var roll = rng.next(), s0 = rng.range(0.85, 1.25), gMassE = rng.logRange(90, 650), gEcc = rng.range(0, 0.04);
+    var gInc = rng.range(0, 4) * DEG, gLan = rng.angle(), gArgp = rng.angle(), gM0 = rng.angle();
+    var mType = rng.pick(['terran', 'terran', 'ocean']), mMassE = rng.range(0.35, 1.25);
+    /* 6-14 giant radii: Io to Ganymede. Seen from the moon the giant spans
+     * 8-19 degrees - the sky Astra asked for. The first cut (14-32) left a
+     * 4-degree coin in the probe's screenshot. */
+    var mFrac = rng.range(6, 14), mEcc = rng.range(0, 0.015), mInc = rng.range(0, 2) * DEG;
+    var mLan = rng.angle(), mArgp = rng.angle(), mM0 = rng.angle(), nPebbles = rng.int(0, 2);
+    var muRoot = root.mass / (root.mass + C.mass);
+    var aStab = S_LIMIT_SAFETY * Math.max(0, aCritS(C.orbit.e, muRoot)) * C.orbit.a / AU;
+    var aG = Math.sqrt(C.luminosity / s0);                     // AU
+    if (roll >= WARM_GIANT_P || !(aG * 1.3 < aStab)) return [];
+    var gMass = gMassE * M_EARTH, gDef = PLANET_TYPES.gasGiant;
+    var giant = {
+      id: 'b0c1', name: C.name + ' I', kind: 'planet', type: 'gasGiant', typeName: gDef.name,
+      mass: gMass, radius: radiusFromMass(gMass, gDef.density), color: gDef.color, albedo: gDef.albedo,
+      insolation: C.luminosity / (aG * aG), habitable: false, habitableGlobal: false, habitableBand: null,
+      tidallyLocked: false, tipped: false, warmGiant: true,
+      atmosphere: makeAtmosphere('gasGiant', rng), composition: atmosphereComposition('gasGiant', rng),
+      orbit: { parent: C.id, a: aG * AU, e: gEcc, inc: gInc, lan: gLan, argp: gArgp, m0: gM0 },
+      children: []
+    };
+    var hill = hillRadius(gMass, C.mass, giant.orbit.a, gEcc);
+    var mDef = PLANET_TYPES[mType], mMass = mMassE * M_EARTH;
+    var aM = Math.min(giant.radius * mFrac, hill * 0.3);
+    /* Round a small companion the giant's Hill sphere is small, and the cap
+     * above can drag the moon in to two giant radii - inside the Roche
+     * limit, with the giant 50 degrees across. No such moon; no such world. */
+    if (aM < giant.radius * 5) return [];
+    var moon = {
+      id: 'b0c2', name: giant.name + ' a', kind: 'moon', type: mType, typeName: mDef.name + ' moon',
+      mass: mMass, radius: radiusFromMass(mMass, mDef.density), color: mDef.color, albedo: mDef.albedo,
+      insolation: giant.insolation, habitable: true, habitableGlobal: true, habitableBand: 'global',
+      tidallyLocked: false, tipped: false,
+      atmosphere: makeAtmosphere(mType, rng), composition: atmosphereComposition(mType, rng),
+      orbit: { parent: giant.id, a: aM, e: mEcc, inc: mInc, lan: mLan, argp: mArgp, m0: mM0 },
+      children: []
+    };
+    giant.children.push(moon);
+    var aP = aM;
+    for (var k = 0; k < nPebbles; k++) {
+      aP *= rng.range(1.7, 2.6);
+      var pr = rng.logRange(150, 900), pm = (4 / 3) * Math.PI * Math.pow(pr * 1000, 3) * 2600;
+      if (aP > hill * 0.4) break;
+      giant.children.push({
+        id: 'b0c' + (3 + k), name: giant.name + ' ' + LETTERS[k + 1], kind: 'moon', type: 'moon',
+        typeName: 'Rocky moon', mass: pm, radius: pr, color: '#8d8579', atmosphere: null,
+        orbit: { parent: giant.id, a: aP, e: rng.range(0, 0.03), inc: rng.range(0, 6) * DEG,
+                 lan: rng.angle(), argp: rng.angle(), m0: rng.angle() },
+        children: []
+      });
+    }
+    C.children.push(giant);
+    return [giant, moon];
+  }
+
+  /* The ports over and on the companion's living moon: a station and a pad,
+   * attached the way a dig's port is (Digs.makePort) - markets, dressing and
+   * routes of their own - so not one existing timetable moves. Ferries
+   * between them carry people by the moon's appeal, as everywhere else. */
+  function attachCompanionPorts(sys, opts) {
+    var moon = sys.byId && sys.byId.b0c2, giant = sys.byId && sys.byId.b0c1;
+    if (!moon || !giant || opts.empty) return [];
+    var rng = new RNG(sys.seed + '|companion-ports');
+    var fac = (sys.ports || []).filter(function (p) { return p.faction && !p.playerStation; })[0];
+    var made = [];
+    var st = makeStation(moon, giant, rng, []);
+    if (st) { st.id = 'b0cp1'; made.push(st); }
+    if (surfaceGravity(moon) <= MAX_SURFACE_G) {
+      var pad = makeSurfacePort(moon, rng, 0, new RNG(sys.seed + '|companion-ug'), false);
+      pad.id = 'b0cp2';
+      made.push(pad);
+    }
+    /* Every habitable world has at least two ports (economy.test holds the
+     * whole galaxy to it): where the pad or the first station would not go,
+     * another station over her makes up the pair. */
+    for (var extra = 3; made.length < 2 && extra < 6; extra++) {
+      var st2 = makeStation(moon, giant, rng, made.filter(function (p) { return p.orbit && !p.surface; })
+        .map(function (p) { return p.orbit.a; }));
+      if (st2) { st2.id = 'b0cp' + extra; made.push(st2); }
+    }
+    /* A moon close in to her giant has a Hill sphere too small to hang a
+     * station in at all; then the second port is a second pad. */
+    if (made.length < 2 && surfaceGravity(moon) <= MAX_SURFACE_G) {
+      var pad2 = makeSurfacePort(moon, rng, 1, new RNG(sys.seed + '|companion-ug2'), false);
+      pad2.id = 'b0cp6';
+      made.push(pad2);
+    }
+    settleLatePorts(sys, moon, made, 'companion', fac ? fac.faction : null, opts);
+    return made;
+  }
+
+  function appealLib() {
+    return global.Appeal || (typeof require !== 'undefined' ? require('./appeal.js') : null);
+  }
+
+  /* ---- PORTS ADDED AFTER GENERATION, settled the same way every time ------
+   * A port made once the system is otherwise finished (the companion moon's,
+   * a resort pad) has missed the passes the others went through, so it
+   * takes them here, in the same order: the walk inland and the sea
+   * platform (ground.test and seaplatform.test hold every pad to both), then
+   * a market, dressing and routes, each from a stream named for `tag` and
+   * the port's id, so not one existing timetable moves. Ferries over an
+   * appealing world carry people, as everywhere else. */
+  function settleLatePorts(sys, world, made, tag, faction, opts) {
+    var Wi = inlandWeather();
+    var mpads = made.filter(function (p) { return p.surface && typeof p.lat === 'number'; });
+    /* Spaced against every pad already on the world, not just the new ones. */
+    var others = (world.children || []).filter(function (c) { return c.surface && typeof c.lat === 'number'; });
+    if (mpads.length && !opts.noInland && Wi && Wi.dryAt && Wi.padDir && Wi.digFloor(world) !== null) {
+      var all = others.concat(mpads);
+      mpads.forEach(function (p) { movePadInland(Wi, world, p, all); });
+      delete world._inlandNone;
+      if (!opts.noSea && Wi.terrainOf && !Wi.terrainOf(world).lava && world.type !== 'desert') {
+        mpads.forEach(function (p) { if (p.coastal) makeSeaPlatform(p, world); });
+      }
+    }
+    made.forEach(function (p) {
+      p.faction = faction;
+      attachPort(sys, world, p);
+      if (Eco.buildPortMarket) {
+        Eco.buildPortMarket(p, world, sys, new RNG(sys.seed + '|' + tag + '-market|' + p.id));
+        if (Eco.signature) Eco.signature(p.market.rows);
+      }
+      dressPort(sys, p, new RNG(sys.seed + '|' + tag + '-dress|' + p.id));
+      p.livery = 'civ';
+    });
+    var Ap = appealLib();
+    var a = Ap ? Ap.of(sys, world) : null;
+    made.forEach(function (p) {
+      var routes = addPortRoutes(sys, p, new RNG(sys.seed + '|' + tag + '-traffic|' + p.id), 0) || [];
+      routes.forEach(function (r) {
+        if (r.cls === 'shuttle' && r.local && a && a.score >= SHUTTLE_SEATS_FROM && !r.souls) {
+          r.souls = Math.max(2, Math.round(SHUTTLE_SEATS * a.score));
+        }
+      });
+    });
+  }
+
+  /* ---- THE RESORT PAD (worlds worth visiting, slice 3, 2026-11-20) --------
+   * claude/worlds-people-and-infrastructure.md: "The most appealing worlds
+   * get a guaranteed second ground port, off their own forked substream so
+   * no existing pad moves." So: every postcard world a ship can land on that
+   * has fewer than two ground ports gets an open-air resort, built last,
+   * with ids of its own (<world>rs, <world>rs2). Open air because a resort
+   * is the view; never a buried bay. Its faction is the world's own where it
+   * has ports, else the system's. */
+  var RESORT_FROM = 0.7;                 // postcard (appeal.js tiers)
+  /* Named to sell the place, not after the working pads' stock (no "Low
+   * Resort", no "Groundside Spa"). */
+  var RESORT_PRE = ['Clearwater', 'Summerhill', 'Larkspur', 'Stillwater', 'Brightwater', 'Goldenrod',
+                    'Long Light', 'Seaview', 'Highmeadow', 'Amberlea', 'Silverfall', 'Halcyon'];
+  var RESORT_SUF = ['Resort', 'Spa', 'Retreat', 'Lodge', 'Springs', 'Terraces'];
+  function attachResortPads(sys, opts) {
+    if (opts.empty || opts.noResorts) return [];
+    var Ap = appealLib();
+    if (!Ap) return [];
+    var sysFac = (sys.ports || []).filter(function (p) { return p.faction && !p.playerStation; })[0];
+    var made = [];
+    sys.bodies.slice().forEach(function (w) {     // a copy: attachPort adds to sys.bodies
+      if (w.kind !== 'planet' && w.kind !== 'moon') return;
+      if (surfaceGravity(w) > MAX_SURFACE_G) return;
+      var a = Ap.of(sys, w);
+      if (!a || a.score < RESORT_FROM) return;
+      var ground = (w.children || []).filter(function (c) { return c.surface && c.docking !== false && !c.playerStation; });
+      if (ground.length >= 2) return;
+      var rng = new RNG(sys.seed + '|resort|' + w.id);
+      var here = [];
+      for (var k = ground.length; k < 2; k++) {
+        var pad = makeSurfacePort(w, rng, k, null, !w.habitableGlobal);
+        pad.id = w.id + 'rs' + (k === ground.length ? '' : '2');
+        pad.name = rng.pick(RESORT_PRE) + ' ' + rng.pick(RESORT_SUF);
+        pad.typeName = 'Resort';
+        pad.resort = true;
+        here.push(pad);
+      }
+      var own = (w.children || []).filter(function (c) { return c.faction && !c.playerStation; })[0] || sysFac;
+      settleLatePorts(sys, w, here, 'resort', own ? own.faction : null, opts);
+      made = made.concat(here);
+    });
+    return made;
+  }
+
   function generateSystem(seed, opts) {
     opts = opts || {};
     var base = new RNG(seed);
@@ -854,6 +1235,16 @@
       strip(star);
     }
 
+    /* MORE THAN ONE SUN (stage 3): after every id above, so the stars are
+     * the last children of the root and nothing generated so far moves. */
+    var mult = opts.noMultiples ? null
+      : multiplicityOf(seed, pre, axes.map(function (ak) { return ak / AU; }));
+    var madeStars = applyMultiplicity(star, mult, starName);
+    var companion = madeStars.filter(function (s) { return s.distant; })[0];
+    if (companion && !opts.noCompanionWorlds) {
+      buildCompanionWorlds(companion, star, null, base.fork('companion-worlds'));
+    }
+
     var sys = finalize({
       root: star, seed: seed, seedHash: base.seed,
       name: starName,
@@ -954,6 +1345,19 @@
     /* Two hulls with an arrangement (rendezvous.js). After the patrols,
      * which it reads, and after the markets, which it does not touch. */
     attachRendezvous(sys, opts);
+    /* The companion's living moon gets its ports last of all, the way a
+     * dig's does, so every market and timetable above is the one an older
+     * seed produced. And its notes, which buildFlavor gives planets only. */
+    var cMoon = sys.byId && sys.byId.b0c2;
+    if (cMoon) {
+      var cr = base.fork('companion-flavor');
+      cMoon.lifeNote = lifeNote(sys, cr);
+      cMoon.cultureNote = cultureNote(sys, cr);
+      attachCompanionPorts(sys, opts);
+    }
+    /* And the resorts, last of everything: a postcard world gets its second
+     * ground port (worlds worth visiting, slice 3). */
+    attachResortPads(sys, opts);
     return sys;
   }
 
@@ -1143,18 +1547,22 @@
     var p = raidOdds(sys);
     sys.raidOdds = p;
     if (!(p > 0)) return;
-    (sys.traffic || []).forEach(function (r) {
-      if (r.runner || r.oneWay || r.playerPort || r.feeder) return;
-      var A = sys.byId[r.from], B = sys.byId[r.to];
-      [[B, r.cruise, 0], [A, 2 * r.cruise + r.layover, 1]].forEach(function (leg) {
-        var port = leg[0];
-        if (!port || !port.market || !port.market.inbound) return;
-        port.market.inbound.forEach(function (d) {
-          if (d.route || d.t0 !== r.t0 || d.cruise !== leg[1] || d.period !== r.period) return;
-          d.route = r.id; d.leg = leg[2];
-          d.raidKey = 'raid|' + (sys.seed || '') + '|' + r.id + '|' + leg[2];
-          d.raidP = p;
-        });
+    (sys.traffic || []).forEach(function (r) { raidRoute(sys, r, p); });
+  }
+  /* One route's deliveries, marked with the system's odds. Split out so a
+   * port added after generation (a world's dig, a companion moon's port, a
+   * resort) has its ships raided like everyone else's. No rng. */
+  function raidRoute(sys, r, p) {
+    if (!(p > 0) || r.runner || r.oneWay || r.playerPort || r.feeder) return;
+    var A = sys.byId[r.from], B = sys.byId[r.to];
+    [[B, r.cruise, 0], [A, 2 * r.cruise + r.layover, 1]].forEach(function (leg) {
+      var port = leg[0];
+      if (!port || !port.market || !port.market.inbound) return;
+      port.market.inbound.forEach(function (d) {
+        if (d.route || d.t0 !== r.t0 || d.cruise !== leg[1] || d.period !== r.period) return;
+        d.route = r.id; d.leg = leg[2];
+        d.raidKey = 'raid|' + (sys.seed || '') + '|' + r.id + '|' + leg[2];
+        d.raidP = p;
       });
     });
   }
@@ -4901,6 +5309,41 @@
      * four hundred people aboard, and the pass that fills them has no
      * reason to know which list a route came from. */
     fillLinerSeats(sys, tr);
+    /* And the ferries: people where people want to go (appeal.js). */
+    fillShuttleSeats(sys, tr);
+  }
+
+  /* ---- shuttles carry people (2026-11-20) --------------------------------
+   * Astra, 2026-10-17: worlds with "nice weather and a good view have more
+   * passenger destinations ... This also gives the shuttle a purpose because
+   * right now it's a ship class with a model and no use."
+   *
+   * A feeder between two docks over the same world carries souls in
+   * proportion to that world's appeal: none on a harsh one (crew and freight
+   * only), up to SHUTTLE_SEATS on a postcard. The souls are what makes her a
+   * passenger ship to everything that already reads them - the ship AI's
+   * role, the crew you meet aboard, a rescue's stakes.
+   *
+   * Its own fork, after everything, like fillLinerSeats: no route, time or
+   * hold moves in any seed. Nothing here is registered with a market. */
+  var SHUTTLE_SEATS = 24;
+  var SHUTTLE_SEATS_FROM = 0.3;       // appeal below this: nobody rides for pleasure
+  function fillShuttleSeats(sys, tr) {
+    var Ap = global.Appeal || (typeof require !== 'undefined' ? require('./appeal.js') : null);
+    if (!Ap) return;
+    var sr = tr.fork('shuttle-seats');
+    var routes = sys.traffic || [], memo = {};
+    for (var i = 0; i < routes.length; i++) {
+      var r = routes[i];
+      if (!r.feeder || r.cls !== 'shuttle' || r.souls) continue;
+      var jitter = sr.range(0.6, 1.4);      // drawn for every feeder, so order never matters
+      var world = sys.byId ? sys.byId[r.parentId] : null;
+      if (!world) continue;
+      if (!(r.parentId in memo)) { var a = Ap.of(sys, world); memo[r.parentId] = a ? a.score : 0; }
+      var score = memo[r.parentId];
+      if (score < SHUTTLE_SEATS_FROM) continue;
+      r.souls = Math.max(2, Math.round(SHUTTLE_SEATS * score * jitter));
+    }
   }
 
   /* ---- a port that was not there at generation (stations.js) -----------
@@ -5140,15 +5583,25 @@
         cruise: cruise, layover: layover, period: 2 * (cruise + layover),
         t0: opensAt || 0,
         out: out, back: back,
-        distance: dist,
-        playerPort: port.id
+        distance: dist
       };
+      /* YOURS ONLY IF THE PORT IS (fixed 2026-11-20). This was written for
+       * stations you found, and stamped every route `playerPort`. A dig the
+       * world sinks, a companion moon's ports and a resort borrow it too,
+       * and their NPC ships were being read as your own lines: never raided
+       * (attachRaids), never held at a lonely pad (Sim.arrivalHold), never
+       * an aggression target. A seized station keeps the flag, as it did. */
+      if (port.playerStation) route.playerPort = port.id;
+      else route.latePort = port.id;
       sizeForLoad(route, rng, true, pr.local ? 0.1 * 86400 : 0.5 * 86400);
       registerDeliveries(B, route.out, route.t0, route.cruise, route.period);
       registerDeliveries(A, route.back, route.t0, 2 * route.cruise + route.layover, route.period);
       sys.traffic.push(route);
       made.push(route);
     });
+    /* Raided at the system's own odds, like the routes generation made
+     * (your own station's lines are skipped there, as they always were). */
+    made.forEach(function (r) { raidRoute(sys, r, sys.raidOdds); });
     sys._traffic = null; sys._ships = null;
     return made;
   }
@@ -5734,7 +6187,8 @@
       sys.byId[bc.id] = bc;
       /* The pair's separation, a_A + a_B, which Sim.frameBody measures
        * "far from the pair" in. Off the two heaviest things on it. */
-      var held = bc.children.filter(function (c) { return c.kind === 'star' || c.kind === 'barycentre'; })
+      /* Not a distant companion: she circles the whole system, not the pair. */
+      var held = bc.children.filter(function (c) { return (c.kind === 'star' || c.kind === 'barycentre') && !c.distant; })
         .sort(function (x, y) { return y.mass - x.mass; });
       bc.separation = held.slice(0, 2).reduce(function (a, c) { return a + (c.orbit ? c.orbit.a : 0); }, 0);
     }
@@ -5746,6 +6200,10 @@
      * the one place where letting it in would be wrong rather than untidy —
      * its stars already pull, and the pair would pull twice. */
     sys.gravBodies = bodies.filter(function (b) { return b.mass > 1e18 && b.kind !== 'barycentre'; });
+    /* What Sim.acceleration blends (stars stage 3): the close pair the
+     * planets circle as one point, and a distant companion they ignore. */
+    sys.pairBary = (sys.root && sys.root.kind === 'barycentre') ? sys.root : null;
+    sys.companion = sys.stars.filter(function (s) { return s.distant; })[0] || null;
     // Landing pads, indexed once: the flight loop asks "am I over a pad"
     // every physics substep and should not walk the whole system to find out.
     sys.pads = bodies.filter(function (b) { return !!b.surface; });

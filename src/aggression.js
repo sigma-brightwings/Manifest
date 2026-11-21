@@ -152,6 +152,10 @@
     return v + (ship.credits || 0) * 0.05;
   }
   function playerArmed(ship) {
+    /* What a stranger can SEE: a gun behind a concealed panel does not
+     * count until it has fired (combat.js HOLD INTO A HARDPOINT) - which
+     * is the whole point of hiding one. */
+    if (C() && C().visiblyArmed) return C().visiblyArmed(ship);
     return !!(ship.gun || ship.turret || ship.missiles > 0 ||
               (ship.fit && Object.keys(ship.fit).some(function (k) { return /^hardpoint/.test(k) && ship.fit[k]; })));
   }

@@ -1974,6 +1974,9 @@
     for (var i = 0; i < SLOT_ORDER.length; i++) {
       var type = SLOT_ORDER[i];
       var n = type === 'drive' ? driveSlotCount(h) : type === 'core' ? coreSlotCount(h) : (h.slots[type] || 0);
+      /* Hardpoints cut out of her hold come after the hull's own, so no
+       * fitted gun, fire group or muzzle moves when one is added. */
+      if (type === 'hardpoint') n += convList(ship).length;
       for (var j = 0; j < n; j++) out.push(type + j);
     }
     return out;
@@ -2106,7 +2109,7 @@
     if ((item.hold || 0) > 0) {
       var hold = global.Sim ? global.Sim.cargoMass(ship) : 0;
       var capAfter = (hullOf(ship) || { cargoCap: 0 }).cargoCap - (item.hold || 0) -
-                     habHoldCost(ship, key);
+                     habHoldCost(ship, key) - convHoldTotal(ship);
       if (hold > capAfter + 1e-9) {
         return { ok: false, key: key, why: 'the hold is too full — needs ' +
                  Math.ceil(hold - capAfter) + ' t off first' };
@@ -2125,6 +2128,189 @@
       n += have[i].item.hold || 0;
     }
     return n;
+  }
+
+  /* ---- HOLD INTO A HARDPOINT (2026-11-20) ----------------------------------
+   * Astra: "adding another gun hardpoint in exchange for cargo space?" and
+   * then, asked: a flat cost by hull size, up to two, both a registered
+   * conversion and a concealed one, and shuttles may take one too.
+   *
+   * A conversion is a SLOT, not a gun. It gives her one more hardpoint and
+   * takes a fixed bite of the hold for the mount, the magazine and the
+   * power trunk; the gun that goes in it is bought and fitted as any other,
+   * against the same reactor and mass budget. That budget is the real
+   * limit - most hulls run out of megawatts before they run out of hold -
+   * which is why two is a ceiling rather than a recommendation.
+   *
+   * FLAT BY SIZE, not a share of the hold. A share would charge a Leviathan
+   * 100 t for one gun; flat, a big freighter barely notices and an
+   * interceptor gives up half of very little, which is the right way round:
+   * a gun is a gun whatever it is bolted to.
+   *
+   * REGISTERED at a shipyard: it is on her papers, every scan sees the gun.
+   * CONCEALED at any yard where the law can be bought (corruption 60, the
+   * grey shelf's own gate): a panel over the barrel and no paperwork. It
+   * takes a little less hold - nobody built the certified magazine
+   * bulkhead - and costs more, because the crew is paid to forget. Pirates
+   * size her up without it. The FIRST SHOT opens the panel for good: from
+   * then on it is just a gun, and if the law saw it fire, carrying it is a
+   * charge (BOUNTY.armament).
+   *
+   * Stored on the ship as { hull, list: ['open' | 'hidden', ...] } and read
+   * only while `hull` is still her hull: a conversion is cut into a frame,
+   * and a different frame has none - no hook on every place a hull can
+   * change, which is how a missed one would leave a Mule with a Talon's
+   * extra gun. The hold is never written down, only derived (syncLegacy),
+   * so taking one out gives the tonnes back exactly. */
+  var CONV_HOLD = { S: 6, M: 10, L: 16, XL: 24 };
+  var CONV_PRICE = { S: 9000, M: 15000, L: 26000, XL: 45000 };
+  var CONV_MAX = 2;
+  var CONV_HIDDEN_HOLD = 0.75;      // of the registered bite
+  var CONV_HIDDEN_PRICE = 1.6;      // of the registered price
+  var CONV_HIDDEN_CORRUPT = 60;     // where a yard crew can be paid to forget
+  var CONV_REMOVE = 0.25;           // of the price, to cut one back out
+
+  function convList(ship) {
+    var c = ship && ship.conv;
+    return (c && c.hull === (ship.hullId || 'talon') && Array.isArray(c.list)) ? c.list : [];
+  }
+  function convSize(ship) { var h = hullOf(ship); return (h && CONV_HOLD[h.size]) ? h.size : 'S'; }
+  function convHold(ship, kind) {
+    var base = CONV_HOLD[convSize(ship)];
+    return kind === 'hidden' ? Math.round(base * CONV_HIDDEN_HOLD) : base;
+  }
+  function convHoldTotal(ship) {
+    var l = convList(ship), n = 0;
+    for (var i = 0; i < l.length; i++) n += convHold(ship, l[i]);
+    return n;
+  }
+  function convPrice(ship, kind) {
+    var base = CONV_PRICE[convSize(ship)];
+    return kind === 'hidden' ? Math.round(base * CONV_HIDDEN_PRICE) : base;
+  }
+  /* The slot key of conversion i: after every hardpoint the hull has. */
+  function convKey(ship, i) {
+    var h = hullOf(ship);
+    return 'hardpoint' + (((h && h.slots && h.slots.hardpoint) || 0) + i);
+  }
+  function convIndexOf(ship, key) {
+    var l = convList(ship);
+    for (var i = 0; i < l.length; i++) if (convKey(ship, i) === key) return i;
+    return -1;
+  }
+  /* Still behind its panel: a concealed mount that has never fired. */
+  function isHiddenKey(ship, key) {
+    var i = convIndexOf(ship, key);
+    return i >= 0 && convList(ship)[i] === 'hidden' && !(ship.conv && ship.conv.exposed);
+  }
+  /* Guns a stranger can see on her: everything except what is still
+   * behind a panel. What pirates and runners size her up by. */
+  function visiblyArmed(ship) {
+    if (!ship) return false;
+    if (ship.turret || ship.missiles > 0) return true;
+    var map = ship.fit || {};
+    for (var k in map) {
+      if (!map[k] || !/^hardpoint/.test(k)) continue;
+      if (!isHiddenKey(ship, k)) return true;
+    }
+    return false;
+  }
+
+  function convRefusal(G, port, kind) {
+    var s = G && G.ship;
+    if (!s) return 'no ship';
+    var yr = yardRefusal(G);
+    if (yr) return yr;
+    if (kind === 'hidden') {
+      var corr = G.sys ? systemCorruption(G, G.sys) : 0;
+      if (corr < CONV_HIDDEN_CORRUPT) return 'nobody here will cut a hidden mount - the law cannot be bought';
+    } else if (!isShipyard(port)) {
+      return 'only a shipyard cuts and registers a new hardpoint';
+    }
+    if (convList(s).length >= CONV_MAX) return 'two is all her frame will take';
+    var h = hullOf(s), cost = convHold(s, kind);
+    var capAfter = (h ? h.cargoCap : 0) - habHoldCost(s, null) - convHoldTotal(s) - cost;
+    if (capAfter < 0) return 'her hold is too small to give up ' + cost + ' t';
+    var held = global.Sim ? global.Sim.cargoMass(s) : 0;
+    if (held > capAfter + 1e-9) return 'the hold is too full - needs ' + Math.ceil(held - capAfter) + ' t off first';
+    var price = convPrice(s, kind);
+    if ((s.credits || 0) < price) return 'costs ' + price + ' cr, you have ' + Math.floor(s.credits || 0);
+    return null;
+  }
+
+  function convert(G, port, kind) {
+    kind = kind === 'hidden' ? 'hidden' : 'open';
+    var why = convRefusal(G, port, kind);
+    if (why) return { ok: false, why: why };
+    var s = G.ship, price = convPrice(s, kind);
+    if (!s.conv || s.conv.hull !== (s.hullId || 'talon')) s.conv = { hull: s.hullId || 'talon', list: [], exposed: false };
+    s.conv.list.push(kind);
+    s.credits -= price;
+    syncLegacy(s);
+    var key = convKey(s, s.conv.list.length - 1);
+    jot(G, 'ship', (kind === 'hidden' ? 'A concealed hardpoint cut into the hold' : 'A new hardpoint cut and registered') +
+        ' - ' + convHold(s, kind) + ' t of hold, ' + price + ' cr');
+    return { ok: true, key: key, price: price, hold: convHold(s, kind) };
+  }
+
+  /* Cutting one back out. The mount has to be empty (sell the gun first,
+   * which is a row on the same page), and the hardpoints above it close
+   * up so nothing points at a slot that is not there. A concealed mount
+   * comes out wherever one could be cut; any shipyard removes either. */
+  function unconvertRefusal(G, port, i) {
+    var s = G && G.ship, l = convList(s);
+    if (!(i >= 0 && i < l.length)) return 'no such conversion';
+    var yr = yardRefusal(G);
+    if (yr) return yr;
+    if (!isShipyard(port) && !(l[i] === 'hidden' && G.sys && systemCorruption(G, G.sys) >= CONV_HIDDEN_CORRUPT)) {
+      return 'only a shipyard cuts a hardpoint back out';
+    }
+    var id = (s.fit || {})[convKey(s, i)];
+    if (id) return 'take the ' + ((EQUIPMENT[id] && EQUIPMENT[id].name) || id).toLowerCase() + ' off it first';
+    var price = Math.round(convPrice(s, l[i]) * CONV_REMOVE);
+    if ((s.credits || 0) < price) return 'costs ' + price + ' cr, you have ' + Math.floor(s.credits || 0);
+    return null;
+  }
+  function unconvert(G, port, i) {
+    var why = unconvertRefusal(G, port, i);
+    if (why) return { ok: false, why: why };
+    var s = G.ship, l = s.conv.list, price = Math.round(convPrice(s, l[i]) * CONV_REMOVE);
+    var fit = fitMap(s), groups = groupMap(s);
+    for (var j = i; j < l.length - 1; j++) {
+      var to = convKey(s, j), from = convKey(s, j + 1);
+      if (fit[from]) fit[to] = fit[from]; else delete fit[to];
+      if (groups[from]) groups[to] = groups[from]; else delete groups[to];
+      if (G.gunCool) delete G.gunCool[to];
+    }
+    var last = convKey(s, l.length - 1);
+    delete fit[last]; delete groups[last];
+    var kind = l.splice(i, 1)[0];
+    if (!l.some(function (k) { return k === 'hidden'; })) s.conv.exposed = false;
+    s.credits -= price;
+    syncLegacy(s);
+    jot(G, 'ship', 'A ' + (kind === 'hidden' ? 'concealed ' : '') + 'hardpoint cut back out - the hold has its ' +
+        convHold(s, kind) + ' t back');
+    return { ok: true, price: price, hold: convHold(s, kind) };
+  }
+
+  /* THE FIRST SHOT FROM BEHIND A PANEL. The panel is open for good; and if
+   * a cutter or a warship could see her fire it, the gun is on her charge
+   * sheet with whoever runs this system. Fired from fireGroup. */
+  function exposeHidden(sys, G, t, hooks) {
+    var s = G.ship;
+    if (!s || !s.conv || s.conv.exposed) return false;
+    s.conv.exposed = true;
+    var Sm = global.Sim;
+    var cop = (sys && Sm && Sm.policeNearby) ? Sm.policeNearby(sys, t, s.pos) : null;
+    if (hooks && hooks.say) hooks.say('The hidden mount is open - anyone watching has seen the gun', 5);
+    /* The Syndicate's own heavies are police-kind and do not care: a
+     * hidden gun is their trade, not their crime. */
+    if (cop && cop.faction !== 'outlaw') {
+      var fac = cop.faction || (G.here && G.here.factionId) || null;
+      if (fac) report(G, 'armament', { faction: fac, name: null }, hooks, 'concealed hardpoint seen by ' +
+                      (cop.name || 'a patrol'), 0, !!s.silent);
+    }
+    return true;
   }
 
   /* How many people this hull can carry, and how many are aboard. Read off
@@ -2245,7 +2431,8 @@
      * construction.js): her freight is whatever containers are left. */
     var Cn = global.Construction;
     var crateHold = (Cn && Cn.isCrawler(ship)) ? Cn.crateCubes(Cn.aboard(ship)) * Cn.TONNES_PER_CUBE : 0;
-    if (hullNow) ship.cargoCap = Math.max(0, hullNow.cargoCap - holdCost - crateHold);
+    /* And the hold given up to extra hardpoints (HOLD INTO A HARDPOINT). */
+    if (hullNow) ship.cargoCap = Math.max(0, hullNow.cargoCap - holdCost - crateHold - convHoldTotal(ship));
     /* Anybody aboard a ship that no longer has a berth for them is put off
      * at the next dock, not vaporised — but the count cannot exceed the
      * berths, or the manifest starts lying. */
@@ -3704,7 +3891,10 @@
                   * Narcotics are ugly smuggling with somebody else's name on
                   * it; restricted arms or milfuel is a serious frame, and a
                   * serious frame that is reported also marks you (markPirate). */
-                 frame: 1500, frameSerious: 9000 };
+                 frame: 1500, frameSerious: 9000,
+                 /* A hardpoint hidden in the hold, seen firing by the law
+                  * (HOLD INTO A HARDPOINT, 2026-11-20). */
+                 armament: 2500 };
   /* THE MORE YOU TAKE, THE WORSE THE CRIME (2026-10-30). Astra, when a
    * transfer at gunpoint came to 41,028 cr: "that's a lot of money, it
    * should be a more serious crime the more money you take." So a hold-up
@@ -4470,7 +4660,7 @@
     return (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
   }
 
-  function markImpact(target, from, split) {
+  function markImpact(target, from, split, t) {
     if (!target || !split) return;
     /* A shot that delivered nothing gets no flare. `splitDamage` returns a
      * zero split for a pion that has run out of envelope, and without this
@@ -4497,6 +4687,16 @@
       soaked: split.shield > 0, through: split.hull > 1e-9
     });
     while (list.length > MAX_IMPACTS) list.shift();
+    /* AND IT STAYS ON THE HULL (scars.js, 2026-11-20): hot metal where it
+     * came through, and past enough damage in one place, a breach. Sim
+     * time, because a cooling plate and an emptying compartment are the
+     * world's state, not a light. */
+    if (split.hull > 1e-9 && global.Scars && typeof t === 'number') {
+      var fr = target.live && target.live.fwd ? target.live : target;
+      var hm = target.hullMax || (target.live ? 50 : 100);
+      global.Scars.add(target, fr, dir, split.hull / hm, t,
+                       String(target.id || target.name || 'ship'));
+    }
   }
 
   /* `delivery` and `from` are both additive and both optional. A missile
@@ -4519,7 +4719,7 @@
      * ship under sustained fire never recovers a point of it — the same
      * shape the player's regenDelay has. */
     spec.shieldIdleAt = t + MODULES.shield.regenDelay;
-    markImpact(spec, from, split);
+    markImpact(spec, from, split, t);
 
     /* A shot is energy arriving, and some of it stays as heat. This is what
      * turns the new NPC thermal model into something the player can USE
@@ -4585,7 +4785,7 @@
     spec.lastHitAt = t;
     spec.lastHitBy = by;
     spec.shieldIdleAt = t + MODULES.shield.regenDelay;
-    markImpact(spec, from, split);
+    markImpact(spec, from, split, t);
     var share = THERMAL_SHARE[(delivery && delivery.variety) || ''];
     if (share === undefined) share = THERMAL_DEFAULT;
     if (split.hull > 0 && share > 0) addNpcHeat(spec, split.hull * share * THERMAL_GAIN, by.id || null);
@@ -5178,7 +5378,7 @@
     s.lastHitAt = (typeof performance !== 'undefined' ? performance.now() : 0);
     var split = splitDamage(s.shield ? s.shieldHp : 0, dmg, delivery);
     if (s.shield) s.shieldHp -= split.shield;
-    markImpact(s, from, split);
+    markImpact(s, from, split, G.t);
     dmg = split.hull;
     if (dmg > 0) {
       s.hullHp -= dmg;
@@ -5336,6 +5536,64 @@
       }
     }
     return hit;
+  }
+
+  /* ---- shots on a station's plating (scars.js, 2026-11-20) --------------
+   * A port down the gun's line. The cheap sphere test (its radius) first;
+   * then, when the renderer has registered one (main.js), the exact test
+   * against the hull the station is drawn with - a wheel is mostly empty
+   * space, and a shot through the spokes goes on through. Headless, the
+   * sphere is the answer. Returns { port, dist, point, local } or null. */
+  var api = {};
+  function portOnRay(sys, G, t, origin, dir, range) {
+    var Sim = global.Sim, best = null;
+    var ports = (sys && sys.ports) || [];
+    for (var i = 0; i < ports.length; i++) {
+      var b = ports[i];
+      if (b.seaPlatform) continue;
+      var R = b.radius || 1, P = Sim.bodyPosition(b, sys, t);
+      var oc = V.sub(P, origin), tc = V.dot(oc, dir);
+      if (tc < -R || tc - R > range) continue;
+      var d2 = V.dot(oc, oc) - tc * tc;
+      if (d2 > R * R) continue;
+      var h;
+      if (api.portHitTest) {
+        h = api.portHitTest(b, origin, dir, range);
+        if (!h) continue;
+      } else {
+        var dist = tc - Math.sqrt(R * R - d2);
+        if (dist < 0 || dist > range) continue;
+        var pt = V.addScaled(origin, dir, dist);
+        h = { dist: dist, point: pt, local: { n: V.norm(V.sub(pt, P)) } };
+      }
+      if (h.dist <= range && (!best || h.dist < best.dist)) { h.port = b; best = h; }
+    }
+    return best;
+  }
+  /* What a port's plating can take, as a hull, for the scar's share. A
+   * station does not die of a beam; it heats, opens, and logs you. */
+  var STATION_HULL = 1500;
+  var STATION_FIRE_EVERY = 600;     // s - one report per port per ten minutes of fire
+  function stationStruck(sys, G, t, h, dmg, hooks) {
+    var b = h.port;
+    if (global.Scars && dmg > 0) {
+      global.Scars.add(b, null, null, dmg / STATION_HULL, t, String(b.id),
+                       { p: h.local && h.local.p, n: h.local && h.local.n });
+    }
+    if (b.playerStation) return;
+    G.portFire = G.portFire || {};
+    if (typeof G.portFire[b.id] === 'number' && t - G.portFire[b.id] < STATION_FIRE_EVERY) return;
+    G.portFire[b.id] = t;
+    var fac = b.faction || 'civil';
+    if (G.ship && G.ship.silent) {
+      if (hooks && hooks.say) hooks.say(b.name + ' is taking fire - it logs a ship with no transponder', 6);
+      return;
+    }
+    G.wanted = G.wanted || {};
+    G.wanted[fac] = (G.wanted[fac] || 0) + BOUNTY.assault;
+    if (global.Missions && global.Missions.bumpStanding) global.Missions.bumpStanding(G, fac, -6);
+    if (hooks && hooks.say) hooks.say('FIRING ON ' + b.name.toUpperCase() + ' - logged, bounty +' + BOUNTY.assault + ' cr', 6);
+    if (hooks && hooks.sound) hooks.sound('warn');
   }
 
   /* A station hit by a torpedo knows what happened and who: no witness
@@ -7452,13 +7710,32 @@
       }
     }
 
+    /* A STATION STOPS A SHOT (scars.js, 2026-11-20). Whatever port is
+     * nearer down the nose than the ship you were aiming at takes it: the
+     * beam ends on its plating, which heats and in the end opens. */
+    var portHit = portOnRay(sys, G, t, s.pos, s.fwd, gun.range);
+    if (portHit && portHit.dist < hitDist) { hit = null; hitDist = portHit.dist; }
+    else portHit = null;
+    /* And a defence platform (milsats.js), the same way. */
+    var platHit = api.platformOnRay ? api.platformOnRay(sys, G, t, s.pos, s.fwd, gun.range) : null;
+    if (platHit && platHit.dist < hitDist) { hit = null; portHit = null; hitDist = platHit.dist; }
+    else platHit = null;
+
     /* A MINING LASER STOPS ON ROCK (mining.js). Whatever rock is nearer
      * than the ship it would have hit takes the shot instead, and the beam
      * is drawn to the face being cut. */
     var rockEnd = null;
     if (gun.mining && global.Mining) {
       var mc = global.Mining.cut(sys, G, t, gun, hitDist, hooks);
-      if (mc) { rockEnd = mc.end; hit = null; }
+      if (mc) { rockEnd = mc.end; hit = null; portHit = null; platHit = null; }
+    }
+    if (platHit) {
+      rockEnd = platHit.point;
+      api.platformStruck(sys, G, t, platHit, damageAtRange(gun, platHit.dist) * gy.dmgMul, hooks);
+    }
+    if (portHit) {
+      rockEnd = portHit.point;
+      stationStruck(sys, G, t, portHit, damageAtRange(gun, portHit.dist) * gy.dmgMul, hooks);
     }
 
     /* BOTH ENDS ARE LIVE, and that is not a refinement — it is the whole
@@ -7590,6 +7867,8 @@
       var e = guns[i];
       if (t < (cools[e.key] || 0)) continue;
       cools[e.key] = t + e.item.cooldown * brown;
+      /* A gun firing from behind a panel opens it (HOLD INTO A HARDPOINT). */
+      if (isHiddenKey(s, e.key)) exposeHidden(sys, G, t, hooks);
 
       /* A salvaged emitter that fails to cycle.
        *
@@ -9889,6 +10168,7 @@
      * ship"), but under your own honest name it still carries your record. */
     s.disguise = null;
     s.hullId = to.id;
+    s.conv = null;                 // a new frame has no hardpoints cut into her hold
     s.meshKind = null;             // a new hull wears its own outside
     s.dryMass = to.dryMass;
     s.thrustKN = to.thrustKN;
@@ -10167,6 +10447,8 @@
     s.cargoCap = h.cargoCap;
     s.hullMax = h.hullMax;
     s.hullHp = Math.min(rec.hullHp != null ? rec.hullHp : h.hullMax, h.hullMax);
+    /* Her conversions before her fit: the fit is keyed to them. */
+    s.conv = rec.conv ? JSON.parse(JSON.stringify(rec.conv)) : null;
     s.fit = {};
     for (var fk in (rec.fit || {})) s.fit[fk] = rec.fit[fk];
     ensureSlipCore(s);             // parked before the slipspace bay existed: her size's drive
@@ -10257,6 +10539,14 @@
     shotFx: shotFx, npcShotVariety: npcShotVariety, SHOT_FX_S: SHOT_FX_S, BEAM_FX_S: BEAM_FX_S,
     damageAtRange: damageAtRange,
     slotKeys: slotKeys, slotType: slotType, firstFreeSlot: firstFreeSlot,
+    /* HOLD INTO A HARDPOINT (2026-11-20). */
+    convList: convList, convHold: convHold, convHoldTotal: convHoldTotal, convPrice: convPrice,
+    convKey: convKey, convRefusal: convRefusal, convert: convert,
+    unconvertRefusal: unconvertRefusal, unconvert: unconvert, isHiddenKey: isHiddenKey,
+    visiblyArmed: visiblyArmed, exposeHidden: exposeHidden,
+    CONV_HOLD: CONV_HOLD, CONV_PRICE: CONV_PRICE, CONV_MAX: CONV_MAX,
+    CONV_HIDDEN_HOLD: CONV_HIDDEN_HOLD, CONV_HIDDEN_PRICE: CONV_HIDDEN_PRICE,
+    CONV_HIDDEN_CORRUPT: CONV_HIDDEN_CORRUPT, CONV_REMOVE: CONV_REMOVE,
     fittedList: fittedList, fitSummary: fitSummary, canFit: canFit,
     fitItem: fitItem, unfitItem: unfitItem, sellFitted: sellFitted,
     syncLegacy: syncLegacy, migrateFit: migrateFit, replanFit: replanFit,
@@ -10358,6 +10648,8 @@
     npcShield: npcShield, splitDamage: splitDamage, hullSize: hullSize,
     NPC_DRIVER: NPC_DRIVER, carriesDriver: carriesDriver,
     NPC_SHIELD: NPC_SHIELD, MAX_IMPACTS: MAX_IMPACTS,
+    /* Shots on a station (scars.js): main.js sets api.portHitTest. */
+    api: api, portOnRay: portOnRay, stationStruck: stationStruck, STATION_HULL: STATION_HULL, markImpact: markImpact,
     damageNpc: damageNpc, damagePlayer: damagePlayer, killNpc: killNpc,
     blastAt: blastAt, reportSabotage: reportSabotage, torpedoSoldAt: torpedoSoldAt,
     launchTorpedo: launchTorpedo,
