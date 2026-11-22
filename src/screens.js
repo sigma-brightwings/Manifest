@@ -4637,6 +4637,22 @@
             }, !!why);
       });
     }
+    /* REFIT THE COCKPIT (2026-11-21): the other two of this hull's three
+     * cockpit fits, at a shipyard, for a small fee (Combat.refitCockpit). */
+    if (Combat.refitCockpit && Render.HULL_LOOKS && Render.HULL_LOOKS[s.hullId]) {
+      var nowLook = s.cockpitLook | 0;
+      Render.HULL_LOOKS[s.hullId].forEach(function (lk, li) {
+        if (li === nowLook) return;
+        var why = !Combat.isShipyard(port) ? 'only a shipyard refits a cockpit' : null;
+        row('  ▶ REFIT COCKPIT TO ' + 'ABC'[li] + '  ·  ' + Combat.cockpitRefitCost(s.hullId) + ' cr',
+            why || Render.lookSummary(lk, s.hullId, li),
+            function () {
+              var r = Combat.refitCockpit(G, li);
+              if (!r.ok) { say('Not here: ' + r.why, 6); return; }
+              say('The fitters are done: cockpit ' + 'ABC'[li] + ' — ' + r.cost + ' cr', 6);
+            }, !!why);
+      });
+    }
 
     /* ON THE SLIPS, wherever they are: a hull you have paid for is part of
      * the fleet you are planning, even while she is still being built. */
@@ -6159,7 +6175,7 @@
   function buyTheSelectedHull(keep) {
     var hull = Combat.HULLS[G.yardHull];
     if (!hull) return;
-    var r = Combat.buyHull(G, hull.id, keep, null);
+    var r = Combat.buyHull(G, hull.id, keep, { look: G.yardLook | 0 });
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
     if (r.mode === 'stock') {
       say('She is yours as she sits — only a shipyard will change her fittings.', 7);
@@ -6198,7 +6214,7 @@
     if (!hull || !G.yardOrder || G.yardOrder.hullId !== hull.id) return;
     var o = G.yardOrder;
     var r = Combat.commission(G, hull.id, { fit: o.fit, name: o.name || null, paint: paintOf(o),
-                                                  livery: o.livery || null });
+                                                  livery: o.livery || null, look: G.yardLook | 0 });
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
     G.yardOrder = null;
     say('Signed. The ' + (r.order.name || hull.name) + ' goes on the slip — ready here in ' +
@@ -6264,7 +6280,7 @@
      * A sentence with a button sitting on its last line reads as a rendering
      * fault, and this is the one panel where the player is about to spend
      * everything they have. */
-    for (var li = 0; li < lines.length && y + 57 + li * 12 < y + h - 32; li++) {
+    for (var li = 0; li < lines.length && y + 57 + li * 12 < y + h - 76; li++) {
       ctx.fillText(lines[li], tx, y + 57 + li * 12);
     }
     ctx.restore();
@@ -6292,6 +6308,24 @@
     var bw = Math.min(176, (tw - 10) / 2), by = y + h - 28;
     var docked = !!(G.ship && G.ship.docked);
     var shortKeep = creds < full || !dealK.ok;
+    /* WHICH COCKPIT (2026-11-21): each hull has three fits, the HUD's
+     * colour and layout and the window frame round it (Render.HULL_LOOKS).
+     * Chosen here, free; a shipyard can refit it later. */
+    var looks = Render.HULL_LOOKS && Render.HULL_LOOKS[hull.id];
+    if (looks) {
+      if (G.yardLookHull !== hull.id) { G.yardLookHull = hull.id; G.yardLook = 0; }
+      var cw = Math.floor((Math.min(tw, bw * 2 + 10) - 2 * 6) / 3), cy = by - 44;
+      looks.forEach(function (lk, li) {
+        btn(ctx, tx + li * (cw + 6), cy, cw, 18, 'COCKPIT ' + 'ABC'[li],
+            function () { G.yardLook = li; },
+            { font: 10, hot: (G.yardLook | 0) === li });
+      });
+      ctx.save();
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(190,215,235,0.75)';
+      ctx.fillText(clipText(Render.lookSummary(looks[G.yardLook | 0], hull.id, G.yardLook | 0), Math.floor(tw / 6.2)), tx, cy - 5);
+      ctx.restore();
+    }
     if (built) {
       /* BUILT TO ORDER IS ONE BUTTON: you pay, she goes on the slip, and
        * you fly on in the ship you are in. Trading that one in, or keeping

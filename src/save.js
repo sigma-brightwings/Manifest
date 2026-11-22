@@ -464,6 +464,12 @@
          * which it was. */
         livery: s.livery || null,
         liveryFaction: s.liveryFaction || null,
+        /* The cockpit fit, 2026-11-21 (Combat.refitCockpit). Additive: an
+         * older career flies its hull's first fit, A, which is what it had. */
+        cockpitLook: s.cockpitLook | 0,
+        /* What the cargo in her hold cost, 2026-11-21 (Economy.costBuy).
+         * Additive: an older career's hold reads as having cost nothing. */
+        cargoCost: s.cargoCost || null,
         /* What rides in a Crawler's truss (construction.js). */
         modules: s.modules || [],
         /* A Crawler's craft bay loadout (construction.js). */
@@ -481,6 +487,15 @@
       workoff: G.workoff || {},
       /* The navy's ledger (hunters.js): additive, an older save has none. */
       notoriety: G.notoriety || {},
+      /* Traders who turned on somebody (aggression.js markCrime): their
+       * record follows their route for a month. */
+      turncoats: G.turncoats || {},
+      /* The crooked law (combat.js, slice 4): where you are marked for
+       * going over a cop's head, who was recalled on your word, and which
+       * cops have taken your money. Additive. */
+      troublemaker: G.troublemaker || {},
+      suspended: G.suspended || {},
+      onTheTake: G.onTheTake || {},
       /* WHICH START THIS CAREER CHOSE (start.js): { difficulty, focus }.
        * Additive and no version bump: an older career has none, which reads
        * as the only start there was before the choice existed. Kept so a
@@ -878,6 +893,8 @@
     s.paint = (d.paint && typeof d.paint === 'object') ? d.paint : null;
     s.livery = (d.livery === 'navy' || d.livery === 'syn') ? d.livery : null;
     s.liveryFaction = s.livery ? (d.liveryFaction || null) : null;
+    s.cockpitLook = (d.cockpitLook | 0) >= 0 && (d.cockpitLook | 0) < 3 ? (d.cockpitLook | 0) : 0;
+    s.cargoCost = (d.cargoCost && typeof d.cargoCost === 'object') ? d.cargoCost : null;
     s.modules = Array.isArray(d.modules) ? d.modules : [];
     s.craftBay = d.craftBay || null;
     G.pilotName = data.pilotName || null;
@@ -915,6 +932,10 @@
     G.wanted = data.wanted || {};
     G.workoff = data.workoff || {};
     G.notoriety = data.notoriety || {};
+    G.turncoats = data.turncoats || {};
+    G.troublemaker = data.troublemaker || {};
+    G.suspended = data.suspended || {};
+    G.onTheTake = data.onTheTake || {};
     G.start = (data.start && typeof data.start === 'object') ? data.start : null;
     G.queueJumps = data.queueJumps || {};
     G.pendingReport = data.pendingReport || null;

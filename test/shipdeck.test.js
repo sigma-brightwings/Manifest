@@ -526,5 +526,76 @@ var picked = bts.every(function (b) {
 });
 check('in the car, the button you look at is the one E presses', picked, bts.map(function (b) { return b.label; }).join(' | '));
 
+console.log('--- two abreast (2026-11-22) ---');
+/* Astra: "the player doesn't have to be centered in every ship; some of
+ * the bigger ones can have two seats, like an airplane." The cockpit fit
+ * that seats you on the left of two (Render.cabinOf, L/XL fit B) moves the
+ * helm there on the deck too, puts the co-pilot's chair across the aisle,
+ * and stands you up behind your own seat. Every other fit keeps the one
+ * centre seat. */
+var abreastBad = [], centreBad = [], aisleBad = [], eBad = [], meshBad = [];
+ids.forEach(function (id) {
+  [0, 1, 2].forEach(function (look) {
+    var s = ship(id); s.cockpitLook = look;
+    var spec = R.cockpitSpec(s), d = R.shipInterior(s), p = d.plan;
+    var sx = spec.seat ? spec.seat.x : 0;
+    var helm = p.items.filter(function (i) { return i.kind === 'seat'; });
+    var cop = p.items.filter(function (i) { return i.kind === 'copilot'; });
+    var tag = id + ' ' + 'ABC'[look];
+    if (helm.length !== 1) { abreastBad.push(tag + ' ' + helm.length + ' helm seats'); return; }
+    if (Math.abs(sx) > 0.05) {
+      /* Your seat where the seat view puts your eye; its twin mirrored. */
+      if (Math.abs(helm[0].x - sx) > 1e-6) abreastBad.push(tag + ' helm at ' + helm[0].x + ', eye at ' + sx);
+      if (cop.length !== 1 || !cop[0].abreast || Math.abs(cop[0].x + sx) > 1e-6) abreastBad.push(tag + ' no twin chair');
+      if (Math.abs(p.spawn.x - sx) > 1e-6) abreastBad.push(tag + ' stand up at ' + p.spawn.x);
+      /* Side by side and clear of each other - a flight deck's pair, with
+       * the pedestal between them and the way out behind, so no aisle is
+       * asked for - and neither in a side console. */
+      var lo = helm[0].x < cop[0].x ? helm[0] : cop[0], hi = lo === helm[0] ? cop[0] : helm[0];
+      if (!(hi.counter[0] - lo.counter[2] > 0.1)) aisleBad.push(tag + ' chairs ' + (hi.counter[0] - lo.counter[2]).toFixed(2) + ' m apart');
+      var cx = d.geom.consoleX;
+      [helm[0], cop[0]].forEach(function (it) {
+        if (it.counter[0] < -cx || it.counter[2] > cx) aisleBad.push(tag + ' ' + it.kind + ' in a console');
+      });
+      /* Both chairs drawn: yours while you are out of it, the twin always. */
+      var xs = function (m) { var lo = Infinity, hi = -Infinity; m.v.forEach(function (v) { lo = Math.min(lo, v[0]); hi = Math.max(hi, v[0]); }); return [lo, hi]; };
+      var sm = xs(d.meshes.seat), fm = xs(d.meshes.fittings);
+      if (!(sm[0] >= sx - 0.27 && sm[1] <= sx + 0.27)) meshBad.push(tag + ' your chair drawn at ' + sm.map(function (v) { return v.toFixed(2); }));
+      if (!(fm[1] >= -sx + 0.25)) meshBad.push(tag + ' no twin drawn');
+    } else {
+      if (Math.abs(helm[0].x) > 1e-9 || Math.abs(p.spawn.x) > 1e-9) centreBad.push(tag + ' helm moved off centre');
+      if (cop.some(function (c) { return c.abreast; })) centreBad.push(tag + ' a twin chair it should not have');
+    }
+    /* Standing up, facing forward, E takes YOUR seat, not the co-pilot's. */
+    var bp = p.decks ? p.decks.bridge : p;
+    var near = Walk.facing(Walk.start({ rooms: bp.rooms, doors: bp.doors, items: bp.items, spawn: { x: p.spawn.x, z: p.bay !== undefined ? p.bay : p.spawn.z, yaw: 0 } }));
+    if (!near || near.kind !== 'seat') eBad.push(tag + ' faces ' + (near && near.kind));
+  });
+});
+var abreastN = ids.filter(function (id) { var s = ship(id); s.cockpitLook = 1; var sp = R.cockpitSpec(s); return sp.seat && Math.abs(sp.seat.x) > 0.05; });
+check('on a two-abreast fit, the helm is where the seat view puts your eye, with its twin across the aisle',
+      !abreastBad.length && abreastN.length > 0, abreastBad.slice(0, 5).join('; ') || abreastN.length + ' hulls: ' + abreastN.join(', '));
+check('every other fit keeps the one centre seat', !centreBad.length, centreBad.slice(0, 5).join('; '));
+check('the two chairs stand clear of each other, and neither in a side console', !aisleBad.length, aisleBad.slice(0, 5).join('; '));
+check('both chairs are drawn where they stand', !meshBad.length, meshBad.slice(0, 5).join('; '));
+check('stood up behind your own seat, facing forward, E takes it', !eBad.length, eBad.slice(0, 5).join('; '));
+/* Every room still reachable, walking from where you stand up now: the
+ * whole ship on a one-deck hull, the bridge deck (where the helm is) on a
+ * decked one - its other decks are reached by the lift, as before. */
+var cutAbreast = [];
+abreastN.forEach(function (id) {
+  var s = ship(id); s.cockpitLook = 1;
+  var whole = R.shipInterior(s).plan, p = whole.decks ? whole.decks.bridge : whole;
+  var has = fill(p, whole.spawn);
+  p.rooms.forEach(function (r) {
+    var ok = false;
+    for (var x = r.x0 + 0.35; x < r.x1 - 0.3 && !ok; x += 0.05)
+      for (var z = r.z0 + 0.35; z < r.z1 - 0.3 && !ok; z += 0.05) if (has(x, z)) ok = true;
+    if (!ok && !(r.id === 'platform-aft' || (r.kind === 'engine' && r.deck === 'junction'))) cutAbreast.push(id + ':' + r.kind);
+  });
+  p.doors.forEach(function (d) { if (d.slide) { d.open = 0; d.shut = true; } });
+});
+check('with the helm moved, every room is still reachable', !cutAbreast.length, cutAbreast.slice(0, 6).join(', '));
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

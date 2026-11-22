@@ -2140,6 +2140,44 @@
     return out;
   }
 
+  /* ---- WHAT YOUR CARGO COST YOU (2026-11-21) ----------------------------
+   * Astra: "Trade HUD should show the cargo in your hull, how much you'll
+   * make or lose taking it to your destination." Losing needs a cost, and
+   * the game never kept one. The design is the one chosen from the
+   * 2026-09-08 play report - an average per commodity, moved by buying -
+   * kept as the credits paid and the tonnes they paid for, so:
+   *   - selling takes its share of both, and the average stands;
+   *   - tonnes that cost nothing (mined, scooped, salvaged, the free half
+   *     of a hold) are simply the held tonnes the record does not cover;
+   *   - contract freight is not yours and never enters it (the callers
+   *     count only sellable tonnes);
+   *   - a hold that shrank some other way (jettisoned, taken by pirates)
+   *     takes its share off when read (costOf), so no hook is needed in
+   *     every place cargo can leave.
+   * Waste is left out: a port PAYS you to take it, and a negative cost
+   * would make every load of it look like the best deal in the sky. */
+  function costBuy(ship, cid, tonnes, cr) {
+    if (!ship || !(tonnes > 0) || cid === 'waste' || !(cr > 0)) return;
+    if (!ship.cargoCost) ship.cargoCost = {};
+    var r = ship.cargoCost[cid] || (ship.cargoCost[cid] = { cr: 0, t: 0 });
+    r.cr += cr; r.t += tonnes;
+  }
+  /* `ownBefore`: the sellable tonnes held before this sale. */
+  function costSell(ship, cid, qty, ownBefore) {
+    var r = ship && ship.cargoCost && ship.cargoCost[cid];
+    if (!r || !(qty > 0)) return;
+    var left = ownBefore > 0 ? Math.max(0, 1 - qty / ownBefore) : 0;
+    r.cr *= left; r.t *= left;
+    if (r.t < 1e-6 || r.cr < 0.5) delete ship.cargoCost[cid];
+  }
+  /* What the `own` sellable tonnes held now cost: { cr, paidT, freeT }. */
+  function costOf(ship, cid, own) {
+    var r = ship && ship.cargoCost && ship.cargoCost[cid];
+    if (!r || !(own > 0)) return { cr: 0, paidT: 0, freeT: Math.max(0, own || 0) };
+    var t = Math.min(r.t, own), cr = r.t > 0 ? r.cr * t / r.t : 0;
+    return { cr: cr, paidT: t, freeT: own - t };
+  }
+
   /* ---- the player's own trades -----------------------------------------
    * `tonnes` positive means stock leaves the port (the player bought it).
    * Applied to the live stepped state when the port is live, and to the
@@ -2540,6 +2578,7 @@
     MARK_BUY_FULL: MARK_BUY_FULL, MARK_SELL_FULL: MARK_SELL_FULL,
     MARK_SELL_GOOD: MARK_SELL_GOOD, MARK_SELL_BAD: MARK_SELL_BAD,
     applyTrade: applyTrade,
+    costBuy: costBuy, costSell: costSell, costOf: costOf,
     goLive: goLive,
     goDormant: goDormant,
     stepLive: stepLive,

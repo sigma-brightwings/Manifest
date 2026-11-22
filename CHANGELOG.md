@@ -40,6 +40,361 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-22, no name over a name: ship labels and the contacts panel keep clear)
+
+Astra: "build the no overlap rule in." The no-overlap rule the dashboard screens and panels already follow now covers the names on the glass and the contacts panel too. The screenshots showed three problems: two ships 20 px apart printing their names through each other ("Warden 15 / interceptor" through "Tallow Lighter / shuttle"), a cop's name written across the speed readout, and the CONTACTS box sitting on the heading tape.
+
+**Ship and target names** (`Render.queueHoloTarget`, `drawHoloTargets`, `placeHoloLabels`):
+- **Placed together.** The boxed targets (nav lock, dock target, every ship awake) are queued for the frame and placed in one pass. Hostile ships go first, so they keep the spot beside their own box.
+- **Every ship's box is reserved first,** so no name can land on another ship's box.
+- **Where a name goes.** It tries beside its box, then the other side, then above and below, then rows further out. It takes the first spot clear of other ships' boxes, other names, the cockpit's readouts, any panel on screen and the planet and port names.
+- **A moved name gets a thin line back to its box,** so you can still tell which name belongs to which ship.
+- **No change when nothing is crowded:** a lone name sits exactly where it always did. Off-screen targets keep their edge arrows.
+
+**The contacts and interdiction panel** (`Render.freeSpot`):
+- **Off the instruments.** In the cockpit it now takes the first spot that doesn't cover an instrument or another box: where it was, then beside the heading tape, then under it.
+- **Kept off the bank arc too.** The cockpit's list of instrument areas now includes the bank arc, which the role panel already avoided. The contacts panel's first fallback spot under the tape would otherwise have covered it, and planet and port names now keep clear of the arc as well.
+- **If nothing is clear,** it stays where it was.
+
+**Tests and probe.**
+- test/panels.test.js now has four more checks (13 in all). Four boxed ships close together, with one beside the speed readout, end up with no name on another name, another ship's box or the readout. A lone name stays where it was, and one at the edge of the glass flips to the other side rather than running off it.
+- The crooked-law probe, re-run, shows Warden 15's name moved to the far side of her box and the Tallow Lighter's on hers. The contacts panel now sits clear of the tape and the bank arc, under the cargo box.
+- airdata.test.js (73) and cockpit.test.js (244) still pass.
+
+### Added (2026-11-22, ship AI slice 4: the crooked law)
+
+The fourth slice of the ship AI (claude/ship-ai-profiles.md §3 and §7 item 4). Until now, whether an inspector took a bribe was a dice roll on the system's corruption. Now it depends on the inspector herself: her own probity (which the system's corruption pulls on but doesn't set), and whether anyone honest is watching.
+
+**The scan** (combat.js `resolveScan`):
+- **Laxity.** A crooked cop searches less often (× 0.6), and an undisciplined one less again (× 0.7–1.0).
+- **The quiet word.** When contraband turns up, a crooked inspector takes a bribe only if no other lawful patrol is within 30,000 km. An honest one never does, in any system. A crooked one with a colleague in sight writes it up like anyone else. This can now happen even in a clean system, where before nobody ever took a bribe.
+
+**The shakedown** (Astra: pay, refuse or report). In a bought system (corruption 60 or more), a crooked cop alone with you wants an "inspection fee" whether your hold is clean or not. That's about 3% of your cargo's value plus 2% of your credits, scaled by her greed, and never under 80 cr.
+- **The INSPECTION FEE panel** shows her ask and a countdown. Time runs at 1× while she waits.
+- **C pays.** She waves you on, and the system gets a little more bought.
+- **X refuses.** She searches you properly with no bribe on offer. If she finds nothing, she cites you anyway for "an obstructed inspection" (60–240 cr, by her greed). Saying nothing for 25 s counts as refusing.
+- **Z reports her.** This is a gamble on someone straight being left to hear it. The odds are better when an honest cop or the navy is in the system, and worse the more bought the system is.
+  - **Upheld:** she is recalled and stays off the lanes for a month, even across arrivals and reloads (`G.suspended`), and your standing with her force rises by 2.
+  - **Not upheld:** your standing with her force drops by 6, and you're marked for 30 days (`G.troublemaker`). Every crooked cop in that system searches you every time.
+
+**On the lanes** (aggression.js, Astra's three targets):
+- **NPC traders.** In a bought system, a crooked cop with no colleague in sight shakes down the traders she scans ("Warden 15 holds the Tallow Lighter for an 'inspection' - 840 cr changes hands and she waves her on"). The trader resents it (her mood takes a "robbed" event). A cop does this at most once every 15 minutes.
+- **Syndicate runners.** A greedy crooked cop (greed 0.35 or more, roughly the top sixth) will lean on the Syndicate's own runners, and the Syndicate answers as if she'd fired on one.
+- **The straight cop.** A cop with probity 0.7 or more, in a system that isn't bought, runs a Syndicate runner down: "I know whose ship this is. Your friends do not pay me."
+- **The dock talks.** A cop who has taken money more than once, or from the mob, gets named in dock gossip (`G.onTheTake`).
+
+**Saves.** `troublemaker`, `suspended` and `onTheTake` are new fields, so an older career loads with none of them. No version bump.
+
+**Tests and probe.** New test/crookedlaw.test.js (35), in the combat group. tools/probe-crookedlaw.js ran it in the game at Mirven, with its corruption set to 80 for the run:
+- Warden 15 (probity 0.34) asked 180 cr. Pressing C paid it and she waved me on.
+- The second time she asked 170 cr. Pressing X refused, and she cited me 92 cr.
+- She then shook down the Tallow Lighter for 840 cr. The contacts list now says "waved on" for a trader let go like that, instead of "fleeing".
+
+### Added (2026-11-22, ships on the lanes, and working ships in the outer system)
+
+Astra: "We need more ships running around in general." Asked where it felt empty, she said on the lanes and in the outer system. For the lanes she chose both streams and passers-by, and for the outer system all four trades: ice haulers, prospectors, gas-giant skimmers and survey ships.
+
+**Why the lanes were empty.** Measured over 15 kawartha systems: about 173 ships fly in each system at any moment, and about 39 of them are out between worlds. But 89% of those had nobody else within a million km. That's because every route takes its own path between the worlds, so it's not a shortage of routes. Ordinary routes would take about 50 times the traffic to fill the gap, and every one would book berths and move markets.
+
+**Lane streams** (`Gen.buildLanes`, `Sim.updateLanes`):
+- **One lane per pair of worlds** with interplanetary trade. Each runs on that pair's busiest route, flown again by many sister ships ("Pilgrim Wain 17") spaced out along the same timetable.
+- **Busy and quiet lanes.** The 5 busiest lanes in a system run thick, with a hull about every 2.5 million km each way. Every other lane runs thin, about every 20 million km. The thin lanes are the passers-by: real ships on a real timetable that you can follow to port, rather than random spawns.
+- **Only the hulls near you are worked out.** The nearest 30 within 20 million km are shown, and only in the open middle of a crossing (8% to 92%). Near the ports, the real timetable is the traffic.
+- **They change nothing else.** Lane hulls lie off the ports they serve, so they take no berth and join no queue. They register no deliveries, so no market moves.
+- **Measured:** a ship out on a lane goes from about 1 neighbour within 20 million km to about 48. The share with nobody within a million km drops from 87% to 58%. Working out who is near costs about 1.75 ms, and it only reruns after 30 s of game time or 300,000 km of travel.
+
+**The outer system's working ships** (`Gen.buildWorkers`, `sys.workers`). These fly a two-ended loop between a home port and a work site, the same shape as your own skimmers' work orders. The time at the site is spent working. About 14 per system, about 8 of them working beyond 3 AU.
+
+| trade | works at | brings home | hull |
+|---|---|---|---|
+| gas skimmer | the top of a giant's air | hydrogen | tanker |
+| ring cutter | a giant's ring | water and ore, by the ring's ice | waste-hauler hull |
+| prospector | a belt or trojan field, among the rocks | ore, rare metals, water | shuttle |
+| ice hauler | an icy moon past the frost line | water, to the port nearest the habitable zone | tanker |
+| survey ship | the farthest world, if it's well past the frost line | nothing | shuttle |
+
+- A belt field isn't a body, so a prospector's site follows `Rings.fieldCenter` (`Sim.bodyStateAt` reads `fieldRef`), and she parks inside the field.
+- Workers lie off their home port and register nothing, the same as the lane hulls.
+
+**Like any other ship.** Lane hulls and workers fly through `Sim.trafficAll`, so they show on the scope, can be hailed, robbed, rescued and lifted, and have captains. Neither is in `sys.traffic`, so nothing that counts berths, boards or deliveries sees them. A leak never strands one, because a tow would put her in a berth she doesn't take.
+
+**What changes for an existing seed:** nothing that existed before. Routes, patrols, markets and every earlier draw are identical with lanes and workers on or off (tested). Workers draw from their own fork; lanes draw nothing.
+
+**Saves.** Nothing is saved for them. A lane hull or worker you destroy comes back after a reload, which is a known gap.
+
+**Tests and probe.** New test/streams.test.js (30), in the transfer group. tools/probe-lanes.js ran it in the game at Mirven:
+- **On lane L0** (Harrow Deep to Lantern Terminal, 240 hulls), ships within 20 million km went from 1 to 12, 11 of them lane hulls, at 57 fps.
+- **The prospector** Assay was out from Talus Field (L5) with 16 t ore and 8 t water. **The skimmer** Banded Lady was at the top of Mirven VI's air with 118 t hydrogen. **The ice hauler** Meltwater was bound for Mirven VI a with 300 t water.
+- The run held 50 to 56 fps throughout.
+
+### Added (2026-11-22, traders who turn pirate when a fortune passes)
+
+Astra: "is there a way for a non-pirate NPC to turn pirate if a juicy enough target passes?" She chose armed traders and Syndicate runners, and that a trader who turns goes back to her lane afterwards, marked.
+
+**Who can be tempted** (`ShipAI.temptation`):
+- **Traders** only if they're armed, bent (probity under 0.4) and greedy (0.5 or more). An honest captain never turns, however rich the ship beside her. The lower her probity, the less it takes.
+- **Syndicate runners** use the same rule now instead of a flat 12% a leg. Their probity only tempers their greed. Without the ship AI loaded, the old flat chance stands.
+
+**What makes a prize juicy:** what it's worth against her own hold, on a log scale. Five times her stake starts to interest her, fifty times is all of it. Her stake never counts for less than 5,000 cr, and nothing under 20,000 cr is ever juicy. An armed prize tempts half as much. A trader never turns with the law watching; a runner rarely does.
+
+**When it happens:** at most once per leg, rolled against the temptation on a seeded hash, so the same leg makes the same choice on every reload. It's only checked for ships near you, and only against a target within 600 km, which is usually you. About 4% of traffic are bent, greedy, armed traders. Beside an unarmed pilot carrying 100,000 cr they turn about 11% of legs on average, and with 300,000 cr about 19%.
+
+**What she does:** the same as a runner. She fires first ("The Coldwater Barge breaks from her lane and opens fire on you - she wants your hold"), or knocks out an NPC's drive and strips her.
+
+**Afterwards she's marked** (`Aggression.markCrime`, saved as `G.turncoats`):
+- **The law treats her as a pirate.** Every lawful cutter that sees her runs her down.
+- **Her record follows her route for 30 days.** The next cop who scans her papers chases her ("you are wanted for an assault on ..."). The record closes early if she's impounded or killed.
+- **The dock talks.** Gossip in that system names her and who she turned on.
+
+**Saves.** `turncoats` is a new field, so an older career loads with no records. No version bump.
+
+**Tests and probe.** New test/turncoats.test.js (33), in the combat group. tools/probe-turncoats.js ran it in the real game at Mirven: the Coldwater Barge (probity 0.24, greed 0.56) turned on an unarmed pilot carrying 20 t of milfuel, and Warden 15 ran her down as a pirate.
+
+### Changed (2026-11-22, outlaw numbers follow corruption; Syndicate and raiders named apart)
+
+Astra: "Syndicate ships should have a different name list. Pirate or syndicate presence should go up with the corruption level in a system, yes, but they shouldn't be a majority of most civilized places."
+
+**How many raiders** (`Gen.pirateRange`, from the system's corruption). Every system used to get 1 to 4 whatever its government (2.3 on average in clean systems, 2.9 in crooked ones).
+
+| corruption | raiders | measured mean (160 kawartha systems) |
+|---|---|---|
+| clean (under 25) | 0 or 1 | 0.46 |
+| bribeable (25 to 59) | 1 to 2, or 1 to 3 from 45 | 1.59 |
+| bought (60 and over) | 1 to 4 | 1.62 |
+
+The cap is still half the system's ports. In lawful space, raiders plus any Syndicate flagship may never outnumber the lawful guns (police, navy and capitals). A system with no law at all gets at most one. That cap is why bought systems sit near parity with their thinner police rather than at four. Pirate-band and Syndicate holds are exempt, because there the outlaws are the law.
+
+**Raiders know their crew.** Each raider carries `band`. In a band's own space it's the band's id. Elsewhere it's `free:<port>`, so the freelancers working one port fly as one crew. Before this, every raider in a system read as one band, because they all had the faction `outlaw`. shipai.js `orgOf` now reads `band`, so slice 2's "each pirate band is its own flight" is real.
+
+**Names:**
+- **Syndicate flagships** have their own boardroom-style list ("The Chairman", "The Godmother", "The Majority Holder" ...) instead of the raiders' list.
+- **Raiders** have 30 names instead of 10.
+- **No two hulls in a system share a name.** This covers raiders, heavies, police and enforcers ("Vigil 12" walks on to "Vigil 13") and tugs. It costs no extra random draw.
+- **What changes for an existing seed:** only the raiders' count, crew and names, and a Syndicate flagship's name. Patrols are generated, not saved, so a career simply meets the new ones.
+
+### Added (2026-11-22, ship AI slice 3: what a civilian does when the guns come out)
+
+The third slice of the ship AI (claude/ship-ai-profiles.md §7 item 3). Freighters and liners no longer answer a pirate with a fixed roll. Each one weighs five answers against her own situation and picks the best.
+
+**The five answers** (`ShipAI.civilScores`, `choose`): comply, dump, flee, fight, surrender. Each is scored from a base for her role, scaled by what she can see:
+- **Her situation** (`ShipAI.situation`): whether she's armed; her firepower, her mates' and the attacker's; whether she can outrun the attacker (more than 5% faster, and nobody outruns you); whether the law is near; her hull; whether she carries cargo.
+- **Her role.** A trader leans to comply or dump when the demand comes, and to flee or fight once she's hit. A liner (passengers) never fights. Her first answer to a hit is to run or strike her colours.
+- **Her mood.** Fear lifts comply, dump, flee and surrender. Anger lifts fight and halves surrender. When fear passes 0.6, she's armed and she can't outrun the attacker, she is cornered, and fight is lifted 1.6×.
+- **The law nearby** lifts flee 1.6× and cuts comply to 0.7×: help is coming, so she runs for it rather than hand the hold over.
+- **Stickiness.** Under fire, the answer she chose holds for 8 s unless another beats it by 25%, so she doesn't flicker between running and fighting. Ties break on a seeded roll, so the same ship answers the same way.
+
+**Dumping is new** (`dumpCargo` in aggression.js). A freighter that dumps throws about a third of her hold out of the hatch as canisters (`Sim.dropCanister`, marked `dumpedBy`), writes the loss back to her manifest, shorts her delivery, and runs. The pirate stops to scoop what's floating rather than chasing ("X dumps medical supplies out of her hatch and runs - Y stops to scoop it"). Whatever the pirate hasn't scooped by the time she gives up is still in space for anyone else.
+
+**A liner calls for help early.** When a pirate's demand reaches a passenger ship, she sends her distress call at once instead of waiting to be hit.
+
+**Surrender reads the mood** (combat.js). A liner's base chance to strike is 0.9 (`surrenderBase`, now exported). `moodStrike` scales the surrender odds by (1 + 0.6 × fear), and by 0.6 if she's angry. A calm crew is unchanged. `beatenSurrender` takes the system and time so it can read the mood.
+
+**Tests.** New test/civilians.test.js (41), in the combat group. aggression.test.js now accepts "dumped" as a freighter's answer to a demand. tools/probe-civilians.js runs it in the real game at Mirven: of four freighters robbed by The Scrag, three dumped and one complied, and every dumped canister was accounted for.
+
+### Added (2026-11-22, ship AI slice 2: flights and moods)
+
+The second slice of the ship AI (claude/ship-ai-profiles.md §4 and §7). Astra: loyalty "isn't in relation to the player, but to the 'flight leader' of the group", and "all syndicate ships will have loyal for one another."
+
+**Flights** (`ShipAI.formFlights`). Ships of one organisation, lifted near you and within 300 km of each other (chained ship to ship), fly as one flight. The flights are re-formed every 2 s. The organisations:
+- **Navy, per faction**, including the tenders that ride a capital.
+- **Police, per faction.**
+- **The Syndicate**, heavies and runners together.
+- **Each pirate band.**
+- **A freighter and the mercenaries hired to escort her run.**
+
+Independent freighters and liners fly alone. The leader is chosen by rank (capital, navy, heavy, police, hired gun, pirate, tender, trader), then hull, then a seeded seniority, and a sitting leader keeps the job.
+
+**What loyalty does:**
+- **Covering a mate.** When a ship is hit, her armed wingmates within 2000 km turn on whoever hit her ("X breaks to cover Y").
+- **The Syndicate answers its own.** Every Syndicate ship within 3000 km answers any Syndicate ship that is hit, whether or not they're in a flight.
+- **When you're the attacker.** Hit a pirate, a Syndicate ship or an escorted freighter and her flight turns on you ("weapons hot"). A cutter's wingmate is left to the law's own answer, the crime and the warrant.
+- **Following the leader.** Wingmates engage what the leader engages, and withdraw when she does. A band never piles onto a freighter its leader is only robbing; it closes in only once she refuses and fights, so no hold is stripped twice.
+- **When the leader falls.** The senior captain takes the lead if her cohesion is 0.5 or more ("X takes the lead"). Otherwise the flight scatters ("the flight scatters") and doesn't regroup for two minutes. Taking the leader out is how a fight against a group is won.
+
+**Moods** (`ShipAI.feel`, `moodOf`, `stance`). Each lifted ship carries fear and anger, from 0 to 1, on the spec. They are never saved.
+- **Fear** has a half-life of 60 s × (1.5 − nerve). It is raised by:
+  - a hit;
+  - being robbed;
+  - a wingmate killed;
+  - losing the leader;
+  - the odds, which hold it up from below: the firepower aimed at her against her own and her flight's.
+- **Anger** has a half-life of 5 min to 1 h, set by heat: quick to anger is slow to forgive. It is raised by:
+  - a hit;
+  - being robbed;
+  - a demand of hers refused;
+  - a wingmate hit or killed.
+- **Anger overrides fear in proportion to nerve.** A brave, hot-tempered captain hit three times is *angered*; a timid one is *scared*.
+- **An angered pirate holds on** to half the hull a calm one breaks off at (0.2 instead of 0.4, through aggression.js `runAt`).
+- **A wingmate whose fear beats her cohesion breaks formation and runs** ("X breaks formation and runs"). An angered one doesn't.
+- **Anger at you** already outlives the meeting in captain memory: combat.js records "attacked" and "robbed".
+
+**No numbers on screen.** As agreed, you learn a captain from her tells: the message line and what her ship does.
+
+**Wired through aggression.js:** `onNpcHit`, `onNpcKill`, `onPlayerHit`, `onPlayerKill`, the robbery's strip and refusal, and a tick at the top of `Aggression.update`.
+
+**Fixed along the way:**
+- **"The The Scrag's drive is out."** A ship named "The …" got a second "The" in the drive-out message and its journal line (combat.js `TheName`).
+- **A doubled label on awake ships.** Every awake ship near you is boxed on the glass with her name, class and range, and her sky tag also printed "name [class]" a few pixels off it. Awake ships now get the box's label only (main.js `holoNames`), as the nav and dock targets already did.
+
+**Tests:** `test/flights.test.js` (new, 40 pass, in the combat group). It checks:
+- who flies with whom;
+- the leader by rank, and that she keeps the job;
+- covering a mate, and the Syndicate answering across flights;
+- your hit on a pirate versus your hit on a cutter;
+- succession and scattering;
+- the half-lives, and angered versus scared;
+- the run hull;
+- breaking formation;
+- following the leader, and not piling onto a robbery;
+- the same meeting giving the same result twice.
+
+shipai, aggression, combat, band, rendezvous, hunters, captains, rescue and the rest of the combat group all still pass.
+
+**Probe:** `tools/probe-flights.js`. In the real game it wakes two pirates of one band near you (staged), and you fire on one with Space held. The run showed:
+- the flight forming, with The Tallow leading;
+- The Scrag's drive going out, and her scared;
+- The Tallow, angered, turning on you to cover her, and knocking out two of your panels.
+
+**Not yet:**
+- Your own company's ships don't form a flight with you.
+- Your firepower is a rough estimate (one or two pirate guns' worth).
+- The civilian choices fear will drive (dump cargo, comply, surrender, fight when cornered) are slice 3.
+
+### Changed (2026-11-22, no panel overlaps another; the pilot's chair you can see)
+
+Astra: "can you make a rule so no panel overlaps another, even if it means moving it up (if it's moved off the 'dashboard' then it's on a support, on a wall, etc." And: "We want the seat to be visible."
+
+**The cockpit screens** (`Render.mfdLayout`, NO PANEL OVERLAPS ANOTHER):
+- **Where the old check stopped.** The old check held the three dash screens apart only in the cabin every ship had. A fit's cabin moves them: spread wide, stood up high, or seated to one side. Fit C's instrument stack put them 6–9 px apart on every hull, against the 8 px at 1280 wide the suite asks for. Its housings were nearly touching.
+- **How the rule places them.** Per cabin, the six screens go down in order: centre, left, right, overhead, then the two on the bulkhead. Each is kept 0.8° clear of every screen already placed, as seen from the seat's own eye. A screen that would come closer is lifted a centimetre at a time until it clears.
+- **Supports.** Every dash screen now stands on a support (`drawMfdSupport`): a column from under its housing down to the dash surface beneath it (`dashYAt`, read off the fitted dash), on a foot plate 12 mm thick with two bolts. A lifted screen just has a longer column. The old code promised "a stalk down to the dash" in a comment but never drew one, so until now every screen floated. A wall or overhead screen just moves up its wall.
+- **What moves today.** Only fit C's two outer screens, by 3–6 cm, into a small tiered stack. Fits A and B move nothing.
+- **Cached per cockpit spec.** A ship with her own fitted spec gets her own answer. The Tanker bought in the probe needed no lift in fit C, for example.
+
+**The boxes over the view** (`Render.claimOverlay`):
+- **Claims.** Every box drawn over the view through main.js `panel` claims its rectangle: the captain's card, the transit readout, a hail.
+- **The role panel keeps clear.** The role panel (weapons, cargo P/L, work, passengers) is never placed under a claimed box. Touching one costs a hundred times what touching an instrument does, and the spots just below and beside each box are tried. Captain Halloway's card had been covering it; it now sits clear of the card, top left.
+
+**The pilot's chair** (`shipdeck.js` `pilotChair`):
+- **Why it vanished.** The chair was darker than the walls behind it, so in a docked cabin it disappeared.
+- **Shell and cushions.** The shell is now a lighter grey than any wall. The cushions are the palette's own colour: tan in a civil ship, navy blue, or the Syndicate's red.
+- **Piping.** The back and headrest edges and the front of the cushion are piped with a dim strip of the palette's accent light, which the room's shading leaves lit.
+- **One builder.** Your chair and the co-pilot's twin are built by the same function.
+
+**Tests:** `test/panels.test.js` (new, 9 pass, in the view group). It checks:
+- every hull's A, B and C, projected through the real cockpit camera from the fit's own seat, at 1920 and 1280 wide;
+- that lifted screens are supported, fit A is never moved, and lifts stay small;
+- that the role panel moves out from under a box, finds space with all four corners boxed, and goes back when the box goes.
+
+Run with the rule switched off, the screen check fails on fit C, so it does catch the old overlap.
+
+**Probes:**
+- `tools/probe-abreast.js` now also refits to C and shoots the dash.
+- `tools/probe-panel-sizes.js` lists every hull's in-game cockpit size and lifts.
+- `tools/probe-copilot.js` reads where a hired pilot is on a two-abreast deck while you hold the helm (`Npc.lastScene`), then moves the clock on to her watch and looks across.
+  - It found nothing broken. Off watch, she sleeps in her bunk: a ship with bunks keeps three watches, and the first probe landed on her rest period.
+  - On watch, she walks up and sits in the co-pilot's chair beside you.
+  - No code changed.
+
+### Changed (2026-11-22, two abreast: the helm moves with the seat, and the co-pilot gets a chair)
+
+Astra: "the player doesn't have to be centered in every ship; some of the bigger ones can have two seats, like an airplane." The cockpit view already sat you on the left of two in a large hull's fit B. Walking the deck didn't match: the helm chair was still in the middle.
+
+- **Your chair is where the seat view puts you** (`shipdeck.js` TWO ABREAST). On an L/XL hull with cockpit fit B, the deck plan puts your chair at the cabin's seat. `Render.shipInterior` passes it in as `seatX`, and this is checked to match the camera exactly. Standing up puts you behind your own chair, and E there sits you back down in it.
+- **The co-pilot's chair** is your chair's twin, mirrored across the centre line. There is no aisle between them: like a real flight deck, you get in and out from behind.
+- **A hired pilot sits in it.** That was already how `npc.js` seated a co-pilot on the Wren and Bollard. When you get up, she takes the helm, as before.
+- **Every other fit keeps the one centre seat.**
+- **The cabin notes** (`Render.cabinOf`) now say the chair beside you is the co-pilot's mirror, not the old centre seat.
+- **Tests:** a "two abreast" section in `test/shipdeck.test.js`, 69 pass. It checks:
+  - on all 9 two-abreast hulls, the helm sits exactly where the seat view puts your eye;
+  - the co-pilot's twin chair is on the other side;
+  - you stand up behind your own seat, and E takes it;
+  - the chairs stand clear of each other and out of the side consoles;
+  - both are drawn;
+  - every room on the bridge deck is still reachable;
+  - every other fit keeps the centre seat.
+- **A screenshot probe,** `tools/probe-abreast.js`. It buys a big hull in fit B, signs on a pilot, gets up with O, sits back down with E, and looks across.
+- **Test runner:** `test/cargocost.test.js` added to the economy group in `tools/run-tests.js`. The runner refuses ungrouped files, so the full suite never started last time.
+
+### Changed (2026-11-21, the HUD sits on the glass, not on your eye line)
+
+Astra asked for the HUD to be centred on the cockpit glass, not the player's view. In ships where the seat is off to one side, the less vital information should move out to the side, and the crucial information should sit between the glass centre and the seat.
+
+- **Where the instruments centre.** `Render.hudGeom` now centres them halfway between two points: the middle of the windscreen, and the point straight ahead of the seat. `main.js` projects that second point each frame and passes it in through `setHudRoom(aperture, seatX)`. The bank scale, heading tape, air data, attitude text and facing cue all use this centre (`hg.cx`).
+- **Centre-seat cabins.** Both points are the same, so these look exactly as before.
+- **Two-abreast cabins.** On the L/XL fit B, with the seat on the left of two, the instruments shift partway toward you.
+- **The role panel.** Weapons, cargo P/L, work or passengers move to the far side of the glass (`rolePanelAt` now prefers that side).
+- **Turning your head.** The layout is tied to the glass, so it stays put on the windscreen.
+- **The raised seat in fit B on small and medium hulls.** Lowered from 9 cm to 5 cm (× room size). From 9 cm the console sank out of the bottom of the view.
+- **The 'wide' console.** Now mounted 2 cm higher.
+- **Canopy parameters.** The table for the exterior models (`claude/cockpit-cabin-params.md`) has been regenerated with these values.
+
+### Added (2026-11-21, the trade panel prices your run; cabins vary by seat, console and canopy)
+
+Astra: "I'd appreciate more variety with the location of the pilot's seat and the MFD panels, and some cockpit variants can have different HUD colors and characteristics, but all should be bright enough to provide good contrast. Use icons for trade. Trade HUD should show the cargo in your hull, how much you'll make or lose taking it to your destination in either bright green or bright red, fading through orange and yellow for deals which are less and less bad." And: "Changing the canopy shape is also permitted. It doesn't have to match the exterior, I can alter those models later as long as you give me the parameters."
+
+- **What your cargo cost you is now kept** (`Economy.costBuy` / `costSell` / `costOf`). It was designed after the 2026-09-08 play report and never built.
+  - Per commodity, it stores the credits paid and the tonnes they paid for. Buying adds to both; selling takes its share of both, so the average stands.
+  - Tonnes that cost nothing (mined, scooped, salvaged) are simply the held tonnes the record doesn't cover.
+  - A hold that shrinks some other way (jettisoned, taken) takes its share off when the record is read.
+  - Contract freight is never in it. Waste is left out, because a port pays you to take it.
+  - It's saved, goes with a ship onto the clamp and back, and is cleared when the hull is lost.
+  - Additive: an older career's hold reads as having cost nothing.
+- **The trade panel.** On a freighter's glass, each of your cargoes shows:
+  - its mark (a new set of commodity icons: drums, sacks, logs, rock, gems, chips, gears, a helix and more; every commodity has one);
+  - its tonnes;
+  - what selling it at the port locked on NAV makes or loses against what it cost.
+  - Colours: bright red for a real loss, through orange and yellow near break-even, to bright green (`Render.dealColour`). Every stop on that ramp is bright.
+  - A NET line totals the run. Contract freight gets a plain line of its own, and a port that won't buy something says "no buyer".
+- **Every HUD colour is bright.** Each is held to a relative luminance of 0.55 or better (`cargocost.test.js`). Coral and violet were under it (0.42, 0.50) and were lifted toward white.
+- **A fit is a whole cabin** (`Render.cabinOf`):
+  - **Fit A** is the cabin every ship had, untouched.
+  - **Fit B** opens it up: wider glass, a slimmer brow, a wide low console. On a small or medium hull you sit higher. **On a large or very large hull you sit on the left of two, as on an airliner.** The glass and the room stay centred on the ship and your own screens move over in front of you.
+  - **Fit C** closes it in: narrower glass, a heavier brow, an instrument stack stood up toward you, and a low seat further forward.
+  - The canopy shape changes with the fit: the windscreen's width, the height of its top edge, the reach of the quarter-lights, and the lean. A refit rebuilds the cabin.
+  - The yard card and the refit rows now lead with the cabin ("left seat of two · wide console · wider glass").
+  - **The numbers for the exterior models** (every hull, every fit: glass reach, width and top-edge multipliers, wrap, brow, rake, seat, console) are in the project doc `claude/cockpit-cabin-params.md`, generated from `Render.cabinParams()`.
+  - Not yet: on a two-abreast deck there's no co-pilot model in the seat beside you, and the walk-aboard helm spot is still the centre seat.
+- **Fixed on the way:** the role panel read the market through a bare `Economy`. The render suite draws the cockpit without a market, and three of its checks failed. It now goes through `global.Economy`, and through `global.Missions` for the freight it counts.
+
+### Changed (2026-11-21, cockpits: chosen at the yard, framed in metal, and a panel for what the ship is for)
+
+Astra, after the first gallery: "I'm going to ask that you don't use flat rectangles in the player's visual field. Maybe what's missing is textures on the interior of the cockpit edges? I like the variation in HUD. The different cockpits should be available when purchasing a ship. Maybe you can make different interfaces for each ship type? Like a fighter shows missiles and guns selected, a freighter shows the current prices of your cargo at your selected destination, that sort of thing?" Her choices, asked: struts *and* textured edges; free choice at purchase, with a refit at shipyards later; the hull's role sets the panel, and fitted gear adds to it; all four role panels.
+
+- **No flat shapes in the view.** The corner plates, the short posts and the fighter's combiner glass are gone.
+  - **Every pane's edge is now a reveal.** That is the frame's inner face running from the glass back toward the pilot, so it foreshortens as you turn your head. It is lit from above (the sill catches the light, the header is in shadow), with a seal line at the glass and bolts along it. Bolts are sized by distance.
+  - **A look sets the frame:** how deep it is, the bolt spacing, and whether the seal is lit in the hull's accent.
+  - **Real window posts on the large and very large hulls.** They are prisms with a lit face and a shadowed one, standing from header to sill at the windscreen's top corners. A big ship's glass reads as three panes, and the HUD stays in the middle one.
+  - **Small hulls get no posts.** A strut that ends in mid-air is what started this.
+  - **Drawn after the glass,** because they stand in front of it. The first try put them under the glass's wash and they read as tinted plastic.
+- **The cockpit is chosen when you buy her.** The yard card has COCKPIT A / B / C, with a line saying what each one is.
+  - Free on purchase, and on a commission too: the order carries it to the slip and the hand-over.
+  - **REFIT COCKPIT** on the fleet page, at a shipyard only, costs 2% of the hull price (150 cr minimum) (`Combat.refitCockpit`).
+  - It is the ship's own (`ship.cockpitLook`). It goes with her onto the clamp and back (`Fleet.record`, take command) and into the save. Additive: an older career flies fit A.
+- **A role panel on the glass** (`roleReadout` in main.js, `Render.drawRolePanel`): a title and up to five lines, in the look's colour and box style. It sits in whichever spot of this window is clear of this look's instruments: the four corners first, then just under or over the tape.
+  - **Fighters and police:** guns by group, the armed missile and how many, heat (amber at 70%), the target and its range.
+  - **Freighters and traders:** the hold against capacity, and each cargo priced at the port locked on NAV, with the total there against the total here.
+    - There is no cost basis kept for cargo yet (planned in the 2026-09-08 play report as `cargoCost`, never built), so it cannot say profit against what you paid. It says what it knows instead.
+  - **Tugs, miners and tenders:** ore and rare ore in the hold, how full the hold is, the arms' state, a tow, and the target.
+  - **Liners and shuttles:** souls aboard, and each party's destination, fare and time left (amber under 6 h).
+  - **Gear the role didn't lead with adds a line:** guns on a Mule, passengers on a fighter, a hold on a liner, arms on anything that has them.
+  - Which hull is which: `Render.HULL_ROLE`.
+  - The panel's spot is one of the readout boxes, so planet labels keep off it too.
+
+### Changed (2026-11-21, every hull its own cockpit look — candidates)
+
+Astra, looking at three cockpits: "some of these angled things are just floating in space on models where the glass is further out from the pilot's seat … can you re-design the interiors so that each one has a unique HUD layout and placement of cockpit visual details? Give me a few examples for each one and I'll tell you which is the best."
+
+- **The floating corner pieces, fixed.** The corner gussets and centre mullion were drawn at fixed numbers from before the windscreen grew, always 1.2 m out. On hulls whose glass sits further out, or is bigger (every bubble canopy), they hung in the air in front of it. Everything on the windscreen is now built from that hull's own outline: its corners, its chamfers, and its own distance from the eye (`drawCanopyFurniture`).
+- **A look per hull, three candidates each** (`Render.HULL_LOOKS`, A/B/C, 69 in all). A look has two halves:
+  - **HUD:** a colour (jade, cyan, amber, ice, lime, coral, violet); where speed and altitude stand (wide, tucked in, low, high); the heading tape at the top or the foot; the bank arc above, hung below, or left off; and the boxes framed, corner-bracketed or bare.
+  - **Windscreen furniture:** corner plates or braces sized per hull; a centre post, twin posts, or (fighters) a combiner glass on the glare shield; and an optional dim brow lamp in the hull's accent colour.
+  - No candidate puts two instruments in one place.
+- **The HUD now fits inside each window.** The glass is clipped to the windscreen, and on narrow-glass hulls (the tanker's is about half the screen wide) the speed and altitude boxes had always been drawn under the frame and cut in half. Nobody saw it until all 23 cockpits were lined up side by side. `Render.hudGeom` now places every instrument from one spot, brings the boxes in to fit the opening, and keeps the tape and bank arc between the window's top and sill and above the flight panel. `hudReadoutBoxes` reads the same geometry, so planet labels still keep off wherever the instruments went.
+- **Defaults:** a ship with no fit recorded flies its hull's A look. The buyer chooses now (the entry above), so there is no single pick per hull. The pitch ladder keeps its old cyan and green outside a hull's look.
+- `tools/probe-cockpit-looks.js` photographs all 69 candidates in the same spot over Mirven II, for the gallery.
+- Not yet done, and asked for in the same conversation: two-seat cockpits for the bigger hulls, pilot in the left seat as on an airliner. That moves the eye, the console and the walk-aboard helm seat, so it is its own change.
+
 ### Fixed (2026-11-21, the bug hunt: where the new systems meet)
 
 Astra: *"before I do that I want you to embark once more on the great bug

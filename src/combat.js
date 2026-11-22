@@ -4766,7 +4766,7 @@
 
     /* Her drive, and her nerve (boarding part 3, 2026-10-31). */
     if (driveHit(spec, split.hull, from)) disableNpc(sys, G, spec, 'drive', t, hooks);
-    else if (!spec.disabled && beatenSurrender(spec)) disableNpc(sys, G, spec, 'surrender', t, hooks);
+    else if (!spec.disabled && beatenSurrender(spec, G, sys, t)) disableNpc(sys, G, spec, 'surrender', t, hooks);
   }
 
   /* ONE SHIP SHOOTING ANOTHER (2026-10-31). The same hull, shield, heat and
@@ -4775,6 +4775,7 @@
    * onNpcHit): a merchantman runs from her attacker, anything armed turns
    * on it. Nobody files a crime against you for a fight you were not in. */
   function theName(sp) { var n = (sp && sp.name) || 'ship'; return /^the /i.test(n) ? n : 'the ' + n; }
+  function TheName(sp) { var n = theName(sp); return n.charAt(0).toUpperCase() + n.slice(1); }
   function damageNpcBy(sys, G, spec, dmg, t, hooks, delivery, from, by) {
     if (!spec || spec.dead) return;
     npcHull(spec);
@@ -4797,7 +4798,7 @@
     if (clash) { if (spec.hullHp < 1) spec.hullHp = 1; return; }
     if (spec.hullHp <= 0) { killNpc(sys, G, spec, t, hooks, by); return; }
     if (driveHit(spec, split.hull, from)) disableNpc(sys, G, spec, 'drive', t, hooks, by);
-    else if (!spec.disabled && beatenSurrender(spec)) disableNpc(sys, G, spec, 'surrender', t, hooks, by);
+    else if (!spec.disabled && beatenSurrender(spec, G, sys, t)) disableNpc(sys, G, spec, 'surrender', t, hooks, by);
   }
 
   /* ---- KNOCKING HER DRIVE OUT (boarding part 3, 2026-10-31) ---------------
@@ -4846,15 +4847,25 @@
     if (spec.kind === 'police' || spec.kind === 'navy' || spec.cls === 'navy' || spec.cls === 'cutter') return 0;
     if (spec.kind === 'pirate') return 0.12;
     if (spec.kind === 'merc') return 0.25;
+    /* A liner strikes soonest of anyone: lives aboard outweigh the hold
+     * (claude/ship-ai-profiles.md, "surrender base 0.9"). */
+    var SA = global.ShipAI;
+    if (SA && SA.civilRole && SA.civilRole(spec) === 'passenger') return 0.9;
     return isArmedNpc(spec) ? 0.45 : 0.7;
   }
+  /* How her mood moves it (shipai.js slice 3): frightened, likelier;
+   * angered, much less. 1 for anyone the ship AI has no say over. */
+  function moodStrike(spec, G, sys, t) {
+    var SA = global.ShipAI;
+    return SA && SA.strikeFactor && G ? SA.strikeFactor(G, sys, spec, t) : 1;
+  }
   /* Asked once, the first time her hull falls under SURRENDER_HULL. */
-  function beatenSurrender(spec) {
+  function beatenSurrender(spec, G, sys, t) {
     if (spec.disabled || spec.surrenderWeighed) return false;
     npcHull(spec);
     if (!(spec.hullHp < SURRENDER_HULL * (spec.hullMax || 50))) return false;
     spec.surrenderWeighed = true;
-    return roll01('beaten', spec.id) < surrenderBase(spec);
+    return roll01('beaten', spec.id) < Math.min(0.97, surrenderBase(spec) * moodStrike(spec, G, sys, t));
   }
 
   function disableNpc(sys, G, spec, why, t, hooks, by) {
@@ -4881,10 +4892,12 @@
     if (hooks && hooks.say) {
       hooks.say(why === 'surrender'
         ? (spec.name || 'She') + ' on an open channel: "Enough! We are cutting our drive. Come aboard, nobody needs to get hurt."'
-        : 'The ' + (spec.name || 'ship') + '\'s drive is out  -  she is dead in space. Close to under 150 m to board her.', 7);
+        : TheName(spec) + '\'s drive is out  -  she is dead in space. Close to under 150 m to board her.', 7);
     }
-    jot(G, 'crime', (why === 'surrender' ? 'The ' + spec.name + ' surrendered and cut her drive'
-                                          : 'Knocked out the ' + spec.name + '\'s drive'));
+    /* theName, not 'The ' + name: a ship called "The Scrag" read
+     * "The The Scrag's drive is out" (seen 2026-11-22, probe-flights). */
+    jot(G, 'crime', (why === 'surrender' ? TheName(spec) + ' surrendered and cut her drive'
+                                          : 'Knocked out ' + theName(spec) + '\'s drive'));
   }
 
   /* "Heave to and stand by to be boarded", over the band, with a gun on
@@ -4902,6 +4915,9 @@
     var s = G.ship, armed = !!(s && (s.gun || s.missiles > 0 || (s.fit && Object.keys(s.fit).some(function (k) { return /^hardpoint/.test(k) && s.fit[k]; }))));
     if (!armed) return 0;
     if (spec.hostileToPlayer) p -= 0.15;
+    /* Her mood (shipai.js slice 3): a frightened crew strikes sooner, an
+     * angered one hardly at all. Read at G.t, the moment you ask. */
+    p *= moodStrike(spec, G, sys, G.t);
     return Math.max(0, Math.min(0.95, p));
   }
   function demandSurrender(sys, G, t, contactState, hooks) {
@@ -6691,11 +6707,189 @@
    * hold. Crime permissivity governs getting CAUGHT, never what exists to
    * find — that would make a lucky roll retroactively legal, which is
    * backwards. */
-  function resolveScan(G, spec, hooks) {
+  /* ==== THE CROOKED LAW (ship AI slice 4, 2026-11-22) =====================
+   * claude/ship-ai-profiles.md section 3 and section 7 item 4. Until now a
+   * scan's envelope was a dice roll on the system's corruption. Now it is
+   * HER: the inspector's own probity (ShipAI.dials - the system pulls it,
+   * it does not set it), and whether anybody honest is watching.
+   *
+   *   LAXITY    a bent cop looks less hard, and an undisciplined one too.
+   *   ENVELOPE  contraband found: a bent inspector with no other patrol in
+   *             sight takes a quiet word; an honest one never does, in any
+   *             system; a bent one under a colleague's eye writes it up.
+   *   SHAKEDOWN in a BOUGHT system, a bent inspector alone with you wants
+   *             an "inspection fee" whether your hold is clean or not.
+   *             Astra: pay, refuse or report. Pay and she waves you on;
+   *             refuse and she turns your hold over properly and writes
+   *             you up for something small; report her and it is a gamble
+   *             on there being somebody straight left to hear it.
+   *
+   * With no ship AI loaded, the old dice stand everywhere. */
+  var WITNESS_KM = 30000;              // another patrol this close is watching (Sim POLICE_DETERRENT)
+  var SHAKEDOWN_MIN_CORRUPTION = 60;   // "bought" (corruptionLabel)
+  var SHAKEDOWN_S = 25;                // she waits this long for an answer
+  var SHAKEDOWN_CITATION = [60, 240];  // the "something small", by her greed
+  var REPORT_STANDING = -6;            // her friends hear you went over her head
+  var TROUBLE_S = 30 * 86400;          // ...and every bent cop here searches you for a month
+  function SAI() { return global.ShipAI; }
+  function inspectorOf(G, sys, spec) {
+    if (!SAI() || !SAI().dials || !spec) return null;
+    try { return SAI().dials(G, sys, spec); } catch (e) { return null; }
+  }
+  /* Is another lawful patrol in sight of her? The bent cop's witness check
+   * is the one the pirates use to pick their moment (design section 3). */
+  function lawWitness(sys, spec, t) {
+    var Sm = global.Sim, here = spec && spec.live ? spec.live.pos : null;
+    if (!Sm || !here) return null;
+    var pats = sys.patrols || [];
+    for (var i = 0; i < pats.length; i++) {
+      var p = pats[i];
+      if (p === spec || p.dead || p.outlaw || p.faction === 'outlaw') continue;
+      if (p.kind !== 'police' && p.kind !== 'navy') continue;
+      var st = p.live || (Sm.patrolState ? Sm.patrolState(p, sys, t) : null);
+      if (st && st.pos && V.dist(st.pos, here) < WITNESS_KM) return p;
+    }
+    return null;
+  }
+  function troubleKey(G) { return (G.here && G.here.id) || 'here'; }
+  function marked(G) {
+    var e = G.troublemaker && G.troublemaker[troubleKey(G)];
+    return !!(e && G.t - e < TROUBLE_S);
+  }
+  /* What she asks: a slice of what you carry and what you hold, never
+   * less than the price of the paperwork. Greedier asks more. */
+  function shakedownFee(G, d) {
+    var Eco = global.Economy, v = 0, ship = G.ship;
+    for (var cid in (ship.cargo || {})) {
+      var c = Eco && Eco.BY_ID ? Eco.BY_ID[cid] : null;
+      if (c && !c.waste) v += (ship.cargo[cid] || 0) * (c.base || 0);
+    }
+    var g = d ? d.greed : 0.5;
+    return Math.max(80, Math.round((v * 0.03 + (ship.credits || 0) * 0.02) * (0.6 + 0.8 * g) / 10) * 10);
+  }
+  function shakedownWanted(G, sys, spec, d) {
+    if (!d || !d.bent || spec.faction === 'outlaw') return false;
+    if (systemCorruption(G, sys) < SHAKEDOWN_MIN_CORRUPTION) return false;
+    return !lawWitness(sys, spec, G.t);
+  }
+  /* Your answer (main.js: C pay, X refuse, Z report; or the clock). */
+  function answerShakedown(G, how, hooks) {
+    var sd = G.shakedown;
+    if (!sd) return null;
+    G.shakedown = null;
+    var spec = sd.spec, sys = G.sys, ship = G.ship;
+    var say = function (m, s) { if (hooks && hooks.say) hooks.say(m, s || 6); };
+    var onTake = function () {
+      G.onTheTake = G.onTheTake || {};
+      var k = troubleKey(G) + '|' + spec.id, e = G.onTheTake[k] || { name: spec.name, star: troubleKey(G), n: 0 };
+      e.n++; e.at = G.t; G.onTheTake[k] = e;
+    };
+    if (how === 'pay') {
+      if ((ship.credits || 0) < sd.fee) { how = 'refuse'; say('You cannot cover ' + sd.fee + ' cr - she takes that as a no.', 5); }
+      else {
+        ship.credits -= sd.fee;
+        bumpCorruption(G, CORRUPTION_BUMP_CUSTOMS);
+        onTake();
+        say(spec.name + ' pockets ' + sd.fee + ' cr of "inspection fee" and waves you on.', 6);
+        if (hooks && hooks.sound) hooks.sound('click');
+        return { paid: sd.fee };
+      }
+    }
+    if (how === 'report') {
+      /* Somebody straight to hear it: an honest officer of her own force in
+       * the system, or the navy. A bought system has few of either. */
+      var straight = (sys.patrols || []).filter(function (p) {
+        if (p === spec || p.dead || p.outlaw || p.faction === 'outlaw') return false;
+        if (p.kind !== 'police' && p.kind !== 'navy') return false;
+        var dd = inspectorOf(G, sys, p);
+        return dd && !dd.bent;
+      });
+      var odds = Math.max(0.05, Math.min(0.85, (straight.length ? 0.55 : 0.12) * (1.4 - systemCorruption(G, sys) / 100)));
+      var roll = hashUnit('report|' + (G.seed || '') + '|' + spec.id + '|' + Math.floor(G.t / 3600));
+      if (roll < odds) {
+        spec.dead = true; spec.live = null; spec.suspended = { by: straight[0] ? straight[0].name : 'the navy', at: G.t };
+        G.suspended = G.suspended || {};
+        G.suspended[troubleKey(G) + '|' + spec.id] = { name: spec.name, at: G.t };
+        if (global.Sim && sys) { sys._ships = null; sys._traffic = null; }
+        say((straight[0] ? straight[0].name : 'The navy') + ' takes your report. ' + spec.name +
+            ' is recalled to answer for it - she will not be stopping anybody for a while.', 8);
+        if (global.Missions && spec.faction) global.Missions.bumpStanding(G, spec.faction, 2);
+        return { reported: true, upheld: true, odds: odds };
+      }
+      G.troublemaker = G.troublemaker || {};
+      G.troublemaker[troubleKey(G)] = G.t;
+      if (global.Missions && spec.faction) global.Missions.bumpStanding(G, spec.faction, REPORT_STANDING);
+      say('Your report goes nowhere - and ' + spec.name + '\'s friends hear who made it. Expect to be searched here.', 8);
+      onTake();
+      return { reported: true, upheld: false, odds: odds };
+    }
+    /* Refused (or no answer): she does it by the book, and then some. */
+    onTake();
+    var r = resolveScan(G, spec, hooks, { force: true, noEnvelope: true });
+    if (r && !r.contraband) {
+      var d = sd.dials;
+      var cite = Math.round(SHAKEDOWN_CITATION[0] + (SHAKEDOWN_CITATION[1] - SHAKEDOWN_CITATION[0]) * (d ? d.greed : 0.5));
+      var fac = spec.faction || 'civil';
+      G.wanted = G.wanted || {};
+      G.wanted[fac] = (G.wanted[fac] || 0) + cite;
+      say(spec.name + ' finds nothing, and cites you anyway - "an obstructed inspection", ' + cite + ' cr.', 7);
+      r.cited = cite;
+    }
+    return r;
+  }
+  function hashUnit(s) {
+    var h = 2166136261 >>> 0;
+    for (var i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619) >>> 0; }
+    h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b) >>> 0; h ^= h >>> 13;
+    return (h >>> 0) / 4294967296;
+  }
+  /* A recalled cop stays recalled for a month, across arrivals and loads. */
+  var SUSPENDED_S = 30 * 86400;
+  function applySuspensions(G, sys, starId) {
+    if (!G.suspended || !sys || !sys.patrols) return;
+    sys.patrols = sys.patrols.filter(function (p) {
+      var e = G.suspended[starId + '|' + p.id];
+      if (!e) return true;
+      if (G.t - e.at > SUSPENDED_S) { delete G.suspended[starId + '|' + p.id]; return true; }
+      return false;
+    });
+  }
+  /* The clock on her patience (main.js every frame). */
+  function tickShakedown(G, hooks) {
+    var sd = G.shakedown;
+    if (!sd) return;
+    var sp = sd.spec;
+    if (!sp || sp.dead || !sp.live || G.ship.docked || G.ship.landed) { G.shakedown = null; return; }
+    if (G.t >= sd.until) {
+      if (hooks && hooks.say) hooks.say(sp.name + ' takes your silence as a no.', 4);
+      answerShakedown(G, 'refuse', hooks);
+    }
+  }
+
+  function resolveScan(G, spec, hooks, opts) {
+    opts = opts || {};
     var Economy = global.Economy;
     var sys = G.sys, ship = G.ship;
     var crime = effectiveCrime(G, sys);
     var searchChance = Math.max(SEARCH_FLOOR, 1 - (crime / 100) * 0.85);
+    /* HER, not the system (slice 4): a bent inspector looks less hard, an
+     * undisciplined one too. And in a bought system, alone with you, she
+     * wants paying first. */
+    var dials = inspectorOf(G, sys, spec);
+    if (dials && !opts.force) {
+      if (dials.bent) searchChance *= 0.6;
+      searchChance *= 0.7 + 0.3 * (dials.discipline === undefined ? 0.5 : dials.discipline);
+      if (marked(G) && dials.bent) searchChance = 1;      // you reported one of theirs
+      if (shakedownWanted(G, sys, spec, dials) && !G.shakedown) {
+        var fee = shakedownFee(G, dials);
+        G.shakedown = { spec: spec, fee: fee, at: G.t, until: G.t + SHAKEDOWN_S, dials: dials };
+        if (hooks && hooks.say) hooks.say(spec.name + ': "Inspection fee, captain. ' + fee + ' cr and you are on your way." ' +
+                                          'C pay  ·  X refuse  ·  Z report her', 9);
+        if (hooks && hooks.sound) hooks.sound('warn');
+        return { searched: false, shakedown: true, fee: fee };
+      }
+    }
+    if (opts.force) searchChance = 1;
     /* REFUSED THE TITHE (tithe.js): the overboss's own patrols take you
      * for Navy or Police in plain clothes, and look. */
     var suspect = spec.faction === 'outlaw' && global.Tithe && global.Tithe.suspected(G, sys, G.t);
@@ -6762,7 +6956,12 @@
      * has the occasional inspector who is not for sale. */
     var corrupt = systemCorruption(G, sys);
     var bribeChance = Math.max(0, Math.min(0.75, (corrupt - HUSH_MIN_CORRUPTION) / 100));
-    if (bribeChance > 0 && Math.random() < bribeChance) {
+    /* Slice 4: whether SHE takes it. Bent and unwatched, she does; honest,
+     * never, wherever she serves; bent under a colleague's eye, she
+     * writes it up like anyone. */
+    var takes = dials ? (dials.bent && !lawWitness(sys, spec, G.t)) : (bribeChance > 0 && Math.random() < bribeChance);
+    if (opts.noEnvelope) takes = false;
+    if (takes) {
       var wouldBeFine = 0;
       found.forEach(function (f) { wouldBeFine += fineFor(f.drones ? f.drones * 5 : f.parcel ? (f.parcel.tonnes || 1) : f.hot || ship.cargo[f.cid], f.sev); });
       var ask = Math.max(50, Math.round(wouldBeFine * 0.55));
@@ -10070,6 +10269,34 @@
     return { ok: true, cost: base + o.cost, outfit: o.added, outfitCost: o.cost };
   }
 
+  /* A cockpit fit: 0, 1 or 2 (A, B, C). Anything else is the first. */
+  var COCKPIT_LOOKS = 3;
+  function cockpitChoice(v) {
+    v = v | 0;
+    return v >= 0 && v < COCKPIT_LOOKS ? v : 0;
+  }
+  /* What a yard charges to change it: a small job, a day's work for the
+   * fitters - 2% of the hull, never under 150 cr. */
+  function cockpitRefitCost(hullId) {
+    var h = HULLS[hullId];
+    return Math.max(150, Math.round((h ? h.price : 0) * 0.02));
+  }
+  /* Refit the cockpit at a shipyard. Same ship, same hull, same gear: the
+   * glass's symbology and the frame round it change, and that is all. */
+  function refitCockpit(G, look) {
+    var s = G.ship, port = dockedPort(G);
+    if (!port || !isShipyard(port)) return { ok: false, why: 'only a shipyard can refit a cockpit' };
+    look = cockpitChoice(look);
+    if ((s.cockpitLook | 0) === look) return { ok: false, why: 'that is the cockpit she has' };
+    var cost = cockpitRefitCost(s.hullId);
+    if (s.credits < cost) return { ok: false, why: 'need ' + cost + ' cr' };
+    s.credits -= cost;
+    patronFor(G, cost, 'refit');
+    s.cockpitLook = look;
+    s._cockpit = null;
+    return { ok: true, cost: cost, look: look };
+  }
+
   function buyHull(G, hullId, keep, opts) {
     var s = G.ship;
     var to = HULLS[hullId], from = HULLS[s.hullId || 'talon'];
@@ -10168,6 +10395,11 @@
      * ship"), but under your own honest name it still carries your record. */
     s.disguise = null;
     s.hullId = to.id;
+    /* THE COCKPIT YOU CHOSE (2026-11-21). Each hull comes with three
+     * cockpit fits (Render.HULL_LOOKS: the HUD's colour and layout, the
+     * window frame's reveal and posts), picked on the yard card when you
+     * buy her; a shipyard can refit it later (refitCockpit). */
+    s.cockpitLook = cockpitChoice(opts && opts.look);
     s.conv = null;                 // a new frame has no hardpoints cut into her hold
     s.meshKind = null;             // a new hull wears its own outside
     s.dryMass = to.dryMass;
@@ -10301,6 +10533,7 @@
       paint: (sheet && sheet.paint && (sheet.paint.p || sheet.paint.t))
         ? { p: sheet.paint.p || null, t: sheet.paint.t || null } : null,
       livery: (sheet && (sheet.livery === 'navy' || sheet.livery === 'syn')) ? sheet.livery : null,
+      look: cockpitChoice(sheet && sheet.look),
       liveryFaction: sheet && sheet.livery === 'navy' ? port.faction
                    : (sheet && sheet.livery === 'syn' ? 'outlaw' : null),
       port: port.id, portName: port.name || null,
@@ -10335,6 +10568,7 @@
          * and the order, so the same order always reads the same code. */
         shipName: o.name || null, paint: o.paint || null,
         livery: o.livery || null, liveryFaction: o.liveryFaction || null,
+        cockpitLook: cockpitChoice(o.look),
         reg: global.Sim && global.Sim.regCode ? global.Sim.regCode((G.seed || '') + '|yard|' + o.id) : null,
         bornId: o.hullId + '@' + (o.star || 'void') + '#' + Math.round(o.due / 3600)
       };
@@ -10462,6 +10696,8 @@
     s.paint = rec.paint || null;
     s.livery = rec.livery || null;
     s.liveryFaction = rec.liveryFaction || null;
+    s.cockpitLook = cockpitChoice(rec.cockpitLook);
+    s.cargoCost = rec.cargoCost || null;
     s.craftBay = rec.craftBay || null;
     syncLegacy(s);
     if (global.Sim && global.Sim.refreshShip) global.Sim.refreshShip(s);
@@ -10473,6 +10709,7 @@
    * of the hull. Credits, standing and warrants are part of you. */
   function stripForRespawn(ship) {
     ship.cargo = {};
+    ship.cargoCost = null;          // the hold is gone, and what it cost with it
     ship.paint = null;              // the new Talon is yard grey
     ship.livery = null;             // and nobody's colours
     ship.liveryFaction = null;
@@ -10607,6 +10844,12 @@
     contrabandSeverity: contrabandSeverity, fineFor: fineFor,
     DUMPING_FINE_PER_TONNE: DUMPING_FINE_PER_TONNE, REPORT_FLOOR: REPORT_FLOOR,
     resolveScan: resolveScan,
+    /* slice 4: the crooked law */
+    answerShakedown: answerShakedown, tickShakedown: tickShakedown, shakedownFee: shakedownFee,
+    applySuspensions: applySuspensions, SUSPENDED_S: SUSPENDED_S,
+    shakedownWanted: shakedownWanted, lawWitness: lawWitness, inspectorOf: inspectorOf,
+    WITNESS_KM: WITNESS_KM, SHAKEDOWN_MIN_CORRUPTION: SHAKEDOWN_MIN_CORRUPTION, SHAKEDOWN_S: SHAKEDOWN_S,
+    TROUBLE_S: TROUBLE_S,
     dumping: dumping,
     isCleared: isCleared,
     requestClearance: requestClearance,
@@ -10686,12 +10929,13 @@
     settleCost: settleCost, workOff: workOff, workOffOwed: workOffOwed, garnish: garnish,
     demandFrom: demandFrom, syndicateStanding: syndicateStanding,
     /* Boarding part 3 (2026-10-31): her drive, her nerve. */
-    demandSurrender: demandSurrender, surrenderOdds: surrenderOdds, disableNpc: disableNpc,
+    demandSurrender: demandSurrender, surrenderOdds: surrenderOdds, surrenderBase: surrenderBase, disableNpc: disableNpc,
     standoff: standoff, standoffOdds: standoffOdds, standoffPrice: standoffPrice, REPEL_S: REPEL_S,
     pushCargo: pushCargo, tickPushes: tickPushes, PUSH_S: PUSH_S,
     driveHit: driveHit, roll01: roll01, DRIVE_FAIL: DRIVE_FAIL, SURRENDER_RANGE_KM: SURRENDER_RANGE_KM,
     repairCost: repairCost, repair: repair, deadPanelCount: deadPanelCount,
     buyOutfit: buyOutfit, buyHull: buyHull,
+    refitCockpit: refitCockpit, cockpitRefitCost: cockpitRefitCost, cockpitChoice: cockpitChoice,
     stripForRespawn: stripForRespawn
   };
 

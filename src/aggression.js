@@ -208,6 +208,12 @@
     v.mode = 'breakoff';
     say(G, hooks, pirate, The(pirate) + ' is running down ' + the(v), 5);
     band(G, sys, t, hooks, 'robbery', v, pirate);
+    /* A liner calls for help the moment she sees him coming, not when he
+     * is close enough to hail her: lives aboard (shipai.js slice 3). */
+    if (SA() && SA().civilRole && SA().civilRole(v) === 'passenger' && !v.callSent && C().broadcastDistress) {
+      v.callSent = true;
+      C().broadcastDistress(sys, G, t, v, 'assault', near(G, v) ? hooks : null);
+    }
     return v;
   }
 
@@ -225,6 +231,7 @@
       }
     });
     v.robbed = { by: pirate.id, at: t, took: took };
+    if (SA()) SA().onRobbed(G, sys, v, t);
     pirate.loot = { from: v.id, at: t, value: cargoValue(took) };
     pirate.target = null;
     pirate.mode = 'breakoff';
@@ -259,19 +266,87 @@
     v.demandedBy = pirate.id;
     if (C().broadcastDistress) C().broadcastDistress(sys, G, t, v, 'demand', near(G, v) ? hooks : null);
     var armed = C().isArmedNpc ? C().isArmedNpc(v) : false;
-    if (hash01('yield|' + v.id + '|' + pirate.id) < (armed ? 0.45 : 0.75)) {
-      strip(sys, G, pirate, v, t, hooks);
+    /* Her answer (shipai.js slice 3): comply, dump part of her hold and
+     * run, run for it, or turn and fight - by her role, her captain, her
+     * mood and the odds. Without the ship AI, the old seeded coin. */
+    var pick = SA() && SA().choose ? SA().choose(G, sys, v, pirate, 'demand', t) : null;
+    var verb = pick ? pick.verb : (hash01('yield|' + v.id + '|' + pirate.id) < (armed ? 0.45 : 0.75) ? 'comply' : 'flee');
+    if (verb === 'comply' || verb === 'surrender') { strip(sys, G, pirate, v, t, hooks); return; }
+    if (verb === 'dump') { dumpCargo(sys, G, pirate, v, t, hooks); return; }
+    v.refused = true;
+    /* Her demand refused: the pirate is angry about it (shipai.js). */
+    if (SA()) SA().onRefused(G, sys, pirate, t);
+    if (verb === 'fight' && armed) {
+      /* She turns on him rather than running - cornered, or confident. */
+      v.target = pirate; v.mode = 'chase'; v.standoffKm = CHASE_KM; v.defendTarget = pirate; v.threat = null;
+      say(G, hooks, v, The(v) + ' refuses ' + the(pirate) + ' and turns to fight' + (pick && pick.cornered ? ' - cornered' : ''), 5);
       return;
     }
-    v.refused = true;
     if (armed) v.defendTarget = pirate;
-    say(G, hooks, v, The(v) + ' refuses ' + the(pirate) + ' - she is under fire', 5);
+    say(G, hooks, v, The(v) + ' refuses ' + the(pirate) + ' and runs - she is under fire', 5);
+  }
+
+  /* DUMPING TO BUY OFF THE CHASE (shipai.js slice 3). She jettisons a share
+   * of her first two lines as real canisters (Sim.dropCanister, the same
+   * ones your own demand knocks loose) and runs; the pirate lets her go
+   * and stops to scoop them, taking whatever is still there LOOT_S later.
+   * Her port is short of what she dumped, as it is of what is stripped.
+   * Get there first and the canisters are yours, and the pirate's haul
+   * is thinner. */
+  var DUMP_TAKE = 0.35;
+  function dumpCargo(sys, G, pirate, v, t, hooks) {
+    var Sm = S(), st = v._state, cans = [], i, gave = 0;
+    var man = v.manifest || [];
+    for (i = 0; i < man.length && gave < 2; i++) {
+      var amount = man[i] && (man[i].qty || man[i].tonnes) || 0;
+      if (!(amount > 0)) continue;
+      var q = Math.max(1, Math.round(amount * DUMP_TAKE));
+      if (amount - q < 1) q = amount;
+      if (Sm && Sm.dropCanister && v.live) {
+        var fake = { pos: v.live.pos, vel: v.live.vel, fwd: v.live.fwd || { x: 1, y: 0, z: 0 } };
+        var c = Sm.dropCanister(sys, fake, man[i].cid, q, t);
+        if (c) { c.dumpedBy = v.id; cans.push(c.id); }
+      }
+      if (man[i].qty !== undefined) man[i].qty -= q; else man[i].tonnes = amount - q;
+      if (st && global.ShipTrade && global.ShipTrade.shortDelivery) {
+        try { global.ShipTrade.shortDelivery(G, sys, st, man[i].cid, q, t); } catch (e) { /* no port for it */ }
+      }
+      gave++;
+    }
+    v.dumped = { for: pirate.id, at: t, cans: cans.slice() };
+    v.mode = 'breakoff'; v.threat = pirate; v.defendTarget = null;
+    pirate.target = null; pirate.mode = 'shadow'; pirate.standoffKm = null;
+    pirate.scoop = { cans: cans, from: v.id, until: t + LOOT_S };
+    if (SA()) SA().onRobbed(G, sys, v, t);
+    var Eco = global.Economy, c0 = man[0] && Eco && Eco.BY_ID ? Eco.BY_ID[man[0].cid] : null;
+    say(G, hooks, v, The(v) + ' dumps ' + (c0 ? c0.name.toLowerCase() : 'cargo') + ' out of her hatch and runs - ' + the(pirate) + ' stops to scoop it', 6);
+    bandOff(G, t, 'robbery', v, 'robbed');
+    return cans;
+  }
+  /* The scoop done: she takes what is still drifting there, and goes to
+   * sell it. */
+  function scoopDone(sys, G, pirate, t) {
+    var sc = pirate.scoop, took = [], value = 0;
+    pirate.scoop = null;
+    if (!sc) return took;
+    var left = [];
+    (sys.canisters || []).forEach(function (c) {
+      if (sc.cans.indexOf(c.id) >= 0) { took.push({ cid: c.cid, qty: c.tonnes }); return; }
+      left.push(c);
+    });
+    if (sys.canisters) sys.canisters = left;
+    value = cargoValue(took);
+    pirate.loot = { from: sc.from, at: t, value: value, scooped: took.length };
+    pirate.mode = 'breakoff';
+    return took;
   }
 
   function pirates(sys, G, t, hooks) {
     sys.patrols.forEach(function (sp) {
       if (!alive(sp) || sp.kind !== 'pirate' || sp.disabled || sp.hostileToPlayer) return;
       if (alive(sp.fugitive)) return;                      // running from the law
+      /* Stopped to scoop what a freighter dumped (dumpCargo). */
+      if (sp.scoop) { if (t >= sp.scoop.until) scoopDone(sys, G, sp, t); return; }
       if (alive(sp.target)) { robbery(sys, G, sp, t, hooks); return; }
       if (sp.loot && t - sp.loot.at < SATED_S) return;     // gone to sell it
       if (sp.mode !== 'intercept' || t < (sp.preyAt || 0)) return;
@@ -303,6 +378,23 @@
               !st.route.joined && !st.route.oneWay && st.pos && st.phase !== 'moored' &&
               !st.landed && !st.inside && !st.towed);
   }
+  /* OPPORTUNISTS (2026-11-22). The runners' temptation, opened to armed
+   * traders whose captains are bent and greedy (shipai.js temptation).
+   * Astra: "is there a way for a non-pirate NPC to turn pirate if a juicy
+   * enough target passes?" A trader who turns does what a runner does -
+   * fires first, knocks the drive out, strips the hold - but nobody paid
+   * for her: the law chases her like a pirate, and the record follows her
+   * route afterwards (markCrime). */
+  function opportunistState(sys, G, st) {
+    if (!civilianState(st)) return null;
+    var cls = st.cls || st.route.cls;
+    if (!C().isArmedNpc({ cls: cls })) return null;
+    if (st.route.playerPort || st.route.hired || st.route.company) return null;
+    if (!SA() || !SA().dials) return null;
+    var d = SA().dials(G, sys, st);
+    if (!d || d.role !== 'trader' || !(SA().tempted(d, false) > 0)) return null;
+    return d;
+  }
   function runners(sys, G, t, hooks) {
     var Sm = S(), ship = G.ship;
     if (!ship || !ship.pos || !Sm.trafficAll) return;
@@ -311,14 +403,26 @@
     var list = Sm.trafficAll(sys, t);
     for (var i = 0; i < list.length; i++) {
       var st = list[i];
-      if (!st || !st.route || !st.route.runner || !st.pos || st.phase === 'moored' || st.landed || st.inside) continue;
+      if (!st || !st.route || !st.pos || st.phase === 'moored' || st.landed || st.inside) continue;
       if (st.route.dead || st.route.suppressed) continue;           // already lifted, or gone
       if (V.dist(st.pos, ship.pos) > SEE_KM) continue;
+      var isRunner = !!st.route.runner, dials = null;
+      if (!isRunner) {
+        if (st.route.turnLeg === legKey(st, t)) continue;
+        dials = opportunistState(sys, G, st);
+        if (!dials) { st.route.turnLeg = legKey(st, t); continue; }
+      }
       if (!C().isArmedNpc({ cls: st.cls || st.route.cls })) continue;
       var key = legKey(st, t);
       if (st.route.turnLeg === key) continue;                       // asked once a leg
       st.route.turnLeg = key;
-      if (hash01('runner-turn|' + (sys.seed || '') + '|' + key) >= RUNNER_TURN_P) continue;
+      var roll = hash01((isRunner ? 'runner-turn|' : 'turncoat|') + (sys.seed || '') + '|' + key);
+      /* Without the ship AI, the old flat chance for a runner and nothing
+       * for a trader. With it, both are a matter of how tempting the
+       * best prize in reach is (scored below, then rolled). */
+      var byTemptation = !!(SA() && SA().temptation);
+      if (!byTemptation && (!isRunner || roll >= RUNNER_TURN_P)) continue;
+      if (byTemptation && !dials) dials = SA().dials(G, sys, st);
       /* The softest, richest civilian close by, and only one she can
        * take: unarmed, or no tougher than she is. The first runner tried
        * in the suite was a 40-hull hauler that picked a 55-hull freighter,
@@ -336,7 +440,8 @@
         var val = cargoValue(c.manifest);
         if (!(val > 0)) continue;
         var sc = val * stateVuln(c) / Math.max(d, PREY_FLOOR_KM);
-        if (!best || sc > best.score) best = { state: c, score: sc };
+        if (!best || sc > best.score) best = { state: c, score: sc, value: val,
+                                               soft: C().isArmedNpc({ cls: ccls }) ? 0.5 : 1, pos: c.pos };
       }
       /* AND YOU (Astra's call, 2026-11-01). Measured across 6 seeds
        * (tools/measure-runner-turns.cjs), 0.2% of runners have an NPC
@@ -350,12 +455,87 @@
         var tough = playerArmed(ship) && (ship.hullMax || 100) > myHull;
         if (dp <= RUNNER_PREY_KM && !tough) {
           var ps = playerValue(ship) * playerVuln(ship) / Math.max(dp, PREY_FLOOR_KM);
-          if (ps > 0 && (!best || ps > best.score)) best = { player: true, score: ps };
+          if (ps > 0 && (!best || ps > best.score)) best = { player: true, score: ps, value: playerValue(ship),
+                                                             soft: playerArmed(ship) ? 0.5 : 1, pos: ship.pos };
         }
       }
-      if (best && best.player) turnOnPlayer(sys, G, st, t, hooks);
-      else if (best) turnRunner(sys, G, st, best.state, t, hooks);
+      if (!best) continue;
+      if (byTemptation) {
+        var watched = Sm.policeNearby && sys.tithe !== 'suspected' &&
+                      (Sm.policeNearby(sys, t, st.pos) || Sm.policeNearby(sys, t, best.pos));
+        var tempt = SA().temptation(dials, { runner: isRunner, prize: best.value, own: cargoValue(st.manifest),
+                                             soft: best.soft, law: !!watched });
+        if (!(roll < tempt)) continue;
+      }
+      if (!isRunner) { turnTurncoat(sys, G, st, best, t, hooks); continue; }
+      if (best.player) turnOnPlayer(sys, G, st, t, hooks);
+      else turnRunner(sys, G, st, best.state, t, hooks);
     }
+  }
+  /* A trader turns (OPPORTUNISTS above). Flown exactly as a runner's turn -
+   * fire first, drive out, alongside, strip - and then she is wanted:
+   * `turncoat` makes every lawful cutter in sight run her down as it would
+   * a pirate, and markCrime writes it against her route, so the next cop
+   * who scans her papers knows, and the docks talk. */
+  function turnTurncoat(sys, G, st, best, t, hooks) {
+    var r = C().liftTrader(sys, st, t);
+    if (!r || !r.live) return null;
+    var v = null;
+    if (!best.player) {
+      v = C().liftTrader(sys, best.state, t);
+      if (!v || !v.live) return null;
+      v._state = best.state;
+    }
+    r.turncoat = true;
+    r.aggressorAt = t;
+    if (best.player) {
+      r.hostileToPlayer = true;
+      r.mode = 'attack';
+      r.firedOnYouAt = t;
+      if (hooks && hooks.say) hooks.say(The(r) + ' breaks from her lane and opens fire on you - she wants your hold', 6);
+      if (hooks && hooks.sound) hooks.sound('warn');
+    } else {
+      r.raider = true;
+      r.target = v;
+      r.mode = 'chase'; r.standoffKm = CHASE_KM;
+      r.preyName = v.name;
+      v.threat = r; v.mode = 'breakoff'; v.refused = true;
+      if (C().isArmedNpc(v)) v.defendTarget = r;
+      if (C().broadcastDistress && !v.callSent) {
+        v.callSent = true;
+        C().broadcastDistress(sys, G, t, v, 'assault', near(G, v) ? hooks : null);
+      }
+      say(G, hooks, r, The(r) + ' breaks from her lane and runs down ' + the(v) + ' - no flag behind it but her own', 6);
+      band(G, sys, t, hooks, 'runner', v, r);
+    }
+    markCrime(G, sys, st.route, { victim: best.player ? 'you' : v.name, at: t });
+    return r;
+  }
+
+  /* THE RECORD THAT FOLLOWS HER (Astra, 2026-11-22: "opportunist, marked").
+   * Kept on the game, keyed by star and route, so it outlives the meeting
+   * and the save keeps it (save.js turncoats). It lapses after
+   * TURNCOAT_MEMORY_S, or when she is arrested or killed. */
+  var TURNCOAT_MEMORY_S = 30 * 86400;
+  function crimeKey(G, sys, route) { return (sys.starId || sys.seed || '') + '|' + route.id; }
+  function markCrime(G, sys, route, what) {
+    if (!G || !route) return;
+    G.turncoats = G.turncoats || {};
+    var k = crimeKey(G, sys, route), prev = G.turncoats[k];
+    G.turncoats[k] = { name: route.name || 'a trader', star: sys.starId || null, sysName: sys.name || null,
+                       victim: what.victim, at: what.at, count: (prev ? prev.count : 0) + 1 };
+  }
+  function crimeOf(G, sys, route, t) {
+    if (!G || !G.turncoats || !route) return null;
+    var e = G.turncoats[crimeKey(G, sys, route)];
+    if (!e) return null;
+    /* Arrested, impounded or dead: the record closes with her. */
+    if (route.dead || route.impounded ||
+        (t !== undefined && t - e.at > TURNCOAT_MEMORY_S)) { delete G.turncoats[crimeKey(G, sys, route)]; return null; }
+    return e;
+  }
+  function clearCrime(G, sys, route) {
+    if (G && G.turncoats && route) delete G.turncoats[crimeKey(G, sys, route)];
   }
   function turnOnPlayer(sys, G, st, t, hooks) {
     var r = C().liftTrader(sys, st, t);
@@ -438,6 +618,57 @@
     return !!fence && hash01('smuggle|' + (sys.seed || '') + '|' + route.id) < SMUGGLER_P;
   }
 
+  /* ---- THE CROOKED LAW (ship AI slice 4, 2026-11-22) -------------------
+   * claude/ship-ai-profiles.md section 3. A cop's own probity (ShipAI.dials)
+   * decides what she does with the ships she scans, not the system's
+   * number: in a BOUGHT system a bent cop with no colleague in sight
+   * shakes down the traders she stops - "inspection fees" - and, if she
+   * is greedy enough to lean on the Syndicate's own runners, the
+   * Syndicate answers. A straight cop (probity STRAIGHT and up) in a
+   * system that is not bought runs a runner down: her papers are paid
+   * for, and this one is not for sale. Astra chose all three targets:
+   * you (combat.js resolveScan), NPC traders, and the runners. */
+  var STRAIGHT = 0.7;          // probity at which a cop will touch the Syndicate's runners
+  var SHAKE_MIN = 60;          // corruption: "bought"
+  var SHAKE_EVERY_S = 900;     // one shakedown at a time; she has paperwork to "lose"
+  /* Greedy enough to lean on the mob. Police greed is low by design (the
+   * dials' role base): measured over 600 bent cops in a bought system,
+   * median 0.21, 90th centile 0.38, top 0.49 - so the top sixth or so. */
+  var MOB_GREED = 0.35;
+  function corruptOf(G, sys) {
+    return C() && C().systemCorruption ? C().systemCorruption(G, sys) : (sys.corruption || 40);
+  }
+  function witnessOf(sys, cop, t) {
+    return C() && C().lawWitness ? C().lawWitness(sys, cop, t) : null;
+  }
+  function shakeDown(sys, G, cop, st, cd, t, hooks, mob) {
+    if (cop.shookAt !== undefined && cop.shookAt !== null && t < cop.shookAt + SHAKE_EVERY_S) return null;
+    cop.shookAt = t;
+    var v = C().liftTrader(sys, st, t);
+    if (!v || !v.live) return null;
+    var fee = Math.max(80, Math.round(cargoValue(st.manifest) * 0.03 * (0.6 + 0.8 * cd.greed) / 10) * 10);
+    v.shakenBy = { cop: cop.id, fee: fee, at: t };
+    G.onTheTake = G.onTheTake || {};
+    var star = (G.here && G.here.id) || sys.starId || 'here';
+    var k = star + '|' + cop.id, e = G.onTheTake[k] || { name: cop.name, star: star, n: 0 };
+    e.n++; e.at = t; if (mob) e.mob = (e.mob || 0) + 1;
+    G.onTheTake[k] = e;
+    if (SA() && SA().feel) {
+      try { SA().feel(G, sys, v, 'robbed', t); } catch (er) { /* moods optional */ }
+    }
+    if (mob) {
+      say(G, hooks, cop, nm(cop) + ' leans on the Syndicate runner ' + nm(v) + ' for ' + fee +
+          ' cr of "inspection fee" - the mob will hear about that', 6);
+      /* The Syndicate answers its own (shipai.js slice 2): as if she had
+       * fired on the runner. */
+      if (SA() && SA().onHit) { try { SA().onHit(G, sys, v, cop, t, hooks); } catch (er2) { /* optional */ } }
+    } else {
+      say(G, hooks, cop, nm(cop) + ' holds ' + the(v) + ' for an "inspection" - ' + fee +
+          ' cr changes hands and she waves her on', 6);
+    }
+    return v;
+  }
+
   function startPursuit(sys, G, cop, f, t, hooks, why, line) {
     cop.target = f;
     cop.mode = 'chase'; cop.standoffKm = CHASE_KM;
@@ -502,7 +733,7 @@
       /* A pirate in sight, working or not. */
       var best = null, bd = LAW_SEE_KM;
       pats.forEach(function (p) {
-        if (!alive(p) || p.kind !== 'pirate' || (alive(p.fugitive) && p.fugitive !== cop)) return;
+        if (!alive(p) || (p.kind !== 'pirate' && !p.turncoat) || (alive(p.fugitive) && p.fugitive !== cop)) return;
         var d = dist(cop, p);
         if (d < bd) { bd = d; best = p; }
       });
@@ -529,6 +760,43 @@
         if (V.dist(st.pos, cop.live.pos) > SCAN_KM) continue;
         if (st.route.scannedAt !== undefined && t - st.route.scannedAt < RESCAN_S) continue;
         st.route.scannedAt = t;
+        /* Her papers say what she did (turnTurncoat): run her down. */
+        var rec = crimeOf(G, sys, st.route, t);
+        if (rec && !st.route.runner) {
+          var w = C().liftTrader(sys, st, t);
+          if (w && w.live) {
+            w.turncoat = true;
+            startPursuit(sys, G, cop, w, t, hooks, 'pirate',
+              nm(cop) + ': "' + nm(w) + ', you are wanted for an assault on ' +
+              (rec.victim === 'you' ? 'a private ship' : 'the ' + rec.victim.replace(/^the /i, '')) +
+              '. Heave to." She runs.');
+          }
+          return;
+        }
+        /* THE CROOKED LAW (slice 4): her own probity decides. */
+        var cd = SA() && SA().dials ? SA().dials(G, sys, cop) : null;
+        if (cd && st.route.runner) {
+          /* The straight cop: a runner's papers are bought, hers are not. */
+          if (!cd.bent && cd.probity >= STRAIGHT && corruptOf(G, sys) < SHAKE_MIN) {
+            var rr = C().liftTrader(sys, st, t);
+            if (rr && rr.live) {
+              rr.runner = true;
+              startPursuit(sys, G, cop, rr, t, hooks, 'runner',
+                nm(cop) + ': "' + nm(rr) + ', I know whose ship this is. Your friends do not pay me. Heave to." She runs.');
+            }
+            return;
+          }
+          /* The bent one leaning on the mob's own: rare, and they answer. */
+          if (cd.bent && cd.greed >= MOB_GREED && corruptOf(G, sys) >= SHAKE_MIN && !witnessOf(sys, cop, t)) {
+            shakeDown(sys, G, cop, st, cd, t, hooks, true);
+            return;
+          }
+          continue;
+        }
+        if (cd && cd.bent && corruptOf(G, sys) >= SHAKE_MIN && !st.route.runner && !witnessOf(sys, cop, t)) {
+          shakeDown(sys, G, cop, st, cd, t, hooks, false);
+          return;
+        }
         if (!smuggler(sys, st.route)) continue;
         var f = C().liftTrader(sys, st, t);
         if (f && f.live) { f.smuggler = true; startPursuit(sys, G, cop, f, t, hooks, 'smuggler'); }
@@ -638,9 +906,15 @@
   }
 
   /* ---- what a hit means ----------------------------------------------- */
+  function SA() { return global.ShipAI && global.ShipAI.onHit ? global.ShipAI : null; }
+  /* The hull she gives up at: an angered captain holds on to half of it
+   * (shipai.js runHull). */
+  function runAt(G, sys, sp, t) { return SA() ? SA().runHull(G, sys, sp, PIRATE_RUN_HULL, t) : PIRATE_RUN_HULL; }
   /* One ship hit by another (Combat.damageNpcBy). */
   function onNpcHit(sys, G, v, by, t, hooks) {
     if (!v || v.dead) return;
+    /* Her mood, and her flight coming to cover her (shipai.js). */
+    if (SA()) SA().onHit(G, sys, v, by, t, hooks);
     var Cm = C();
     /* A runner on a raid answers fire like a pirate does, rather than
      * fleeing the freighter she is robbing; and every shot she lands on a
@@ -651,19 +925,35 @@
         startPursuit(sys, G, by, v, t, hooks, 'runner'); return;
       }
       if (alive(v.fugitive)) { v.defendTarget = by; return; }
-      if (hullFrac(v) < PIRATE_RUN_HULL) {
+      if (hullFrac(v) < runAt(G, sys, v, t)) {
         v.raider = false; v.target = null; v.mode = 'breakoff'; v.threat = by; return;
       }
       return;
     }
     if (v.kind === 'trader' || v.cls === 'shuttle') {
-      v.mode = 'breakoff';
-      v.threat = by;
-      if (Cm.isArmedNpc(v)) v.defendTarget = by;
-      if (!v.fugitive && !v.callSent && Cm.broadcastDistress) {
+      /* Under fire she chooses (shipai.js slice 3): run, turn and fight,
+       * dump part of her hold to buy off a robber, or strike. Sticky for a
+       * few seconds, so she does not change her mind on every hit. */
+      var pick = by && SA() && SA().choose ? SA().choose(G, sys, v, by, 'hit', t) : null;
+      var verb = pick ? pick.verb : 'flee';
+      if (!v.fugitive && !v.callSent && Cm.broadcastDistress && verb !== 'surrender') {
         v.callSent = true;
         Cm.broadcastDistress(sys, G, t, v, 'assault', near(G, v) ? hooks : null);
       }
+      if (verb === 'surrender' && !v.disabled && Cm.disableNpc) {
+        Cm.disableNpc(sys, G, v, 'surrender', t, hooks, by);
+        if (by && by.target === v && by.kind === 'pirate') { by.mode = 'chase'; by.standoffKm = 0.3; }
+        return;
+      }
+      if (verb === 'dump' && by && by.kind === 'pirate' && !v.dumped && !v.robbed) { dumpCargo(sys, G, by, v, t, hooks); return; }
+      if (verb === 'fight' && Cm.isArmedNpc(v)) {
+        if (v.target !== by) say(G, hooks, v, The(v) + ' turns on ' + the(by) + (pick && pick.cornered ? ' - cornered, she fights' : ''), 4);
+        v.target = by; v.mode = 'chase'; v.standoffKm = CHASE_KM; v.defendTarget = by; v.threat = null;
+        return;
+      }
+      v.mode = 'breakoff';
+      v.threat = by;
+      if (Cm.isArmedNpc(v)) v.defendTarget = by;
       return;
     }
     if (v.skirmish && v.target === by && hullFrac(v) < WITHDRAW_HULL) { withdraw(sys, G, v, by, t, hooks); return; }
@@ -671,7 +961,7 @@
       if (lawful(by) && !v.fugitive) { startPursuit(sys, G, by, v, t, hooks, 'pirate'); return; }
       if (alive(v.fugitive)) { v.defendTarget = by; return; }
       /* Somebody she is robbing shoots back, and it hurts: she gives up. */
-      if (hullFrac(v) < PIRATE_RUN_HULL) { v.target = null; v.mode = 'breakoff'; v.threat = by; return; }
+      if (hullFrac(v) < runAt(G, sys, v, t)) { v.target = null; v.mode = 'breakoff'; v.threat = by; return; }
       return;
     }
     /* Anything armed with nobody to fight answers whoever hit her. */
@@ -680,10 +970,14 @@
 
   function onNpcKill(sys, G, dead, by, t, hooks) {
     if (by && by.target === dead) { by.target = null; by.pursuing = null; by.mode = by.kind === 'pirate' ? 'intercept' : 'shadow'; }
+    /* Her flight mourns her, and picks a new leader or scatters. */
+    if (SA()) SA().onKill(G, sys, dead, by, t, hooks);
   }
 
   /* You hit her (Combat.damageNpc, before the crime is booked). */
   function onPlayerHit(sys, G, sp, t, hooks) {
+    /* Her mood, and her flight turning on you (shipai.js). */
+    if (SA() && sp) SA().onPlayerHit(G, sys, sp, t, hooks);
     /* Getting in the way of an arrest. Once per cop. */
     if (lawful(sp) && alive(sp.target) && sp.pursuing && !sp.interfered) {
       sp.interfered = true;
@@ -705,7 +999,7 @@
     if (victim && victim.faction && !victim.fugitive) {
       sp.helpFor = { faction: victim.faction, name: victim.name, at: t, victim: victim };
       /* A pirate hurt badly while robbing somebody breaks off and runs. */
-      if (sp.kind === 'pirate' && hullFrac(sp) < PIRATE_RUN_HULL && !sp.disabled) {
+      if (sp.kind === 'pirate' && hullFrac(sp) < runAt(G, sys, sp, t) && !sp.disabled) {
         sp.hostileToPlayer = false; sp.mode = 'breakoff'; sp.threat = null; sp.target = null;
         bump(G, victim.faction, HELP_DRIVEOFF);
         if (victim.threat === sp) victim.threat = null;
@@ -721,6 +1015,7 @@
 
   /* You killed her. */
   function onPlayerKill(sys, G, sp, t, hooks) {
+    if (SA() && sp) SA().onKill(G, sys, sp, null, t, hooks);
     if (sp.helpFor && t - sp.helpFor.at < HELP_WINDOW) {
       bump(G, sp.helpFor.faction, HELP_KILL);
       if (hooks && hooks.say) hooks.say(facName(G, sys, sp.helpFor.faction) + ' will remember who saved ' + the({ name: sp.helpFor.name }), 5);
@@ -765,6 +1060,9 @@
   function update(sys, G, t, dtSim, hooks) {
     if (!sys || !sys.patrols || !sys.patrols.length || !G || !G.ship || !C() || !S()) return;
     tidy(sys, t);
+    /* Flights and moods (shipai.js, slice 2): who flies with whom, who is
+     * scared or angry - before anybody decides what to do this frame. */
+    if (global.ShipAI && global.ShipAI.tick) global.ShipAI.tick(sys, G, t, hooks);
     rebroadcast(sys, G, t);
     /* And arriving at a call that asked for one (band.js). */
     if (global.Band && global.Band.answer) global.Band.answer(G, sys, t, hooks);
@@ -814,6 +1112,9 @@
     SMUGGLER_P: SMUGGLER_P, LOOT_S: LOOT_S,
     RUNNER_TURN_P: RUNNER_TURN_P, RUNNER_PREY_KM: RUNNER_PREY_KM, AGGRESSOR_S: AGGRESSOR_S,
     runners: runners, turnRunner: turnRunner, turnOnPlayer: turnOnPlayer, aggressor: aggressor, legKey: legKey,
+    TURNCOAT_MEMORY_S: TURNCOAT_MEMORY_S, opportunistState: opportunistState, turnTurncoat: turnTurncoat,
+    markCrime: markCrime, crimeOf: crimeOf, clearCrime: clearCrime, cargoValue: cargoValue,
+    STRAIGHT: STRAIGHT, SHAKE_MIN: SHAKE_MIN, SHAKE_EVERY_S: SHAKE_EVERY_S, MOB_GREED: MOB_GREED, shakeDown: shakeDown,
     focusOf: focusOf, choosePrey: choosePrey, startRobbery: startRobbery, strip: strip,
     smuggler: smuggler, startPursuit: startPursuit, arrest: arrest, lawful: lawful, empireOf: empireOf,
     gunOf: gunOf, aimOf: aimOf, withdraw: withdraw,

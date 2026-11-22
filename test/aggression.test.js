@@ -137,9 +137,13 @@ pir.live.pos = V.add(vic.live.pos, { x: 8, y: 0, z: 0 }); pir.live.vel = V.clone
 var h2 = hooks();
 A.update(sys, G, T + 1, 1, h2);
 check('she calls on her to heave to: the call goes out', vic.demandedBy === pir.id && G.distress.some(function (c) { return c.victim === vic && c.kind === 'demand'; }));
-var yielded = !!pir.loot;
-check('she yields or refuses, and the pirate acts on it', yielded ? (vic.robbed && pir.mode === 'breakoff' && pir.threat === vic) : vic.refused,
-      yielded ? 'yielded' : 'refused');
+/* Her answer is the ship AI's now (shipai.js slice 3, civilians.test.js
+ * pins each one): she yields, dumps part of her hold and runs, or refuses. */
+var yielded = !!pir.loot, dumpedIt = !!vic.dumped;
+check('she yields, dumps or refuses, and the pirate acts on it',
+      yielded ? (vic.robbed && pir.mode === 'breakoff' && pir.threat === vic)
+              : dumpedIt ? (pir.scoop && !pir.target) : vic.refused,
+      yielded ? 'yielded' : dumpedIt ? 'dumped' : 'refused');
 /* Both branches, whichever the seed gave. */
 fresh();
 G = game();

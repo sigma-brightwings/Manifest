@@ -1358,6 +1358,12 @@
     /* And the resorts, last of everything: a postcard world gets its second
      * ground port (worlds worth visiting, slice 3). */
     attachResortPads(sys, opts);
+    /* Traffic between the worlds and out past them (2026-11-22), after
+     * every port exists. Neither touches sys.traffic, a market, a berth or
+     * any earlier draw: lanes draw nothing, workers draw from their own
+     * fork. opts.noLanes / opts.noWorkers leave them out. */
+    if (!opts.noLanes) buildLanes(sys);
+    if (!opts.noWorkers) buildWorkers(sys, base);
     return sys;
   }
 
@@ -4184,8 +4190,50 @@
   /* The Syndicate paints its hulls the way it paints its docks. */
   var SYNDICATE_HULL = '#c4322a';
 
+  /* Raiders name their ships like a threat or a joke. Thirty, not ten
+   * (2026-11-22): with ten, two "The Scrag"s in one system was ordinary,
+   * and the names are how a dock talks about a raider. */
   var PIRATE_NAMES = ['Blackwake', 'Cutter', 'Grudge', 'Salt', 'Bonepick', 'Harrow',
-                      'Vulture', 'Scrag', 'Tallow', 'Wraith'];
+                      'Vulture', 'Scrag', 'Tallow', 'Wraith', 'Gutter Saint', 'Rust Widow',
+                      'Short Fuse', 'Bad Penny', 'Gallows', 'Magpie', 'Jackal', 'Lamprey',
+                      'Spite', 'Mercy Not', 'Hangnail', 'Carrion', 'Long Odds', 'Splinter',
+                      'Hollow Promise', 'Kestrel', 'Black Dog', 'Rook', 'Sorrow', 'Ninefold'];
+  /* The Syndicate names its flagships like a boardroom, not a gang
+   * (Astra, 2026-11-22: "Syndicate ships should have a different name
+   * list"). A flagship used to draw from the raiders' list. */
+  var SYNDICATE_FLAGSHIP_NAMES = ['Chairman', 'Patron', 'Benefactor', 'Proprietor', 'Trustee',
+                                  'Old Man', 'Godmother', 'Landlord', 'Board of Directors',
+                                  'Majority Holder', 'Family Business', 'Gentleman\'s Agreement'];
+  /* One name per hull in a system. Takes the drawn index and walks on to
+   * the next free one, so it costs exactly the one draw pick() did and no
+   * stream moves. */
+  function freshName(rng, list, used) {
+    var at = rng.int(0, list.length - 1);
+    for (var k = 0; k < list.length; k++) {
+      var nm = list[(at + k) % list.length];
+      if (!used[nm]) { used[nm] = true; return nm; }
+    }
+    return list[at];
+  }
+  /* "Vigil 12", "Bollard 6": the drawn number, walked on past any hull in
+   * the system already flying that name. No extra draw. */
+  function numberedName(sys, stem, num) {
+    var taken = {};
+    (sys.patrols || []).forEach(function (p) { if (p.name) taken[p.name] = true; });
+    for (var k = 0; k < 200; k++) { var nm = stem + ' ' + (num + k); if (!taken[nm]) return nm; }
+    return stem + ' ' + num;
+  }
+  /* How many raiders a system draws, by its corruption (Astra, 2026-11-22:
+   * "Pirate or syndicate presence should go up with the corruption level
+   * in a system, yes, but they shouldn't be a majority of most civilized
+   * places"). Clean (below 25): none or one. Bribeable: one or two. Bought
+   * (60+): one to four. Never more than half the ports, as before. */
+  function pirateRange(corruption, nPorts) {
+    var c = corruption === undefined ? 40 : corruption;
+    var lo = c < 25 ? 0 : 1;
+    var hi = c < 25 ? 1 : c < 45 ? 2 : c < 60 ? 3 : 4;
+    return { lo: lo, hi: Math.max(lo, Math.min(hi, Math.max(1, Math.round(nPorts / 2)))) };
+  }
 
   /* A route object shaped exactly like a trade route, so Sim.trafficState
    * can fly it without knowing or caring that nobody aboard is trading. */
@@ -4269,7 +4317,7 @@
         var pid = 'n' + (id++);
         var cop = {
           id: pid, kind: 'police', faction: fac.id,
-          name: rng.pick(mob ? ENFORCER_NAMES : POLICE_NAMES) + ' ' + (rng.int(1, 40)),
+          name: numberedName(sys, rng.pick(mob ? ENFORCER_NAMES : POLICE_NAMES), rng.int(1, 40)),
           className: mob ? 'enforcer' : 'interceptor', color: fac.color,
           size: PATROL_CLASSES.police.size, accel: PATROL_CLASSES.police.accel,
           rail: { type: 'route', route: patrolRoute(pid, '', spec, A, B, sys, rng) }
@@ -4450,7 +4498,7 @@
       var synLetter = capitalSizeLetter(synId, (sys && sys.seed) || '');
       sys.patrols.push({
         id: synId, kind: 'capital', faction: 'outlaw', outlaw: true,
-        name: 'The ' + sr.pick(PIRATE_NAMES),
+        name: 'The ' + sr.pick(SYNDICATE_FLAGSHIP_NAMES),
         className: 'flagship', color: SYNDICATE_HULL,
         size: PATROL_CLASSES.capital.size * 0.92 *
               (synLetter === 'l' ? 1.3 : synLetter === 's' ? 0.75 : 1),
@@ -4573,7 +4621,7 @@
                       label: PATROL_CLASSES.tug.label };
         sys.patrols.push({
           id: 'n' + (id++), kind: 'tug', faction: host.faction || null,
-          name: trng.pick(TUG_NAMES) + ' ' + trng.int(1, 12),
+          name: numberedName(sys, trng.pick(TUG_NAMES), trng.int(1, 12)),
           className: PATROL_CLASSES.tug.label,
           color: PATROL_CLASSES.tug.color,
           size: PATROL_CLASSES.tug.size, accel: PATROL_CLASSES.tug.accel,
@@ -4669,9 +4717,28 @@
       return (b.market ? b.market.dev : 0) - (a.market ? a.market.dev : 0);
     });
     if (!lanes.length) return;
-    var nPirates = rng.int(1, Math.min(4, Math.max(1, Math.round(ports.length / 2))));
+    var pr = pirateRange(sys.corruption, ports.length);
+    var nPirates = rng.int(pr.lo, pr.hi);
+    /* NEVER THE MAJORITY in lawful space: raiders plus any Syndicate
+     * flagship already in the sky may not outnumber the lawful guns -
+     * police and navy, garrison or passing. A system with no law at all
+     * still gets at most one, so a lawless backwater is not a pirate
+     * port by accident. Holds are exempt: there, the outlaws ARE the law. */
+    if (!sys.pirateHeld) {
+      var lawful = sys.patrols.filter(function (p) {
+        return !p.outlaw && p.faction !== 'outlaw' && (p.kind === 'police' || p.kind === 'navy' || p.kind === 'capital');
+      }).length;
+      var outlawsUp = sys.patrols.filter(function (p) { return p.outlaw || p.faction === 'outlaw'; }).length;
+      nPirates = Math.min(nPirates, Math.max(lawful - outlawsUp, lawful ? 0 : 1));
+    }
     /* In a band's own space, the band is out in force (2026-10-31). */
     if (sys.heldBy === 'pirate') nPirates += 2;
+    /* Which crew. In a band's own space, the band. Elsewhere raiders are
+     * freelancers, and the ones working the same port run together as one
+     * crew - shipai.js orgOf reads `band` for who covers whom. */
+    var bandId = sys.heldBy === 'pirate' ? (sys.heldById || 'band') : null;
+    var usedNames = {};
+    sys.patrols.forEach(function (p) { if (p.name) usedNames[p.name.replace(/^The /, '')] = true; });
     for (var q = 0; q < nPirates; q++) {
       var near = lanes[Math.min(lanes.length - 1, rng.int(0, 2))];
       var world = near.parentBody;
@@ -4686,10 +4753,11 @@
       if (hi <= lo * 1.1) { lo = world.radius * 2.2; hi = world.radius * 8; }
       sys.patrols.push({
         id: 'n' + (id++), kind: 'pirate', faction: 'outlaw',
-        name: 'The ' + rng.pick(PIRATE_NAMES),
+        name: 'The ' + freshName(rng, PIRATE_NAMES, usedNames),
         className: 'pirate', color: PATROL_CLASSES.pirate.color,
         size: PATROL_CLASSES.pirate.size, accel: PATROL_CLASSES.pirate.accel,
         lurkAt: near.id,
+        band: bandId || ('free:' + near.id),
         rail: {
           type: 'orbit', parent: world.id,
           el: {
@@ -4746,6 +4814,8 @@
     var spec = { cls: 'police', accel: HEAVY_SPEC.accel, size: HEAVY_SPEC.size,
                  color: fac.color, label: HEAVY_SPEC.label };
     sys.patrols = sys.patrols || [];
+    var usedHeavy = {};
+    sys.patrols.forEach(function (p) { if (p.name) usedHeavy[p.name.replace(/^The /, '')] = true; });
     for (var k = 0; k < n; k++) {
       var A = mine[hr.int(0, mine.length - 1)];
       var rest = mine.filter(function (p) { return p !== A; });
@@ -4754,7 +4824,7 @@
       var hl = hashedSizeLetter('heavy', hid, (sys && sys.seed) || '');
       sys.patrols.push({
         id: hid, kind: 'police', faction: 'outlaw', heavy: true,
-        name: 'The ' + hr.pick(HEAVY_NAMES),
+        name: 'The ' + freshName(hr, HEAVY_NAMES, usedHeavy),
         className: HEAVY_SPEC.label, color: fac.color,
         /* Drawn scale follows the letter, as a capital's does, so an L
          * heavy reads as the bigger ship. The beat cops above do NOT scale:
@@ -4881,6 +4951,198 @@
        * another NPC, so that case cannot arise yet: damageNpc in combat.js
        * has no caller but the player's own guns. */
       r.runner = true;
+    }
+  }
+
+  /* --- lanes between the worlds (2026-11-22) -------------------------------
+   * Astra: "We need more ships running around in general" - on the lanes
+   * and out in the outer system, she said when asked where it felt empty.
+   *
+   * Measured first (15 kawartha systems): about 39 ships a system are out
+   * between worlds, and 89% of them have nobody within a million km. Not
+   * too few routes - too long a road for them to meet on. Adding ordinary
+   * routes would take some fifty times the traffic to fill it, and every
+   * one of them would book a berth and move a market.
+   *
+   * So a LANE is the road between two worlds, and it carries a STREAM: the
+   * busiest route on that pair of worlds, flown again by many hulls spaced
+   * out along the same timetable, so a pilot on the lane overtakes and
+   * passes them. Busy lanes run thick; every other lane runs thin, which is
+   * the passer-by on a quiet road - still a real ship on a real timetable,
+   * bound somewhere you can follow her to. Sim.updateLanes works out only
+   * the hulls near you; the rest cost nothing. They lie off the ports they
+   * serve (outboard: no berth, no queue) and register no deliveries, so no
+   * market and no seed's numbers move. No draws here at all. */
+  var LANE_BUSY = 5;               // the busiest lanes in a system run thick
+  var LANE_GAP_BUSY_KM = 2.5e6;    // a hull every this far along a busy lane, each way
+  var LANE_GAP_THIN_KM = 2.0e7;    // and on a quiet one
+  var LANE_MAX = 240;              // hulls on one lane, both ways together
+  function worldUnderRoot(b, sys) {
+    var p = b;
+    while (p && p.parentBody && p.parentBody !== sys.root && p.parentBody.kind !== 'barycentre') p = p.parentBody;
+    return p || b;
+  }
+  function buildLanes(sys) {
+    sys.lanes = [];
+    var pairs = {}, order = [];
+    (sys.traffic || []).forEach(function (r) {
+      if (r.local || r.oneWay || r.feeder || r.heavy || r.outboard || r.playerPort || r.runner) return;
+      var A = sys.byId[r.from], B = sys.byId[r.to];
+      if (!A || !B) return;
+      var wa = worldUnderRoot(A, sys).id, wb = worldUnderRoot(B, sys).id;
+      if (wa === wb) return;
+      var key = wa < wb ? wa + '|' + wb : wb + '|' + wa;
+      var tons = 0;
+      (r.out || []).concat(r.back || []).forEach(function (m) { tons += m.qty || 0; });
+      if (!pairs[key]) { pairs[key] = { key: key, routes: [], tons: 0 }; order.push(key); }
+      pairs[key].routes.push({ r: r, tons: tons });
+      pairs[key].tons += tons;
+    });
+    var list = order.map(function (k) { return pairs[k]; });
+    list.sort(function (a, b) { return (b.tons - a.tons) || (a.key < b.key ? -1 : 1); });
+    list.forEach(function (p, i) {
+      p.routes.sort(function (a, b) { return (b.tons - a.tons) || (a.r.id < b.r.id ? -1 : 1); });
+      var tpl = p.routes[0].r;
+      var busy = i < LANE_BUSY;
+      var path = (tpl.distance || 1e8) * 1.2;
+      var cruising = path / (busy ? LANE_GAP_BUSY_KM : LANE_GAP_THIN_KM);        // under way at once, each way
+      var n = Math.round(Math.max(2, Math.min(LANE_MAX, cruising * tpl.period / Math.max(1, 2 * tpl.cruise) * 2)));
+      sys.lanes.push({ id: 'L' + i, template: tpl.id, pair: p.key, busy: busy, n: n,
+                       headway: tpl.period / (n + 1), routes: p.routes.length });
+    });
+  }
+
+  /* --- the outer system's working ships (2026-11-22) ------------------------
+   * Astra picked all four: ice haulers, prospectors, gas-giant skimmers and
+   * survey ships. They work a SITE - the top of a giant's air, its ring, a
+   * belt's field, an icy moon, the far edge of the system - and come home
+   * to a port, the same two-ended loop your own skimmers fly
+   * (Fleet.workRouteFor): the site end is the layover, spent working.
+   *
+   * Kept OUT of sys.traffic, in sys.workers: they lie off their home port
+   * rather than berthing (outboard), carry what they work back, and
+   * register no deliveries, so every market, queue and timetable in every
+   * seed is what it was. Sim.trafficAll flies them with everything else,
+   * so they are seen, hailed, robbed and rescued like any other hull. Own
+   * fork; a system with nothing to work has none. */
+  var WORKER_NAMES = {
+    skim:   ['Updraft', 'Plume', 'Long Breath', 'Stormwalker', 'Downwell', 'Gyre', 'Banded Lady', 'Scoop'],
+    ring:   ['Ringcutter', 'Glint', 'Shard', 'Icepick', 'Halo', 'Rime', 'Lathe', 'Splitter'],
+    field:  ['Prospect', 'Lucky Strike', 'Assay', 'Tailings', 'Ore Hound', 'Pickaxe', 'Seam', 'Long Shot'],
+    ice:    ['Meltwater', 'Glacier', 'Snowline', 'Frost Road', 'Floe', 'Cistern', 'Cold Comfort', 'Thaw'],
+    survey: ['Cartographer', 'Plumb Line', 'Far Reach', 'Sounding', 'Theodolite', 'Bearing', 'Parallax', 'Meridian']
+  };
+  var WORKER_CLASS = {
+    skim:   { cls: 'tanker',  label: 'gas skimmer' },
+    ring:   { cls: 'hauler',  label: 'ring cutter' },
+    field:  { cls: 'shuttle', label: 'prospector' },
+    ice:    { cls: 'tanker',  label: 'ice hauler' },
+    survey: { cls: 'shuttle', label: 'survey ship' }
+  };
+  function isGiantBody(b) { return b.type === 'gasGiant' || b.type === 'iceGiant'; }
+  function buildWorkers(sys, base) {
+    sys.workers = [];
+    sys.sites = [];
+    var ports = (sys.ports || []).filter(function (p) { return p.market; });
+    if (!ports.length) return;
+    var wr = base.fork('workers');
+    var root = sys.root, used = {}, n = 0;
+    (sys.patrols || []).forEach(function (p) { if (p.name) used[p.name] = true; });
+    var starR = function (b) { var w = worldUnderRoot(b, sys); return w.orbit ? w.orbit.a : 0; };
+    /* Home: a port over the site's own world if it has one, else the port
+     * nearest it in distance from the star. */
+    function homeFor(site) {
+      var w = worldUnderRoot(site, sys), own = ports.filter(function (p) { return worldUnderRoot(p, sys) === w; });
+      if (own.length) return own[0];
+      var r = starR(site), best = null, bd = Infinity;
+      ports.forEach(function (p) { var d = Math.abs(starR(p) - r); if (d < bd) { bd = d; best = p; } });
+      return best;
+    }
+    function add(kind, home, site, back, lay) {
+      if (!home || !site || home === site) return;
+      var c = WORKER_CLASS[kind], spec = SHIP_CLASSES[c.cls];
+      var parent = commonParent(home, site, sys);
+      /* A port in orbit round the very world she works: the trip is from
+       * the port's orbit down to the site, not across the system. */
+      var ra = radiusAbout(home, parent, sys);
+      var rb = parent === site ? site.radius : radiusAbout(site, parent, sys);
+      var dist = parent === site ? Math.max(ra - rb, site.radius * 3)
+               : home.parentBody === site.parentBody ? Math.max(Math.abs(ra - rb), site.radius * 3)
+               : Math.sqrt(ra * ra + rb * rb);
+      var cruise = Math.max(600, Math.min(2 * Math.sqrt(dist / spec.accel), 90 * 86400));
+      var period = 2 * (cruise + lay);
+      var list = WORKER_NAMES[kind], at = wr.int(0, list.length - 1), nm = null;
+      for (var k = 0; k < list.length * 4 && !nm; k++) {
+        var cand = list[(at + k) % list.length] + (k >= list.length ? ' ' + (1 + Math.floor(k / list.length)) : '');
+        if (!used[cand]) nm = cand;
+      }
+      nm = nm || list[at];
+      used[nm] = true;
+      sys.workers.push({
+        id: 'w' + (n++), name: nm, kind: 'work', work: kind,
+        cls: c.cls, className: c.label, size: spec.size * wr.range(0.7, 1.0), color: spec.color,
+        from: home.id, to: site.id, parentId: parent.id, local: home.parentBody === site.parentBody,
+        cruise: cruise, layover: lay, period: period, t0: wr.range(0, period),
+        out: [], back: back, distance: dist,
+        outboard: true, siteId: site.id, siteKind: kind
+      });
+    }
+    var H = (Eco && Eco.FUEL_ID) || 'hydrogen';
+    /* Giants: skimmers in the air, cutters in the ring. */
+    sys.bodies.filter(isGiantBody).forEach(function (g) {
+      var home = homeFor(g);
+      var ns = wr.int(1, 3);
+      for (var i = 0; i < ns; i++) add('skim', home, g, [{ cid: H, qty: Math.round(wr.range(40, 160)) }], wr.range(0.4, 1.6) * 86400);
+      if (g.ring) {
+        var ice = g.ring.ice === undefined ? 0.5 : g.ring.ice, nc = wr.int(0, 2);
+        for (var j = 0; j < nc; j++) {
+          var q = wr.range(30, 120);
+          add('ring', home, g, [{ cid: 'water', qty: Math.round(q * ice) }, { cid: 'ores', qty: Math.round(q * (1 - ice)) }]
+                .filter(function (l) { return l.qty > 0; }), wr.range(0.6, 2.0) * 86400);
+        }
+      }
+    });
+    /* Belts and trojans: prospectors in a field. A field is not a body, so
+     * it is given a site that flies where Rings.fieldCenter says it is. */
+    (sys.belts || []).forEach(function (belt) {
+      if (!belt.fields || !belt.fields.length) return;
+      var np = wr.int(1, 3);
+      for (var i = 0; i < np; i++) {
+        var f = belt.fields[wr.int(0, belt.fields.length - 1)];
+        var site = sys.byId['site:' + f.id];
+        if (!site) {
+          /* `orbit.a` is only a size for the timetable (radiusAbout); where
+           * the site is comes from Rings.fieldCenter (Sim.bodyStateAt). */
+          site = { id: 'site:' + f.id, name: f.name, kind: 'site', site: 'field', fieldRef: f,
+                   radius: f.radius || 50, mass: 0, parentBody: root,
+                   orbit: { a: (belt.inner + belt.outer) / 2, parent: root.id } };
+          sys.byId[site.id] = site;
+          sys.sites.push(site);
+        }
+        var q2 = wr.range(8, 40), metal = f.metal === undefined ? 0.5 : f.metal, fice = f.ice || 0;
+        add('field', homeFor({ orbit: { a: (belt.inner + belt.outer) / 2 }, parentBody: root }) || ports[0], site,
+            [{ cid: 'ores', qty: Math.round(q2 * (1 - fice)) }, { cid: 'rare', qty: Math.round(q2 * metal * 0.15) },
+             { cid: 'water', qty: Math.round(q2 * fice) }].filter(function (l) { return l.qty > 0; }),
+            wr.range(1, 4) * 86400);
+      }
+    });
+    /* Ice from past the frost line, hauled to wherever people drink. */
+    var frost = sys.frostLine || 0;
+    var icy = sys.bodies.filter(function (b) { return b.kind === 'moon' && frost && starR(b) > frost && !b.surface; });
+    var hz = ((sys.hzInner || 0) + (sys.hzOuter || 0)) / 2;
+    var thirsty = ports.slice().sort(function (a, b) { return (Math.abs(starR(a) - hz) - Math.abs(starR(b) - hz)) || (a.id < b.id ? -1 : 1); })[0];
+    icy.slice(0, 3).forEach(function (m) {
+      var nh = wr.int(0, 2);
+      for (var i = 0; i < nh; i++) add('ice', thirsty, m, [{ cid: 'water', qty: Math.round(wr.range(120, 400)) }], wr.range(0.8, 2.5) * 86400);
+    });
+    /* And out to the edge: whoever is mapping it. The farthest world, from
+     * the port with the most going on. */
+    var far = sys.bodies.filter(function (b) { return b.parentBody === root && b.kind === 'planet'; })
+      .sort(function (a, b) { return starR(b) - starR(a); })[0];
+    if (far && frost && starR(far) > frost * 2) {
+      var hub = ports.slice().sort(function (a, b) { return ((b.market.dev || 0) - (a.market.dev || 0)) || (a.id < b.id ? -1 : 1); })[0];
+      var nv = wr.int(1, 2);
+      for (var v = 0; v < nv; v++) add('survey', hub, far, [], wr.range(3, 10) * 86400);
     }
   }
 
@@ -6259,6 +6521,11 @@
     buildFactions: buildFactions,
     FACTION_STEM: FACTION_STEM,
     PIRATE_STEM: PIRATE_STEM,
+    PIRATE_NAMES: PIRATE_NAMES, SYNDICATE_FLAGSHIP_NAMES: SYNDICATE_FLAGSHIP_NAMES,
+    HEAVY_NAMES: HEAVY_NAMES, pirateRange: pirateRange,
+    LINE_NAMES: LINE_NAMES, HULL_NAMES: HULL_NAMES,
+    buildLanes: buildLanes, buildWorkers: buildWorkers, WORKER_CLASS: WORKER_CLASS,
+    LANE_BUSY: LANE_BUSY, LANE_GAP_BUSY_KM: LANE_GAP_BUSY_KM, LANE_GAP_THIN_KM: LANE_GAP_THIN_KM,
     MINOR_STEM: MINOR_STEM,
     FACTION_COLORS: FACTION_COLORS,
     makeName: makeName,

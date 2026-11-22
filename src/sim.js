@@ -106,7 +106,10 @@
     if (hit) return { pos: hit, vel: cache.vel[body.id] };
 
     var pos, vel;
-    if (body.surface) {
+    if (body.fieldRef) {
+      var fst = bodyStateAt(body, sys, t);
+      pos = fst.pos; vel = fst.vel;
+    } else if (body.surface) {
       var hostState = bodyState(body.parentBody, sys, t);
       var off = surfaceOffset(body.parentBody, body, t);
       pos = V.add(hostState.pos, off.pos);
@@ -2118,6 +2121,12 @@
    * A station is three links from the root, so this is a handful of Kepler
    * solves and it is called once per leg, not once per frame. */
   function bodyStateAt(body, sys, t) {
+    /* A worker's site in a belt's field (generate.js buildWorkers): it is
+     * where the field is. */
+    if (body.fieldRef && global.Rings && global.Rings.fieldCenter) {
+      var fc = global.Rings.fieldCenter(body.fieldRef, sys, t);
+      return { pos: fc.pos, vel: fc.vel };
+    }
     if (body.surface) {
       var hostAt = bodyStateAt(body.parentBody, sys, t);
       var off = surfaceOffset(body.parentBody, body, t);
@@ -2193,6 +2202,15 @@
       return { dir: d2, vec: V.scale(d2, port.radius * 1.015) };
     }
 
+    /* A PROSPECTOR'S FAR END IS AMONG THE ROCKS (generate.js buildWorkers):
+     * a hashed point inside the field, not an apron outside it. */
+    if (route && route.siteId === port.id && port.fieldRef) {
+      var fh = portHash({ id: String(route.id) + '@field@' + port.id });
+      var fd = V.norm({ x: ((fh & 1023) / 1023) - 0.5, y: (((fh >>> 10) & 1023) / 1023) - 0.5,
+                        z: (((fh >>> 20) & 1023) / 1023 - 0.5) * 0.3 });
+      if (V.len(fd) < 1e-9) fd = radial;
+      return { dir: fd, vec: V.scale(fd, (port.radius || 50) * (0.2 + ((fh >>> 5) % 100) / 100 * 0.5)) };
+    }
     if (route && route.id && !port.surface && !port.underground) {
       var along = V.sub(ps.vel, hs.vel);
       var east = V.cross(radial, along);
@@ -2750,7 +2768,9 @@
   }
 
   function trafficState(route, sys, t) {
-    if (!route.feeder && !route.heavy && !route.oneWay) {
+    /* Lane hulls and the outer system's workers (2026-11-22) keep to their
+     * timetable: a leak would tow one into a berth she does not take. */
+    if (!route.feeder && !route.heavy && !route.oneWay && !route.stream && route.kind !== 'work') {
       var U = upkeepMod();
       var sd = U ? U.stranded(route, sys, t) : null;
       if (sd) {
@@ -3595,6 +3615,9 @@
   function updateEncounters(sys, t, dtSim, ship) {
     var result = { active: [], demand: null, closest: Infinity,
                     dangerClosest: Infinity, warpCap: Infinity };
+    /* The lane hulls near you (updateLanes), before anything asks who is
+     * about. Cheap when nothing has moved far. */
+    updateLanes(sys, t, ship && ship.pos);
     var patrols = sys.patrols || [];
     if (!patrols.length) return result;
 
@@ -4330,8 +4353,141 @@
       if (r.dead || r.suppressed) continue;
       list.push(trafficState(r, sys, t));
     }
+    /* The outer system's working ships, and the lane hulls near you
+     * (generate.js buildWorkers / buildLanes, updateLanes below). Neither
+     * list is in sys.traffic, so no berth, market or board counts them. */
+    var extra = (sys.workers || []).concat(sys._laneShown || []);
+    for (var j = 0; j < extra.length; j++) {
+      var x = extra[j];
+      if (x.dead || x.suppressed) continue;
+      list.push(trafficState(x, sys, t));
+    }
     sys._traffic = { t: t, list: list };
     return list;
+  }
+
+  /* ---- THE LANES (2026-11-22) ---------------------------------------------
+   * generate.js buildLanes gives each pair of worlds a lane: its busiest
+   * route, flown again by `n` hulls at a fixed headway along the same
+   * timetable. All of them exist - any one is a pure function of t - but
+   * only the ones near you are worked out, here, and shown through
+   * trafficAll. Each is a real route object (laneRoute), cached while she
+   * matters, so a lifted, robbed or killed lane hull stays herself.
+   *
+   * Finding them cheaply. Hull k's phase on her loop is arithmetic, so
+   * whether she is under way, which way, and how far along (u) costs
+   * nothing. Where she is takes her own leg's geometry, which is the
+   * expensive part - so she is first placed on a reference arc for her
+   * slice of departures (LANE_BINS per crossing), and only the hulls that
+   * land within LANE_GATE_KM of you are placed exactly. A lane whose
+   * radii do not come near yours is skipped whole.
+   *
+   * Only the open middle of a crossing (u inside LANE_EDGE of either end):
+   * near a port the real timetable is the traffic, and a stream hull
+   * appearing or going at eight percent of an interplanetary crossing does
+   * so millions of km from anything. */
+  /* Shown out to 20 million km, the nearest 30: the scope's own range is
+   * 0.75 AU (main.js RADAR_RANGE), and a busy lane's hulls 2.5 million km
+   * apart fill that slice of it with a few dozen dots ahead and behind. */
+  var LANE_SHOW_KM = 2e7, LANE_GATE_KM = 3e7, LANE_BINS = 10, LANE_EDGE = 0.08, LANE_MAX_SHOWN = 30;
+  var LANE_REFRESH_S = 30, LANE_REFRESH_KM = 3e5;
+  function laneTemplate(sys, lane) {
+    if (lane._tpl !== undefined) return lane._tpl;
+    var tr = sys.traffic || [];
+    lane._tpl = null;
+    for (var i = 0; i < tr.length; i++) if (tr[i].id === lane.template) { lane._tpl = tr[i]; break; }
+    return lane._tpl;
+  }
+  function laneRoute(sys, lane, k) {
+    var cache = sys._laneRoutes || (sys._laneRoutes = {});
+    var key = lane.id + '.' + k;
+    if (cache[key]) return cache[key];
+    var tpl = laneTemplate(sys, lane);
+    if (!tpl) return null;
+    var Gx = global.Gen, CL = (Gx && Gx.SHIP_CLASSES) || {};
+    var h = portHash({ id: 'lane|' + (sys.seed || '') + '|' + key });
+    /* Her line's sister ship: the template's hull class half the time,
+     * else a freighter or a tanker. Never a liner (no souls aboard) or a
+     * waste hauler (she carries the lane's trade, not its waste). */
+    var pool = ['freighter', 'freighter', 'tanker'];
+    var keep = tpl.cls !== 'liner' && tpl.cls !== 'shuttle' && tpl.cls !== 'hauler' && CL[tpl.cls];
+    var cls = (h % 10) < 5 && keep ? tpl.cls : pool[(h >>> 4) % pool.length];
+    var cl = CL[cls] || { size: 0.1, color: '#d8c79a', label: cls };
+    /* Named as the line's fleet: the template's line name, a hull word,
+     * and her number in the line - unique on the lane. */
+    var line = String(tpl.name || 'Lane').split(' ')[0];
+    var HN = (Gx && Gx.HULL_NAMES) || ['Hauler'];
+    var scale = 0.4 + ((h >>> 8) % 70) / 100;
+    var cut = function (list) {
+      return (list || []).map(function (m) { return { cid: m.cid, qty: Math.max(1, Math.round((m.qty || 0) * scale)) }; });
+    };
+    var route = {
+      id: 'lane:' + key, name: line + ' ' + HN[(h >>> 18) % HN.length] + ' ' + (k + 1),
+      cls: cls, className: cl.label, size: cl.size * (0.8 + ((h >>> 22) % 50) / 100), color: cl.color,
+      from: tpl.from, to: tpl.to, parentId: tpl.parentId, local: false,
+      cruise: tpl.cruise, layover: tpl.layover, period: tpl.period,
+      t0: tpl.t0 + k * lane.headway,
+      out: cut(tpl.out), back: cut(tpl.back), distance: tpl.distance,
+      faction: tpl.faction, outboard: true, stream: true, lane: lane.id
+    };
+    cache[key] = route;
+    return route;
+  }
+  /* Where a hull on this crossing is at fraction u, on a reference leg:
+   * the arc trafficCore flies, without the parking blend (a few hundred
+   * km against a gate of millions). */
+  function arcPoint(leg, ps, u) {
+    var e = smootherstep(u);
+    var dir = V.rotateAroundAxis(leg.sh, leg.axis, leg.ang * e);
+    var r = (leg.rs + (leg.rd - leg.rs) * e) * (1 + 0.055 * Math.sin(Math.PI * e));
+    return { x: ps.pos.x + dir.x * r, y: ps.pos.y + dir.y * r, z: ps.pos.z + dir.z * r };
+  }
+  function updateLanes(sys, t, pos, force) {
+    if (!sys || !sys.lanes || !sys.lanes.length || !pos) { if (sys) sys._laneShown = null; return null; }
+    var L = sys._laneScan;
+    if (!force && L && Math.abs(t - L.t) < LANE_REFRESH_S && V.dist(pos, L.pos) < LANE_REFRESH_KM) return sys._laneShown;
+    var found = [];
+    for (var li = 0; li < sys.lanes.length; li++) {
+      var lane = sys.lanes[li], tpl = laneTemplate(sys, lane);
+      if (!tpl || tpl.dead) continue;
+      var A = sys.byId[tpl.from], B = sys.byId[tpl.to], parent = sys.byId[tpl.parentId];
+      if (!A || !B || !parent) continue;
+      var ps = bodyState(parent, sys, t);
+      /* The whole lane, at a glance: is your distance from its parent
+       * anywhere between its two ends' (with the bow and the gate)? */
+      var rA = V.dist(bodyState(A, sys, t).pos, ps.pos), rB = V.dist(bodyState(B, sys, t).pos, ps.pos);
+      var rMe = V.dist(pos, ps.pos);
+      if (rMe < Math.min(rA, rB) - LANE_GATE_KM || rMe > Math.max(rA, rB) * 1.06 + LANE_GATE_KM) continue;
+      var arcs = {};
+      var P = tpl.period, cr = tpl.cruise, lay = tpl.layover;
+      for (var k = 1; k <= lane.n; k++) {
+        var ph = ((t - (tpl.t0 + k * lane.headway)) % P + P) % P;
+        var out, u;
+        if (ph < cr) { out = true; u = ph / cr; }
+        else if (ph >= cr + lay && ph < 2 * cr + lay) { out = false; u = (ph - cr - lay) / cr; }
+        else continue;
+        if (u < LANE_EDGE || u > 1 - LANE_EDGE) continue;
+        var bin = Math.min(LANE_BINS - 1, Math.floor(u * LANE_BINS));
+        var ak = (out ? 'o' : 'b') + bin;
+        var leg = arcs[ak];
+        if (!leg) {
+          var src = out ? A : B, dst = out ? B : A;
+          var tDep = t - ((bin + 0.5) / LANE_BINS) * cr;
+          leg = arcs[ak] = legGeometry({ id: tpl.id + '#ref' }, sys, 'ref', src, dst, parent, tDep, tDep + cr);
+        }
+        if (V.dist(arcPoint(leg, ps, u), pos) > LANE_GATE_KM) continue;
+        var route = laneRoute(sys, lane, k);
+        if (!route || route.dead || route.suppressed) continue;
+        var st = trafficCore(route, sys, t);
+        var d = V.dist(st.pos, pos);
+        if (d < LANE_SHOW_KM) found.push({ route: route, d: d });
+      }
+    }
+    found.sort(function (a, b) { return a.d - b.d; });
+    sys._laneShown = found.slice(0, LANE_MAX_SHOWN).map(function (f) { return f.route; });
+    sys._laneScan = { t: t, pos: V.clone(pos) };
+    sys._traffic = null; sys._ships = null;
+    return sys._laneShown;
   }
 
   /* The nearest traffic ship to a point, for the cockpit's contact readout.
@@ -9013,6 +9169,8 @@
     trafficState: trafficState,
     trafficCore: trafficCore,
     trafficAll: trafficAll,
+    updateLanes: updateLanes, laneRoute: laneRoute, laneTemplate: laneTemplate,
+    LANE_SHOW_KM: LANE_SHOW_KM, LANE_EDGE: LANE_EDGE,
     berthStatus: berthStatus,
     /* For the queue measurements in test/berths.test.js and tools; the same
      * booking trafficState flies. */

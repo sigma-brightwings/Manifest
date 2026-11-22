@@ -551,6 +551,10 @@
     /* Deliveries you bought off ships before they arrived (shiptrade.js):
      * back onto this system's shelves, wherever the system came from. */
     if (global.ShipTrade && global.ShipTrade.attach) global.ShipTrade.attach(G, G.sys, G.t || 0);
+    /* A crooked cop you reported and who was recalled (combat.js
+     * answerShakedown) stays off the lanes for a month. */
+    if (global.Combat && Combat.applySuspensions) Combat.applySuspensions(G, G.sys, star.id);
+    G.shakedown = null;
     /* Fetch the station art this system's ports wear now, while the jump
      * tunnel is still on screen, rather than as each one comes into view.
      * ports.js is an index since 2026-09-22; the triangles are per model. */
@@ -1914,6 +1918,15 @@
       }
 
       G.keys[e.key.toLowerCase()] = true;
+
+      /* A crooked cop wants her "inspection fee" (combat.js, slice 4):
+       * while she waits, C pays, X refuses, Z reports her. The three keys
+       * mean nothing else until she has her answer. */
+      if (G.shakedown && flying() && !e.shiftKey && !e.ctrlKey) {
+        var sk = e.key.toLowerCase();
+        var how = sk === 'c' ? 'pay' : sk === 'x' ? 'refuse' : sk === 'z' ? 'report' : null;
+        if (how) { Combat.answerShakedown(G, how, HOOKS); return; }
+      }
 
       switch (e.key.toLowerCase()) {
         /* In cruise these set the drive's speed instead of the clock —
@@ -5927,6 +5940,8 @@
       var cost = lot ? Math.round(lot.cr) : tonnes * row.buy;
       G.ship.credits -= cost;
       G.ship.cargo[cid] = heldTonnes(cid) + tonnes;
+      /* What it cost, for the trade panel's profit (Economy.costBuy). */
+      if (Eco.costBuy) Eco.costBuy(G.ship, cid, tonnes, cost);
       Eco.applyTrade(port, cid, tonnes, G.t);
       logTrade((cost < 0 ? 'Collected ' : 'Bought ') + tonnes + 't ' + row.name +
                '  ' + fmtCredits(-cost));
@@ -5989,6 +6004,9 @@
       var cut = gain > 0 ? Combat.lienTake(G, gain) : { taken: 0, cleared: false };
       G.ship.credits += gain - cut.taken;
       if (hotSold > 0) Clm.spendHot(G, cid, hotSold);
+      /* Its share of what the cargo cost goes with it (Economy.costSell),
+       * out of the sellable tonnage held before the sale. */
+      if (Eco.costSell) Eco.costSell(G.ship, cid, qty, Missions.sellableTonnes(G, cid, heldTonnes(cid)));
       G.ship.cargo[cid] = heldTonnes(cid) - qty;
       if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
       Eco.applyTrade(port, cid, -qty, G.t);
@@ -8050,6 +8068,14 @@
      * here rather than waiting on a key press. */
     if (G.encounter.scanNow) Combat.resolveScan(G, G.encounter.scanNow, HOOKS);
     if (G.encounter.jamReport) Combat.citeJamming(G, G.encounter.jamReport, HOOKS);
+    /* A shakedown waiting on your answer: she holds alongside, the clock
+     * runs at 1x so her patience is yours to read, and silence is a no. */
+    if (G.shakedown) {
+      var sdSpec = G.shakedown.spec;
+      if (sdSpec && sdSpec.live) { sdSpec.mode = 'inspect'; sdSpec.scanned = true; }
+      G.encounter.warpCap = 1;
+      if (Combat.tickShakedown) Combat.tickShakedown(G, HOOKS);
+    }
 
     if (G.encounter.warpCap < Infinity) {
       var maxIdx = 0;
@@ -9644,6 +9670,9 @@
 
   function draw() {
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
+    /* The boxes drawn over the view last frame, for the HUD to keep clear
+     * of this one (Render.claimOverlay, `panel` below). */
+    if (Render.overlayFrame) Render.overlayFrame();
     var ps = pixelScale();
     var w = canvas.width / ps;
     var h = canvas.height / ps;
@@ -9667,6 +9696,15 @@
                                          (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
       else {
         cam.buildCockpit(cockpitShip(), w, viewH, G.look);
+        /* THE FIT'S SEAT (Render.cabinOf): off the centre line on a big
+         * ship's two-abreast flight deck, raised, or low and forward. The
+         * room stays where it is; the eye moves within it. */
+        var csp = Render.cockpitSpec ? Render.cockpitSpec(cockpitShip()) : null;
+        if (csp && csp.cabin && csp.seat) {
+          var sh = cockpitShip(), sk = csp.size * 0.001;
+          cam.eye = V.add(cam.eye, V.add(V.add(V.scale(sh.right, csp.seat.x * sk),
+                    V.scale(sh.up, csp.seat.y * sk)), V.scale(sh.fwd, csp.seat.z * sk)));
+        }
         applyCockpitSway(cam);
       }
     }
@@ -15822,6 +15860,126 @@
    * pilot and the canopy, so it should cut off the bottom of the attitude
    * ladder rather than the ladder floating over the console. That mattered
    * a little before; now that the head can turn, it matters constantly. */
+  /* ---- WHAT THIS SHIP'S GLASS LEADS WITH (2026-11-21) ---------------------
+   * Astra: "Maybe you can make different interfaces for each ship type?
+   * Like a fighter shows missiles and guns selected, a freighter shows the
+   * current prices of your cargo at your selected destination." And when
+   * asked what decides it: the hull's role sets the main panel, and gear
+   * fitted to any hull adds its own lines (a Mule with guns gets a weapons
+   * line). Everything here is read off state the game already keeps - the
+   * fit, the racks, the hold, the market, the contracts - and says nothing
+   * it does not know: there is no cost basis kept for cargo yet, so the
+   * freighter's panel prices the hold at the destination against here,
+   * not against what you paid. Drawn by Render.drawRolePanel. */
+  function roleReadout() {
+    var s = G.ship, role = (Render.HULL_ROLE && Render.HULL_ROLE[s.hullId]) || 'freight';
+    var lines = [], title = '';
+    function add(t, opt) { if (lines.length < 5) lines.push({ t: t, warn: opt === 'warn', dim: opt === 'dim' }); }
+    var nav = navTargetState();
+    var navPort = G.navTarget && G.sys && G.sys.byId ? G.sys.byId[G.navTarget.id] : null;
+    if (navPort && !navPort.market) navPort = null;
+    var herePort = s.docked && G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    if (herePort && !herePort.market) herePort = null;
+    var heldT = Math.round(Sim.cargoMass(s)), cap = s.cargoCap || 0;
+    var cargo = [];
+    for (var cid in (s.cargo || {})) if (s.cargo[cid] > 0) cargo.push(cid);
+    cargo.sort(function (a, b) { return s.cargo[b] - s.cargo[a]; });
+    var guns = Combat.gunsInGroup ? Combat.gunsInGroup(s, 'a').concat(Combat.gunsInGroup(s, 'b')) : [];
+    var rack = s.missileId && Combat.rackList ? Combat.rackList(s).filter(function (r) { return r.id === s.missileId; })[0] : null;
+    var souls = 0, pax = [];
+    (G.missions || []).forEach(function (m) { if (m.type === 'passage') { souls += m.souls || 0; pax.push(m); } });
+    /* Through global: the render suite draws this view without a market. */
+    var Eco = global.Economy;
+    function comName(c) { var b = Eco && Eco.BY_ID && Eco.BY_ID[c]; return b ? b.name : c; }
+    function sellAt(port, c) { var p = port && Eco && Eco.price ? Eco.price(port, c, G.t) : null; return p && p.sell !== null ? p.sell : null; }
+    function groupLine(g) {
+      var list = Combat.gunsInGroup(s, g);
+      if (!list.length) return null;
+      var n = {}; list.forEach(function (e) { n[e.item.name] = (n[e.item.name] || 0) + 1; });
+      return g.toUpperCase() + '  ' + Object.keys(n).map(function (k) { return (n[k] > 1 ? n[k] + '× ' : '') + k; }).join(', ');
+    }
+    function missileLine() {
+      if (rack) return 'MSL ' + ((Combat.MISSILES[rack.id] || {}).name || rack.id) + ' ×' + rack.n;
+      return null;
+    }
+    function heatLine() {
+      var k = Math.round(100 * (s.heat || 0) / (Sim.HEAT_LIMIT || 1));
+      return { t: 'HEAT ' + k + '%', o: k >= 70 ? 'warn' : null };
+    }
+    if (role === 'fight') {
+      title = 'WEAPONS';
+      var ga = groupLine('a'), gb = groupLine('b');
+      if (ga) add(ga); if (gb) add(gb);
+      if (!ga && !gb) add('NO GUNS FITTED', 'warn');
+      add(missileLine() || 'NO MISSILES', rack ? null : 'dim');
+      var hl = heatLine(); add(hl.t, hl.o);
+      add(nav ? 'TGT ' + nav.name + '  ' + fmtDist(nav.range) : 'NO TARGET', nav ? (nav.hostile ? 'warn' : null) : 'dim');
+    } else if (role === 'freight') {
+      /* WHAT THE HOLD WILL MAKE (2026-11-21). Astra: "Trade HUD should
+       * show the cargo in your hull, how much you'll make or lose taking it
+       * to your destination in either bright green or bright red, fading
+       * through orange and yellow for deals which are less and less bad."
+       * Each of your own cargoes: its mark, its tonnes, and what selling
+       * them at the port locked on NAV comes to against what they cost you
+       * (Economy.costOf), coloured by the margin (Render.dealColour).
+       * Contract freight is not yours to sell and gets a plain line. */
+      var dest = navPort || null;
+      title = 'HOLD ' + heldT + ' / ' + cap + ' t' + (dest ? '  →  ' + dest.name.toUpperCase() : '');
+      if (!cargo.length) add('hold empty', 'dim');
+      var net = 0, netCost = 0, priced = !!dest, freight = 0;
+      var signed = function (n) { return (n >= 0 ? '+' : '−') + Math.abs(Math.round(n)).toLocaleString('en-US') + ' cr'; };
+      var shown = 0;
+      cargo.forEach(function (c) {
+        var Mi = global.Missions, held = s.cargo[c];
+        var own = Mi && Mi.sellableTonnes ? Mi.sellableTonnes(G, c, held) : held;
+        freight += Math.max(0, held - own);
+        if (!(own > 0)) return;
+        var p = sellAt(dest, c), co = Eco && Eco.costOf ? Eco.costOf(s, c, own) : { cr: 0 };
+        if (shown++ >= 3) return;
+        var nm = comName(c); if (nm.length > 12) nm = nm.slice(0, 11) + '.';
+        if (!dest) { lines.length < 5 && lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: co.cr > 0 ? 'paid ' + Math.round(co.cr).toLocaleString('en-US') : 'free', col: null }); return; }
+        if (p === null) { priced = false; lines.length < 5 && lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: 'no buyer', col: Render.dealColour(-1) }); return; }
+        var gain = p * own - co.cr;
+        net += gain; netCost += co.cr;
+        if (lines.length < 5) lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: signed(gain),
+                                           col: Render.dealColour(co.cr > 0 ? gain / co.cr : null) });
+      });
+      if (shown > 3) add('+' + (shown - 3) + ' more', 'dim');
+      if (freight > 0) add('FREIGHT ' + Math.round(freight) + ' t under contract', 'dim');
+      if (!dest && cargo.length) add('lock a port on NAV to price the hold', 'dim');
+      else if (dest && shown && priced && lines.length < 5) {
+        lines.push({ t: 'NET AT ' + (dest.name.length > 14 ? dest.name.slice(0, 13) + '.' : dest.name).toUpperCase(),
+                     r: signed(net), col: Render.dealColour(netCost > 0 ? net / netCost : null) });
+      }
+    } else if (role === 'work') {
+      title = 'WORK  ·  HOLD ' + heldT + ' / ' + cap + ' t';
+      var ore = Math.round((s.cargo && s.cargo.ores) || 0), rare = Math.round((s.cargo && s.cargo.rare) || 0);
+      add('ORE ' + ore + ' t  ·  RARE ' + rare + ' t', ore || rare ? null : 'dim');
+      add('HOLD ' + (cap ? Math.round(100 * heldT / cap) : 0) + '% full', cap && heldT / cap > 0.9 ? 'warn' : null);
+      if (global.Arms && Arms.hasArms(s)) {
+        var st = s.arms || { jaw: 0 };
+        add('ARMS ' + (st.held ? 'HOLDING ' + String(st.held.kind || 'load').toUpperCase() : st.jaw > 0.5 ? 'OPEN' : 'STOWED'));
+      }
+      if (s.tow) add('TOW ENGAGED');
+      add(nav ? 'TGT ' + nav.name + '  ' + fmtDist(nav.range) : 'NO TARGET', nav ? null : 'dim');
+    } else {
+      title = 'PASSENGERS  ·  ' + souls + ' ABOARD';
+      if (!pax.length) add('no passengers aboard', 'dim');
+      pax.slice(0, 4).forEach(function (m) {
+        var left = (m.deadline || 0) - G.t;
+        add((m.souls || 0) + ' → ' + (m.toName || '?') + '  ' + (m.pay || 0) + ' cr  ' + (left > 0 ? fmtTime(left) : 'LATE'),
+            left < 6 * 3600 ? 'warn' : null);
+      });
+    }
+    /* Gear the hull's role did not lead with gets a line of its own. */
+    if (role !== 'fight' && guns.length) add('GUNS ' + guns.length + (rack ? '  ·  ' + missileLine() : ''));
+    else if (role !== 'fight' && rack) add(missileLine());
+    if (role !== 'passage' && souls) add('PAX ' + souls + ' aboard');
+    if ((role === 'fight' || role === 'passage') && cargo.length) add('HOLD ' + heldT + ' / ' + cap + ' t');
+    if (role !== 'work' && global.Arms && Arms.hasArms(s)) add('ARMS ' + ((s.arms && s.arms.jaw > 0.5) ? 'OPEN' : 'STOWED'));
+    return { title: title, lines: lines };
+  }
+
   function drawCockpitView(ctx, cam, w, h) {
     /* The cannon's capacitor bank on the console reads this (render.js
      * drawCapacitorBank): fitted or not, and how hot, 0..1. */
@@ -15830,14 +15988,22 @@
     for (var ci = 0; ci < cgC.length; ci++) hotC = Math.max(hotC, cgC[ci].k);
     G.ship.capGlow = cgC.length ? { fitted: cgC.length, k: hotC } : null;
     if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
+    /* This hull's own HUD layout and colour (Render.cockpitLook). */
+    Render.setHudLook(Render.cockpitLook(cockpitShip()).hud);
     drawOwnHullFromBridge(ctx, cam);
     /* Berthed: her hangar out of the glass (hangarSeat). */
     if (hangarSeat()) { queueHangarFromShip(cam); }
-    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h) : null;
+    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h, { furnitureLater: true }) : null;
     /* Your crew at their stations, behind you on the bridge deck. */
     if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
     var apertures = shell ? shell.apertures : null;
     var aperture = shell ? shell.aperture : null;
+    /* The air-data boxes keep inside this windscreen (Render.hudGeom). */
+    /* ...and centre on the glass, between its middle and the seat's own
+     * straight-ahead (Render.hudGeom): where a point far down the ship's
+     * nose lands on screen from this eye. */
+    var seatAhead = cam.project(V.addScaled(cam.eye, cockpitShip().fwd, 1e6));
+    if (Render.setHudRoom) Render.setHudRoom(aperture, seatAhead ? seatAhead.x : null);
 
     if (shell) {
       /* No star to glare off the canopy while you are between them — the
@@ -15855,6 +16021,9 @@
           starVisible: V.dot(V.norm(starRel), cam.f) > 0
         });
       }
+      /* The window reveals and posts stand in front of the glass, so they
+       * go on over its wash (Render.drawCanopyFurnitureFor). */
+      Render.drawCanopyFurnitureFor(ctx, cam, cockpitShip());
     }
 
     var lv = Sim.localVertical(G.ship.pos, G.sys, G.t);
@@ -15886,7 +16055,9 @@
     Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, hv);
     // The bank scale is a fixed instrument on the glass ahead of you, so it
     // has no business being drawn once you have looked away from it.
-    if (centred) Render.drawBankScale(ctx, w, hv, angles.rollDeg, hv * 0.30);
+    /* Where this hull's look stands each instrument (Render.hudGeom). */
+    var hg = Render.hudGeom(w, hv, Math.min(hv, deckTop(h)));
+    if (centred && hg.bank) Render.drawBankScale(ctx, w, hv, angles.rollDeg, hg.bankY, hg.bankDown, hg.cx);
 
     // The navigation lock gets the strongest box on the glass.
     var nav = navTargetState();
@@ -15902,7 +16073,7 @@
       var hd = Sim.headingAngles(G.ship, upH, Sim.bodyPole(lv.body),
                                  navLen > 1e-9 ? V.scale(toNav, 1 / navLen) : null);
       Render.drawHeadingTape(ctx, w, h, hd, {
-        cy: Math.max(40, hv * 0.30 - 74 - 44),
+        cy: hg.tapeY, cx: hg.cx,
         ref: lv.body.name.toUpperCase(),
         bugColor: nav && nav.hostile ? '#ff6b5a' : '#ffd36b'
       });
@@ -15927,7 +16098,7 @@
       var spdBox = Render.airSpeedReadout(cruising ? G.cruise.speed : V.len(vRel), cruising);
       if (!cruising && hspG && hspG.frame !== 'orbit') spdBox.unit += hspG.frame === 'air' ? ' AIR' : ' GND';
       Render.drawAirData(ctx, w, h, {
-        cy: hv / 2,
+        cy: hg.airY, off: hg.off, cx: hg.cx,
         speed: spdBox,
         g: felt,
         peak: G.gPeak,
@@ -15936,42 +16107,55 @@
         air: Render.airReadout(lv.body, altKm, Sim.airDensityAt(lv.body, altKm))
       });
     }
+    /* The panel this hull's role leads with, in the corner of the glass its
+     * look left clear (roleReadout, Render.drawRolePanel). */
+    if (centred && Render.drawRolePanel) Render.drawRolePanel(ctx, w, hv, roleReadout(), hg);
+    /* Every box on the glass is queued, then placed together so no name
+     * lands on another name, another ship's box, a readout or a panel
+     * (Render.drawHoloTargets, 2026-11-22). Queue order is priority. */
+    var holoQ = Render.queueHoloTarget ? Render.queueHoloTarget : null;
+    var holo = function (pos, name, sub, color) {
+      if (holoQ) holoQ(pos, name, sub, color); else Render.drawHoloTarget(ctx, cam, pos, name, sub, color, w, h);
+    };
     if (nav) {
-      Render.drawHoloTarget(ctx, cam, nav.pos, nav.name,
+      holo(nav.pos, nav.name,
         fmtDist(nav.range) + (isFinite(nav.eta) ? '  ETA ' + fmtTime(nav.eta) : ''),
-        nav.hostile ? '#ff6b5a' : '#ffd36b', w, h);
+        nav.hostile ? '#ff6b5a' : '#ffd36b');
     }
     if (G.dockTarget && !G.ship.docked && (!nav || nav.obj !== G.dockTarget)) {
       var tp = Sim.bodyPosition(G.dockTarget, G.sys, G.t);
-      Render.drawHoloTarget(ctx, cam, tp, G.dockTarget.name,
-        fmtDist(V.dist(tp, G.ship.pos)), '#7dffb0', w, h);
+      holo(tp, G.dockTarget.name, fmtDist(V.dist(tp, G.ship.pos)), '#7dffb0');
     }
     /* Anything awake gets boxed on the glass — a pirate in red, because
-     * that is the one contact you must never have to hunt for. */
+     * that is the one contact you must never have to hunt for. Hostiles
+     * first, so they get the spot beside their own box. */
     if (G.encounter && G.encounter.active.length) {
-      G.encounter.active.forEach(function (spec) {
+      G.encounter.active.slice().sort(function (a, b) {
+        return (b.kind === 'pirate' || b.hostileToPlayer ? 1 : 0) - (a.kind === 'pirate' || a.hostileToPlayer ? 1 : 0);
+      }).forEach(function (spec) {
         if (!spec.live) return;
-        Render.drawHoloTarget(ctx, cam, spec.live.pos, spec.name,
+        holo(spec.live.pos, spec.name,
           spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
-          spec.kind === 'pirate' ? '#ff6b5a' : '#7dffb0', w, h);
+          spec.kind === 'pirate' || spec.hostileToPlayer ? '#ff6b5a' : '#7dffb0');
       });
     }
+    if (Render.drawHoloTargets) Render.drawHoloTargets(ctx, cam, w, h, labelHud || cockpitReadoutBoxes(w, hv, h), labelBoxes);
 
     if (centred) {
       ctx.save();
       ctx.font = 'bold 11px ui-monospace, monospace';
-      ctx.fillStyle = '#6ef0c0';
+      ctx.fillStyle = Render.hudTint();
       ctx.textAlign = 'center';
       ctx.fillText(angles.degenerate ? '' :
         'PITCH ' + angles.pitchDeg.toFixed(1) + '°   ROLL ' + angles.rollDeg.toFixed(1) +
-        '°   REF ' + lv.body.name.toUpperCase(), w / 2, hv / 2 + 40);
+        '°   REF ' + lv.body.name.toUpperCase(), hg.cx, hv / 2 + 40);
       ctx.textAlign = 'left';
       ctx.restore();
       /* Facing into or against the way you are going, in words, under the
        * attitude line where the eye already is. Against the same body as
        * the speed box and the markers. */
       Render.drawFacingCue(ctx, w, h,
-        Render.facingInfo(G.ship.fwd, fr.prograde, fr.vrel ? V.len(fr.vrel) : 0), hv / 2 + 66);
+        Render.facingInfo(G.ship.fwd, fr.prograde, fr.vrel ? V.len(fr.vrel) : 0), hv / 2 + 66, hg.cx);
     }
     /* Last thing on the glass, and INSIDE the clip on purpose: the field
      * flares a metre outside the canopy, so you see it through the glass and
@@ -20349,6 +20533,9 @@
     if (Math.abs(G.look.yaw) >= 0.42 || Math.abs(G.look.pitch) >= 0.42) return null;
     var lv = G.ship && Sim.localVertical(G.ship.pos, G.sys, G.t);
     if (!lv || !lv.body) return null;
+    /* The labels are placed before the glass is drawn: take this hull's
+     * look now, so the boxes they keep off are where its instruments go. */
+    if (Render.setHudLook) Render.setHudLook(Render.cockpitLook(cockpitShip()).hud);
     return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
   }
 
@@ -20363,6 +20550,13 @@
     var out = null, nav = navTargetState();
     if (nav && nav.name) (out = out || {})[nav.name] = true;
     if (G.dockTarget && !G.ship.docked && G.dockTarget.name) (out = out || {})[G.dockTarget.name] = true;
+    /* And anything awake: it is boxed on the glass with its name, class and
+     * range (drawHoloTarget, the encounter boxes), so its sky tag only
+     * printed "The Scrag [pirate]" a few pixels off "The Scrag / pirate ·
+     * 2.52 km" (seen 2026-11-22, probe-flights). No label over a label. */
+    if (G.encounter && G.encounter.active) {
+      G.encounter.active.forEach(function (spec) { if (spec && spec.live && spec.name) (out = out || {})[spec.name] = true; });
+    }
     return out;
   }
 
@@ -20768,6 +20962,8 @@
   }
 
   function panel(ctx, x, y, w, h, solid) {
+    /* Claimed, so nothing on the HUD is placed under it (2026-11-22). */
+    if (Render.claimOverlay) Render.claimOverlay(x, y, w, h);
     ctx.save();
     /* Solid means solid: at 0.975 the say() line and the HUD behind the
      * market still read through it as a ghost of text between the rows
@@ -21542,6 +21738,8 @@
       var what = spec.mode === 'attack' ? 'ATTACKING'
         /* A trader you asked aboard (boarding.js) is not running away. */
         : spec.mode === 'alongside' ? (tt && tt.joined ? (tt.tube >= 1 ? 'tube made fast' : 'running her tube out') : 'coming alongside')
+        /* Shaken down by a crooked cop (aggression.js, slice 4) and let go. */
+        : spec.kind === 'trader' && spec.shakenBy && !spec.threat ? 'waved on'
         : spec.kind === 'trader' ? 'fleeing'
         : spec.kind === 'pirate'
         ? (spec.mode === 'breakoff' ? 'breaking off' : spec.mode === 'demand' ? 'HOLDING YOU UP' : 'closing')
@@ -21550,17 +21748,50 @@
               spec.kind === 'pirate' ? '#ff8a7a' : '#7dffb0'];
     });
 
-    var ph = 44 + lines.length * 15 + (demand ? 52 : 0);
+    var sd = G.shakedown;
+    var ph = 44 + lines.length * 15 + (demand || sd ? 52 : 0);
     var px = w / 2 - 190, py = 112;
+    /* NO PANEL OVER THE TAPE (2026-11-22): in the cockpit the heading tape
+     * sits right where this panel always went, and the compass box showed
+     * through "(shuttle)". It takes the first clear spot - where it was,
+     * beside the tape, then under it - off every instrument and every
+     * other box (Render.freeSpot), and stays put if nothing is clear. */
+    if (Render.freeSpot && labelHud) {
+      var tape = null;
+      labelHud.forEach(function (r) { if (r.id === 'tape') tape = r; });
+      var cands = [{ x: px, y: py }];
+      if (tape) {
+        cands.push({ x: tape.x0 - 12 - 380, y: py }, { x: tape.x1 + 12, y: py },
+                   { x: px, y: tape.y1 + 8 },
+                   { x: tape.x0 - 12 - 380, y: tape.y1 + 8 }, { x: tape.x1 + 12, y: tape.y1 + 8 });
+      }
+      var spot = Render.freeSpot(cands, 380, ph, labelHud, G._encBox, w, h);
+      if (spot) { px = spot.x; py = spot.y; }
+    }
+    G._encBox = [px, px + 380, py, py + ph];
     panel(ctx, px, py, 380, ph);
 
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
-    ctx.fillStyle = demand ? '#ff7a6b' : '#7dfaff';
-    ctx.fillText(demand ? 'INTERDICTION' : 'CONTACTS', px + 14, py + 24);
+    ctx.fillStyle = demand ? '#ff7a6b' : sd ? '#ffb86b' : '#7dfaff';
+    ctx.fillText(demand ? 'INTERDICTION' : sd ? 'INSPECTION FEE' : 'CONTACTS', px + 14, py + 24);
     ctx.restore();
     rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', 352);
 
+    /* A crooked cop's "inspection fee" (combat.js, slice 4). */
+    if (sd && !demand) {
+      var sy = py + 44 + lines.length * 15 + 8;
+      ctx.save();
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText(sd.spec.name + ' wants ' + fmtCredits(sd.fee) + ' to wave you on', px + 14, sy + 12);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,220,245,0.8)';
+      ctx.fillText('C pay   ·   X refuse   ·   Z report her      ' +
+                   Math.max(0, Math.ceil(sd.until - G.t)) + ' s', px + 14, sy + 30);
+      ctx.restore();
+      return;
+    }
     if (!demand) return;
 
     var d = Sim.pirateDemand(demand, G.ship, Eco);

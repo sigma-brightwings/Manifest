@@ -565,6 +565,25 @@
       var pir = ((sys && sys.patrols) || []).filter(function (s) { return s.kind === 'pirate'; }).length;
       if (pir) items.push(pir === 1 ? 'There is a raider working the lanes. Keep your eyes open.'
                                     : pir + ' raiders on the lanes, they say. Fly in company if you can.');
+      /* A trader who turned (aggression.js markCrime), in this system,
+       * within the month: the dock knows her by name. */
+      var tc = G && G.turncoats ? Object.keys(G.turncoats).map(function (k) { return G.turncoats[k]; })
+        .filter(function (e) { return e && e.star === (sys && sys.starId) && ctx.t - e.at < 30 * DAY; }) : [];
+      tc.slice(0, 2).forEach(function (e) {
+        var who = /^the /i.test(e.name) ? e.name : 'the ' + e.name;
+        var whom = e.victim === 'you' ? 'you' : (/^the /i.test(e.victim) ? e.victim : 'the ' + e.victim);
+        items.push('You hear about ' + who + '? Honest hauler for years, then she turns on ' + whom +
+                   ' the moment the law looks away. The cutters are asking after her.');
+      });
+      /* A cop on the take here (combat.js / aggression.js, slice 4), named,
+       * once she has done it more than once or to the mob. */
+      var star0 = (G && G.here && G.here.id) || (sys && sys.starId);
+      var take = G && G.onTheTake ? Object.keys(G.onTheTake).map(function (k) { return G.onTheTake[k]; })
+        .filter(function (e) { return e && e.star === star0 && (e.n > 1 || e.mob) && ctx.t - e.at < 30 * DAY; }) : [];
+      take.slice(0, 1).forEach(function (e) {
+        items.push(e.mob ? e.name + ' shook down one of the Syndicate\'s own runners. Brave, or stupid. I would not want to be her.'
+                         : e.name + ' takes a cut off every hauler she stops. Keep a little cash where she can find it.');
+      });
       var Combat = global.Combat;
       if (Combat && Combat.systemCorruption) {
         var corr = Combat.systemCorruption(G, sys), lab = Combat.corruptionLabel(corr);

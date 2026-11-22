@@ -404,5 +404,32 @@ section('--- every hull: build, buy, outfit (2026-10-20) ---');
   void fac;
 })();
 
+/* Astra, 2026-11-21: "The different cockpits should be available when
+ * purchasing a ship." Asked how: free at purchase, a refit at shipyards
+ * later. */
+section('--- the cockpit you choose ---');
+(function () {
+  var G = makeG(found.yard);
+  var r = Combat.buyHull(G, 'mule', false, { look: 2 });
+  check('buying her with cockpit C gives her cockpit C', r.ok && G.ship.cockpitLook === 2, r.why || G.ship.cockpitLook);
+  var r2 = Combat.buyHull(G, 'trader', false, { look: 7 });
+  check('a fit that does not exist is the first one', r2.ok && G.ship.cockpitLook === 0, r2.why || G.ship.cockpitLook);
+  var cr = G.ship.credits, cost = Combat.cockpitRefitCost('trader');
+  var f = Combat.refitCockpit(G, 1);
+  check('a shipyard refits her cockpit, for its fee', f.ok && G.ship.cockpitLook === 1 && G.ship.credits === cr - cost,
+        f.why || (cr - G.ship.credits) + ' vs ' + cost);
+  check('the fee is small: 2% of the hull, 150 at least',
+        cost === Math.max(150, Math.round(Combat.HULLS.trader.price * 0.02)), cost);
+  check('refitting her to the cockpit she has is refused, and free',
+        !Combat.refitCockpit(G, 1).ok && G.ship.credits === cr - cost);
+  var H = makeG(found.orbital);
+  H.ship.cockpitLook = 0;
+  check('an ordinary port cannot refit a cockpit', /shipyard/.test(Combat.refitCockpit(H, 2).why || ''));
+  var rec = Fleet.record(G.ship, found.yard.port.id, 'Tally');
+  check('she keeps it on the clamp', rec.cockpitLook === 1, rec.cockpitLook);
+  var data = JSON.parse(JSON.stringify(Save.snapshot(G)));
+  check('and in the save', (data.ship || {}).cockpitLook === 1, JSON.stringify(data.ship && data.ship.cockpitLook));
+})();
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 if (fail) process.exit(1);

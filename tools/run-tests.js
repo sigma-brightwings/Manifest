@@ -57,7 +57,7 @@ var GROUPS = {
   ],
   render: ['test/render.test.js'],
   view: [
-    'test/cockpit.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
+    'test/cockpit.test.js', 'test/panels.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
     'test/hangar.test.js', 'test/cruisesky.test.js', 'test/navsystem.test.js',
     'test/tear.test.js', 'test/groundport-look.test.js', 'test/outworks.test.js',
     'test/galaxyzoom.test.js', 'test/surfaces.test.js'
@@ -73,17 +73,17 @@ var GROUPS = {
   ],
   /* The exit transfer runs every port's carrier route: 2.2 GB, a heavy
    * file in the same class as berths, so it stands alone too. */
-  transfer: ['test/transfer.test.js', 'test/lanes.test.js'],
+  transfer: ['test/transfer.test.js', 'test/lanes.test.js', 'test/streams.test.js'],
   combat: [
     'test/combat.test.js', 'test/gunnery.test.js', 'test/massdriver.test.js',
     'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/band.test.js',
-    'test/rendezvous.test.js', 'test/hunters.test.js',
+    'test/rendezvous.test.js', 'test/hunters.test.js', 'test/flights.test.js', 'test/civilians.test.js', 'test/turncoats.test.js', 'test/crookedlaw.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
     'test/wars.test.js', 'test/workoff.test.js', 'test/scars.test.js', 'test/conversions.test.js', 'test/milsats.test.js'
   ],
   economy: [
-    'test/economy.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
+    'test/economy.test.js', 'test/cargocost.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
     'test/shiptrade.test.js', 'test/analysers.test.js', 'test/farms.test.js',
     'test/growth.test.js', 'test/construction.test.js', 'test/stations.test.js',
     'test/city-sites.test.js', 'test/upkeep.test.js', 'test/parcel.test.js',
