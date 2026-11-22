@@ -14221,7 +14221,10 @@
   function npcSceneNow() {
     var NpcM = global.Npc;
     if (!NpcM || !G.ship) return null;
-    var signed = (Crew && Crew.aboard ? Crew.aboard(G.ship) : []).map(function (c) { return c.id || c.name; });
+    /* The people actually walking her decks, so a hand adrift on a
+     * beacon is not also standing in the corridor. */
+    var signed = (Crew && Crew.present ? Crew.present(G.ship)
+                  : (Crew && Crew.aboard ? Crew.aboard(G.ship) : [])).map(function (c) { return c.id || c.name; });
     var roster = signed.join(',');
     /* The chase camera in her hangar (2026-10-31) looks at the station's
      * deck as well as a walker does, so the station's people are there:

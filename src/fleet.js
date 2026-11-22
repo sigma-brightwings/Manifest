@@ -279,7 +279,13 @@
     /* And the trading firms' runs, everywhere, up to now (tradingfirm.js). */
     if (global.TradingFirm) lines = lines.concat(global.TradingFirm.book(G, t));
 
-    var aboard = Crew.aboard(s);
+    /* WHO IS AT THEIR POST, not who is on the books (2026-11-22). A
+     * hand adrift on a beacon stays on the roster deliberately - the
+     * ship screen has to show her - but she is not working, and
+     * crew.js says what a wage is for in its own words: "a wage that
+     * runs while they are aboard". Measured before the change: Ada
+     * Vance, adrift, was drawing 68 cr/day. */
+    var aboard = Crew.present ? Crew.present(s) : Crew.aboard(s);
     var mine = payCrew(Crew, aboard, s.wagesTo, t, s.credits);
     s.wagesTo = mine.paidTo;
     if (mine.cr > 0) {
