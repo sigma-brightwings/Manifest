@@ -247,6 +247,15 @@
   /* ---- who it shoots ------------------------------------------------------ */
   function hostileToYou(G, p, t) {
     var cb = Cb();
+    /* THE WARSHIP HAS THE SCENE (slice 5). Once she has ordered you to
+     * heave to, the platform holds fire and leaves you to her - unless you
+     * fire on it again. Found by the probe: sitting still as ordered, you
+     * were shot to pieces by the platform you were being questioned about. */
+    var al = G && G.sys && G.sys._alarm;
+    if (al && (al.phase === 'order' || al.phase === 'subdue') && al.orderAt !== undefined) {
+      var ps = G.milsats && G.milsats[p.id];
+      if (!(ps && ps.angry > al.orderAt)) return false;
+    }
     if (angryAt(G, p, t)) return true;
     return !!(cb && cb.wantedHere && cb.wantedHere(G, p.owner));
   }
@@ -312,6 +321,7 @@
   var _round = {};
   function update(sys, G, t, hooks) {
     if (!sys || !G || !G.here) return 0;
+    if (sys._alarm) updateResponse(sys, G, t, hooks);
     var plats = platformsFor(sys, G.here, G.galaxy);
     if (!plats.length) return 0;
     var slot = Math.floor(t / ROUND_S);
@@ -363,8 +373,10 @@
       if (hooks && hooks.say) hooks.say(p.name + ' DESTROYED' + (silent ? ' - no transponder, nothing logged'
                                                                          : ' - bounty +' + cb.BOUNTY.killNavy + ' cr'), 7);
       if (hooks && hooks.sound) hooks.sound('explosion');
+      alarm(sys, G, t, p, P, true, silent, hooks);
       return;
     }
+    if (first) alarm(sys, G, t, p, P, false, silent, hooks);
     if (first && !silent) {
       G.wanted = G.wanted || {};
       G.wanted[p.owner] = (G.wanted[p.owner] || 0) + cb.BOUNTY.assault;
@@ -373,6 +385,196 @@
       if (hooks && hooks.sound) hooks.sound('warn');
     }
   }
+  /* ---- THE ALARM, AND THE QUESTIONS (2026-11-22, ship AI slice 5) -------
+   * Astra: "they attempt to subdue and question anyone near the platform who
+   * could've done it. They will attempt to disable, but they will not
+   * hesitate to escalate their use of force if resisted."
+   *
+   * A platform that is shot raises an alarm, and the nearest warship of the
+   * law answers it - the navy's own where there is one, otherwise a police
+   * interceptor - flown to the platform the way a mayday's responder is
+   * (Combat.dispatchResponder's fields). At the scene she looks for whoever
+   * could have done it: you, if you are still within SUSPECT_KM.
+   *
+   *   ORDER    "Heave to for questioning." Hold position and she comes to
+   *            you; once she is alongside and matched, you are questioned.
+   *   SUBDUE   Run - open the range on her for RUN_S, or get RUN_KM
+   *            further off - and she opens disabling
+   *            fire: guns, no missiles, and she holds fire once your hull
+   *            is under SUBDUE_FLOOR, at gunpoint, until you stop.
+   *   LETHAL   Fire on her, at any point, and the gloves come off: missiles
+   *            and all, and no holding fire.
+   *
+   * THE QUESTIONS. With your transponder on, they already know it was you:
+   * the charge stands and they fine you for it on the spot if you can pay.
+   * Running silent, they have only your guns to go on - fired inside
+   * WARM_S of the attack and still warm, and that is the charge, now with
+   * your name on it. Cold guns, and they let you go with a note on the file.
+   * A mining laser does not warm them (combat.js lastFiredAt).
+   *
+   * Not yet, said so: questioning NPCs found near the platform. Today only
+   * your guns can hit one, so you are the only suspect there can be. */
+  /* CLOSE_KM is the scan's own rule, not a boarding distance: the law
+   * holds POLICE_STANDOFF (45 km) off you to scan, and scans inside
+   * CLOSE_RANGE once matched (sim.js). A first try at 2 km had her back
+   * off to 45 and the questions never come (the probe again). */
+  var ARRIVE_KM = 200, SUSPECT_KM = 3000, CLOSE_KM = 60, MATCH_S = 4, MATCH_KMS = 0.9;
+  var SUBDUE_FLOOR = 0.35, WARM_S = 900;
+  var RUN_RATE = 0.05, RUN_S = 15, RUN_KM = 25;   // km/s opening, for how long, or how much further
+
+  function lawResponder(sys, t, pos) {
+    var Sm = Sim(), best = null, bestD = Infinity, bestNavy = false;
+    (sys.patrols || []).forEach(function (sp) {
+      if (!sp || sp.dead || sp.disabled || sp.hunter || sp.escorting || sp.respondTo) return;
+      if (sp.faction === 'outlaw' || sp.outlaw) return;
+      if (sp.kind !== 'navy' && sp.kind !== 'police') return;
+      var st = sp.live ? sp.live : (Sm.patrolState ? Sm.patrolState(sp, sys, t) : null);
+      if (!st || !st.pos) return;
+      var d = V().dist(st.pos, pos), navy = sp.kind === 'navy';
+      /* The navy's own first, if it has a ship in this sky at all. */
+      if ((navy && !bestNavy) || (navy === bestNavy && d < bestD)) { best = sp; bestD = d; bestNavy = navy; }
+    });
+    return best ? { sp: best, d: bestD } : null;
+  }
+  function alarm(sys, G, t, p, P, destroyed, silent, hooks) {
+    var a = sys._alarm;
+    if (a && a.phase !== 'done') { a.destroyed = a.destroyed || destroyed; return a; }
+    var r = lawResponder(sys, t, P);
+    a = sys._alarm = { plat: p.id, platName: p.name, owner: p.owner, pos: V().clone(P), t: t,
+                       destroyed: !!destroyed, silent: !!silent, phase: r ? 'coming' : 'done' };
+    if (!r) {
+      if (hooks && hooks.say) hooks.say(p.name + ' raises the alarm. Nobody is in this sky to answer it.', 6);
+      return a;
+    }
+    var sp = r.sp;
+    sp.mode = 'respond'; sp.modeSince = 0;
+    sp.respondTo = 'plat:' + p.id; sp.respondPos = V().clone(P);
+    sp.questioning = true;
+    a.by = sp.id;
+    var eta = 2 * Math.sqrt(Math.max(0, r.d) / Math.max(1e-6, sp.accel || 0.01));
+    a.etaAt = t + eta;
+    if (hooks && hooks.say) hooks.say(p.name + ' raises the alarm. ' + sp.name + ' is answering - ' +
+      Math.round(r.d).toLocaleString('en-US') + ' km out.', 7);
+    return a;
+  }
+  function responderOf(sys, a) {
+    var ps = sys.patrols || [];
+    for (var i = 0; i < ps.length; i++) if (ps[i].id === a.by) return ps[i];
+    return null;
+  }
+  function stand(sys, a, sp) {
+    a.phase = 'done';
+    if (!sp) return;
+    sp.questioning = false; sp.subdue = false;
+    if (sp.respondTo === 'plat:' + a.plat) { sp.respondTo = null; sp.respondPos = null; }
+    if (sp.mode === 'respond' || sp.mode === 'inspect') sp.mode = sp.live ? 'shadow' : null;
+    if (!a.lethal) sp.hostileToPlayer = false;
+  }
+  /* What the questions find. */
+  function question(sys, G, t, a, sp, hooks) {
+    var cb = Cb(), say = hooks && hooks.say ? hooks.say : function () {};
+    var bounty = a.destroyed ? cb.BOUNTY.killNavy : cb.BOUNTY.assault;
+    var who = sp.name;
+    if (a.silent) {
+      var warm = G.lastFiredAt !== undefined && G.lastFiredAt >= a.t - 5 && t - G.lastFiredAt < WARM_S;
+      if (!warm) {
+        a.verdict = 'cleared';
+        say(who + ': "Your guns are cold. Go on - but we have your name now, and the time you were here."', 8);
+        stand(sys, a, sp);
+        return a;
+      }
+      a.verdict = 'charged';
+      G.wanted = G.wanted || {};
+      G.wanted[a.owner] = (G.wanted[a.owner] || 0) + bounty;
+      if (global.Missions && global.Missions.bumpStanding) global.Missions.bumpStanding(G, a.owner, a.destroyed ? -30 : -8);
+      say(who + ': "Your emitters are still warm. You are charged with the attack on ' + a.platName + '."', 8);
+    } else {
+      a.verdict = 'identified';
+      say(who + ': "We had your transponder before we had your name. ' + a.platName + ' logged every shot."', 8);
+    }
+    /* The fine, on the spot, if it can be paid. */
+    var owed = (G.wanted && G.wanted[a.owner]) || 0, fine = Math.min(owed, bounty);
+    if (fine > 0 && (G.ship.credits || 0) >= fine) {
+      G.ship.credits -= fine;
+      G.wanted[a.owner] = owed - fine;
+      if (!(G.wanted[a.owner] > 0)) delete G.wanted[a.owner];
+      a.fined = fine;
+      say('Fined ' + fine.toLocaleString('en-US') + ' cr for ' + a.platName + ', paid. ' + who + ' stands down.', 7);
+    } else if (fine > 0) {
+      say('You cannot pay the ' + fine.toLocaleString('en-US') + ' cr. ' + who + ' logs it: the charge stands.', 7);
+    }
+    stand(sys, a, sp);
+    return a;
+  }
+  function updateResponse(sys, G, t, hooks) {
+    var a = sys && sys._alarm;
+    if (!a || a.phase === 'done') return null;
+    var sp = responderOf(sys, a), Vv = V(), Sm = Sim(), say = hooks && hooks.say ? hooks.say : function () {};
+    if (!sp || sp.dead || sp.disabled) { a.phase = 'done'; return a; }
+    var st = sp.live ? sp.live : (Sm.patrolState ? Sm.patrolState(sp, sys, t) : null);
+    if (!st || !st.pos) return a;
+    var ship = G.ship;
+    /* Fired on her: the gloves come off, whatever phase this was. */
+    if (!a.lethal && sp._playerHitAt !== undefined && sp._playerHitAt >= a.t) {
+      a.lethal = true; a.phase = 'lethal';
+      sp.subdue = false; sp.hostileToPlayer = true; sp.mode = 'attack';
+      say(sp.name + ': "Weapons free."', 6);
+      return a;
+    }
+    if (a.phase === 'lethal') return a;
+    if (a.phase === 'coming') {
+      if (Vv.dist(st.pos, a.pos) > ARRIVE_KM) return a;
+      var you = !ship.docked && !ship.landed && Vv.dist(ship.pos, a.pos) <= SUSPECT_KM;
+      if (!you) {
+        a.verdict = 'nobody';
+        if (Vv.dist(ship.pos, st.pos) < 50000) say(sp.name + ' reaches ' + a.platName + ' and finds nobody to question.', 6);
+        stand(sys, a, sp);
+        return a;
+      }
+      a.phase = 'order'; a.orderAt = t; a.matched = 0;
+      sp.mode = 'inspect'; sp.modeSince = 0;
+      say(sp.name + ': "You there - heave to for questioning about the attack on ' + a.platName + '."', 8);
+      if (hooks && hooks.sound) hooks.sound('warn');
+      return a;
+    }
+    /* ORDER and SUBDUE: close up and match her, and you are questioned. */
+    var d = Vv.dist(st.pos, ship.pos);
+    var rel = sp.live && sp.live.vel ? Vv.dist(sp.live.vel, ship.vel) : 99;
+    var dt = a.lastT !== undefined ? Math.max(0, t - a.lastT) : 0;
+    a.lastT = t;
+    if (d <= CLOSE_KM && rel <= MATCH_KMS && !ship.docked) a.matched += dt; else a.matched = 0;
+    if (a.matched >= MATCH_S) return question(sys, G, t, a, sp, hooks);
+    /* HEAVING TO IS NOT RUNNING. The probe found a pilot holding still as
+     * ordered shot for "failure to heave to": a navy cutter (0.009 km/s^2)
+     * needs some three minutes to close 60 km, and the order allowed 90 s.
+     * So the clock is what you DO: open the range on her for RUN_S, or
+     * get RUN_KM further off than you were when she called, and that is
+     * your answer. Hold position and she comes to you, however long. */
+    /* And it is YOUR doing: the range opening while your drive is lit.
+     * The probe's second lesson - a range that opens because she drifts is
+     * not you running, and blaming you for her motion shot a pilot who was
+     * sitting still. */
+    if (a.orderD === undefined) a.orderD = d;
+    var rate = a.lastD !== undefined && dt > 0 ? (d - a.lastD) / dt : 0;
+    a.lastD = d;
+    var burning = (ship.throttle || 0) > 0.02 || !!(ship.thrust && Vv.len(ship.thrust) > 1e-6);
+    if (burning && rate > 0) a.burned = true;
+    a.running = burning && rate > RUN_RATE ? (a.running || 0) + dt : 0;
+    var ran = a.running > RUN_S || (a.burned && d > a.orderD + RUN_KM);
+    if (a.phase === 'order' && ran) {
+      a.phase = 'subdue';
+      sp.subdue = true; sp.hostileToPlayer = true; sp.mode = 'attack';
+      say(sp.name + ': "Failure to heave to. Disabling fire."', 7);
+      if (hooks && hooks.sound) hooks.sound('warn');
+    }
+    /* Pinned: she holds fire and comes in to talk, at gunpoint. */
+    if (a.phase === 'subdue' && sp.subdue && ship.hullMax > 0 && ship.hullHp / ship.hullMax < SUBDUE_FLOOR && sp.mode === 'attack') {
+      sp.mode = 'inspect';
+      say(sp.name + ': "Engines down. Hold still."', 6);
+    }
+    return a;
+  }
+
   /* Its attitude: gun down the station's orbit, deck to the world. */
   function frameOf(sys, p, t) {
     var port = sys.byId[p.port], S = Sim(), Vv = V();
@@ -402,7 +604,11 @@
     corridorsOf: corridorsOf, orbitFrame: orbitFrame, APPROACH_FRAC: APPROACH_FRAC,
     stateOf: stateOf, isDead: isDead, hullOf: hullOf, isDark: isDark, armed: armed, angryAt: angryAt,
     hostileToYou: hostileToYou, isOutlawShip: isOutlawShip, fireRound: fireRound, update: update,
-    onRay: onRay, struck: struck, asShooter: asShooter
+    onRay: onRay, struck: struck, asShooter: asShooter,
+    ARRIVE_KM: ARRIVE_KM, SUSPECT_KM: SUSPECT_KM, CLOSE_KM: CLOSE_KM, MATCH_S: MATCH_S,
+    RUN_RATE: RUN_RATE, RUN_S: RUN_S, RUN_KM: RUN_KM,
+    SUBDUE_FLOOR: SUBDUE_FLOOR, WARM_S: WARM_S,
+    alarm: alarm, lawResponder: lawResponder, updateResponse: updateResponse, question: question
   };
   global.Milsats = Milsats;
   if (typeof module !== 'undefined' && module.exports) module.exports = Milsats;

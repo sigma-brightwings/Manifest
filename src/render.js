@@ -19825,8 +19825,8 @@
    * whose is still geometry, not guesswork. Off-screen targets keep their
    * edge arrows as before. */
   var HOLO_Q = [];
-  function queueHoloTarget(worldPos, label, sub, color) {
-    HOLO_Q.push({ pos: worldPos, label: label, sub: sub, color: color });
+  function queueHoloTarget(worldPos, label, sub, color, emph) {
+    HOLO_Q.push({ pos: worldPos, label: label, sub: sub, color: color, emph: !!emph });
   }
   function rectHit(a, b) { return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0; }
   /* Pure placement, for the suite: `targets` [{ x, y, tw, bh }] on screen,
@@ -19837,12 +19837,15 @@
   var HOLO_BRACKET = 13, HOLO_GAP = 3;
   function placeHoloLabels(targets, blocked, w, h) {
     var boxes = (blocked || []).slice();
+    /* `pad`: a target drawn with its outer "scanning you" brackets reaches
+     * further, and its name keeps clear of them too. */
     var brackets = targets.map(function (t) {
-      return { x0: t.x - HOLO_BRACKET, x1: t.x + HOLO_BRACKET, y0: t.y - HOLO_BRACKET, y1: t.y + HOLO_BRACKET, own: t };
+      var r = HOLO_BRACKET + (t.pad || 0);
+      return { x0: t.x - r, x1: t.x + r, y0: t.y - r, y1: t.y + r, own: t };
     });
     boxes = boxes.concat(brackets);
     return targets.map(function (t) {
-      var b = HOLO_BRACKET + HOLO_GAP, cands = [];
+      var b = HOLO_BRACKET + (t.pad || 0) + HOLO_GAP, cands = [];
       var right = t.x + b, left = t.x - b - t.tw, mid = t.x - t.tw / 2;
       cands.push({ x: right, top: t.y - 12 }, { x: left, top: t.y - 12 },
                  { x: mid, top: t.y - b - t.bh }, { x: mid, top: t.y + b });
@@ -19880,7 +19883,7 @@
       var p = cam.project(t.pos);
       if (p && p.x > 0 && p.x < w && p.y > 0 && p.y < h) {
         var tw = Math.max(t.label ? ctx.measureText(t.label).width : 0, t.sub ? ctx.measureText(t.sub).width : 0);
-        on.push({ t: t, x: p.x, y: p.y, tw: tw, bh: t.sub ? 26 : 14 });
+        on.push({ t: t, x: p.x, y: p.y, tw: tw, bh: t.sub ? 26 : 14, pad: t.emph ? 7 : 0 });
       } else drawHoloTarget(ctx, cam, t.pos, t.label, t.sub, t.color, w, h);
     });
     ctx.restore();
@@ -19888,6 +19891,27 @@
     on.forEach(function (o, i) {
       var t = o.t, pl = placed[i];
       drawHoloTarget(ctx, cam, t.pos, null, null, t.color, w, h);    // the brackets alone
+      /* SCANNING YOU (2026-11-22, Astra: "when scanned by another ship,
+       * like a warden, that ship should be highlighted"): a second set of
+       * brackets outside the first, breathing, so the one ship looking at
+       * you stands out from every other box on the glass. */
+      if (t.emph) {
+        var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+        var a = 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(now * 5));
+        var s2 = HOLO_BRACKET + 5;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = a;
+        ctx.strokeStyle = t.color; ctx.lineWidth = 2;
+        [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (c) {
+          ctx.beginPath();
+          ctx.moveTo(o.x + c[0] * s2, o.y + c[1] * s2 - c[1] * 7);
+          ctx.lineTo(o.x + c[0] * s2, o.y + c[1] * s2);
+          ctx.lineTo(o.x + c[0] * s2 - c[0] * 7, o.y + c[1] * s2);
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
       ctx.save();
       ctx.globalCompositeOperation = 'lighter';
       if (GLASS_GLOW) { ctx.shadowColor = t.color; ctx.shadowBlur = 5; }

@@ -77,7 +77,7 @@ var GROUPS = {
   combat: [
     'test/combat.test.js', 'test/gunnery.test.js', 'test/massdriver.test.js',
     'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/band.test.js',
-    'test/rendezvous.test.js', 'test/hunters.test.js', 'test/flights.test.js', 'test/civilians.test.js', 'test/turncoats.test.js', 'test/crookedlaw.test.js',
+    'test/rendezvous.test.js', 'test/hunters.test.js', 'test/flights.test.js', 'test/civilians.test.js', 'test/turncoats.test.js', 'test/crookedlaw.test.js', 'test/doctrine.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
     'test/wars.test.js', 'test/workoff.test.js', 'test/scars.test.js', 'test/conversions.test.js', 'test/milsats.test.js'
@@ -91,7 +91,7 @@ var GROUPS = {
     'test/appeal.test.js', 'test/tourism.test.js', 'test/resorts.test.js', 'test/seams.test.js', 'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/interior.test.js', 'test/magnetics.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [

@@ -1366,7 +1366,13 @@ console.log('--- government and crime permissivity ---');
   var byCrime = [];
   seeds(150).forEach(function (sd) {
     var sys = Gen.generateSystem(sd);
-    var police = (sys.patrols || []).filter(function (p) { return p.kind === 'police'; }).length;
+    /* Escorts (ship AI slice 5) ride with a liner or a runner and go where
+     * the traffic goes; they are not the system's patrol, so they are not
+     * counted here. Measured over these 150 seeds: the strictest third
+     * has 2.41 patrols a faction and the most permissive 1.73, but escorts
+     * run 0.92 against 2.05 (Syndicate heavies ride with runners, and the
+     * permissive systems are the busy ones), which tipped the total over. */
+    var police = (sys.patrols || []).filter(function (p) { return p.kind === 'police' && !p.escorting; }).length;
     var factionCount = (sys.factions || []).length || 1;
     if (police === 0) return;
     byCrime.push([sys.crimeScore, police / factionCount]);

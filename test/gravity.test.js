@@ -167,7 +167,9 @@ worlds.forEach(function (w) {
     ids[lvl] = {};
     cs.forEach(function (c) {
       ids[lvl][c.id] = 1;
-      if (c.mgal < Gr.RES[lvl].mgal - 1e-9) mgalRule = false;
+      /* The size of the reading, high or low (planetary interiors slice 2:
+       * a light body reads negative, and -300 mGal is not "below" 70). */
+      if (Math.abs(c.mgal) < Gr.RES[lvl].mgal - 1e-9) mgalRule = false;
       if (lvl >= 3 && c.depthKm == null) depthRule = false;
       if (lvl < 3 && c.depthKm != null) depthRule = false;
       if (lvl >= 2 && !c.depthBand) bandRule = false;

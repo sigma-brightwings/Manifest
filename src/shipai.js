@@ -346,7 +346,12 @@
   function orgOf(sp) {
     if (!sp) return null;
     if (sp.parentShip) return 'navy:' + (sp.faction || '');
-    if (sp.kind === 'merc' && sp.escorting) return 'escort:' + sp.escorting;
+    /* Any escort, not only a mercenary (slice 5): a heavy riding with a
+     * runner, a cutter riding with a liner. The host is in the same flight. */
+    if (sp.escorting) return 'escort:' + sp.escorting;
+    /* And the escorted host flies with her escort, whatever its own role:
+     * a runner with her heavy, a liner with her cutter. */
+    if (sp.liftedFrom && sp._escorted) return 'escort:' + sp.liftedFrom.id;
     var role = roleOf(sp);
     if (role === 'syndicate') return 'syndicate';
     /* `band` is the crew (generate.js, 2026-11-22): the band in its own
@@ -354,8 +359,6 @@
     if (role === 'pirate') return 'pirate:' + (sp.band || sp.faction || 'free');
     if (role === 'police') return 'police:' + (sp.faction || '');
     if (role === 'navy') return 'navy:' + (sp.faction || '');
-    /* A freighter with a hired escort lifted near her flies with it. */
-    if (sp.liftedFrom && sp._escorted) return 'escort:' + sp.liftedFrom.id;
     return null;
   }
   function rankOf(G, sp) {
@@ -378,7 +381,7 @@
     });
     /* Escorted freighters first, so a mercenary's freighter is in her org. */
     var escorted = {};
-    all.forEach(function (sp) { if (sp.kind === 'merc' && sp.escorting) escorted[sp.escorting] = true; });
+    all.forEach(function (sp) { if (sp.escorting) escorted[sp.escorting] = true; });
     all.forEach(function (sp) { if (sp.liftedFrom) sp._escorted = !!escorted[sp.liftedFrom.id]; });
     var byOrg = {};
     all.forEach(function (sp) {

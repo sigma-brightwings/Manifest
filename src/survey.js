@@ -511,6 +511,10 @@
         }
         var bf = bumps(buried, damp);
         for (i = 0; i < NCELL; i++) wf[i] = Math.max(wf[i], bf[i]);
+        /* Kept for interior.js (2026-11-22), which gives each patch a depth
+         * and a size: the buried ice is a mass too, a lighter one. Additive -
+         * nothing here reads it. */
+        out.buriedIce = buried.map(function (b) { return { c: [b.c[0], b.c[1], b.c[2]], r: b.r, w: b.w }; });
       }
       var wTop = 0;
       for (i = 0; i < NCELL; i++) if (wf[i] > wTop) wTop = wf[i];
@@ -1019,38 +1023,131 @@
    *   - the planet's own DIPOLE, if it has a field (body.magnetosphere):
    *     strength x sqrt(1 + 3 sin^2(magnetic latitude)) / 2, so the poles
    *     read twice what the magnetic equator does, as they do;
-   *   - ANOMALIES over the ore bodies: iron and its kin are magnetic, so a
-   *     province of ore is a bump in the field. A world with no dipole
-   *     still has them (Mars's crust is magnetised though its core is not),
-   *     which is what makes the magnetometer worth carrying on a dead rock.
-   * The field is on a 0..~1.2 scale; gas giants top the scale.
+   *   - ANOMALIES over the buried bodies the interior holds (planetary
+   *     interiors slice 3, 2026-11-22). They used to be the ore-grade map,
+   *     every province a bump whatever it was made of; now a body is heard
+   *     only if its composition is magnetic (iron loud, sulphide half as
+   *     loud, the rare-metal mixes faint; fissile, ice and salt silent) and
+   *     it sits above the Curie depth, where rock is cool enough to hold a
+   *     magnetisation. A province is ore spread through the crust over its
+   *     whole patch, so it reads as a broad rise the width of the patch. A
+   *     buried body is a lump: its anomaly is about as wide as it is deep
+   *     and falls as (size/depth)^3, the dipole law, so a deep body is far
+   *     quieter to a coil than it is to a gravimeter (which loses only the
+   *     square).
+   *   - REMANENCE on a world whose dynamo has died: patches of old field
+   *     frozen into the crust when it cooled (Mars's southern highlands).
+   *     Broad, faint, and no ore under them - a trap for the hasty.
+   * A world with no dipole still has its anomalies, which is what makes
+   * the magnetometer worth carrying on a dead rock.
+   * The field is on a 0..~1.2 scale, NT_PER nanotesla to the unit (1.0 is
+   * an Earth-strength polar field); gas giants top the scale.
    * Field lines are the footprints of the dipole's lines on the surface:
    * the magnetic meridians, running pole to pole. */
   var MAG_CACHE = new WeakMap();
   var ANOMALY = 0.30;
+  var NT_PER = 50000;
+  var MAG_SIGMA_MIN = 0.018;     // radians, a cell wide: any narrower and a lump falls between cell centres
+  var REMN_SCALE = 0.6;
+  function magSources(body, sys, gm) {
+    var In = global.Interior, I = In && In.of ? In.of(body, sys) : null;
+    var list = [], R = body.radius || 1;
+    if (!I) return { list: list, I: null };
+    (I.bodies || []).forEach(function (m) {
+      if (!m.magnetic) return;
+      if (m.kind === 'province') {
+        var pr = gm && gm.provinces && gm.provinces[+m.id.slice(4)];
+        if (!pr) return;
+        /* pr.w, not the gravity source's 0.55 x w: the strongest province
+         * reads what the old ore anomaly read at its centre, if it is iron. */
+        list.push({ m: m, c: pr.c, sig: pr.r, amp: ANOMALY * pr.w * m.mag, broad: true });
+      } else {
+        var z = Math.max(m.zKm, m.radKm), q = m.radKm / z;
+        list.push({ m: m, c: m.c, sig: Math.max(MAG_SIGMA_MIN, z / R),
+                    amp: ANOMALY * m.mag * q * q * q, broad: false, depthKm: z });
+      }
+    });
+    if (I.remanence > 0 && !I.dynamo) {
+      var tag = (sys.seedTag || sys.name || (sys.star && sys.star.id) || '') + '|' + body.id + '|mag:remn';
+      var n = 3 + Math.floor(hash01(tag + '#') * 5);
+      for (var k = 0; k < n; k++) {
+        list.push({ m: null, c: sphereDir(tag + k), sig: 0.15 + 0.35 * hash01(tag + k + 'r'),
+                    amp: I.remanence * REMN_SCALE * ANOMALY * (0.4 + 0.6 * hash01(tag + k + 'w')),
+                    broad: true, remanent: true });
+      }
+    }
+    return { list: list, I: I };
+  }
   function magMap(body, sys) {
     if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return null;
     var hit = MAG_CACHE.get(body);
     if (hit && hit.sys === sys) return hit;
     var W = global.Weather, m = body.magnetosphere || null;
     var ax = (m && W && W.magneticAxis) ? W.magneticAxis(body) : null;
-    var gm = groundMap(body, sys), ores = gm && gm.grade.ores, wg = gm && gm.world.ores;
-    var fr = spinFrame(body, 0), field = new Float32Array(NCELL), top = 0, lo = Infinity;
+    var gm = groundMap(body, sys), ms = magSources(body, sys, gm), src = ms.list;
+    var fr = spinFrame(body, 0), field = new Float32Array(NCELL), anom = new Float32Array(NCELL);
+    var top = 0, lo = Infinity;
     for (var i = 0; i < NCELL; i++) {
-      var b = 0;
+      var b = 0, a = 0, cc = CELL_CENTRES[i];
       if (ax) {
         var p = cellBodyFixed(fr, i), sl = dot(p, ax);
         b = m.strength * Math.sqrt(1 + 3 * sl * sl) / 2;
       }
-      if (ores && wg > 0) b += ANOMALY * Math.max(0, ores[i] / wg - ORE_FLOOR) / (1 - ORE_FLOOR);
+      for (var j = 0; j < src.length; j++) {
+        var s = src[j], d = dot3(cc, s.c);
+        if (d < 0) continue;                       // the far side hears nothing
+        var ang = Math.acos(Math.min(1, d)) / s.sig;
+        if (ang < 4) a += s.amp * Math.exp(-ang * ang);
+      }
+      anom[i] = a; b += a;
       field[i] = b;
       if (b > top) top = b;
       if (b < lo) lo = b;
     }
-    var out = { sys: sys, field: field, max: top, min: lo === Infinity ? 0 : lo, axis: ax,
-                strength: m ? m.strength : 0, dipole: !!ax };
+    var I = ms.I;
+    var out = { sys: sys, field: field, anom: anom, max: top, min: lo === Infinity ? 0 : lo, axis: ax,
+                strength: m ? m.strength : 0, dipole: !!ax, sources: src,
+                remanence: !!(I && I.remanence > 0 && !I.dynamo),
+                curieKm: I ? I.curieKm : null };
     MAG_CACHE.set(body, out);
     return out;
+  }
+  /* THE MAGNETOMETER'S CONTACT LIST, beside the gravimeter's: the bodies
+   * whose highs it has heard over ground it has flown. Readings only
+   * (Astra's decision 2): how strong in nanotesla, where, and how deep the
+   * width of the high says it is - the half-width of a lump's anomaly is
+   * about its depth, a rule every field geophysicist carries. What it is
+   * made of the coil cannot say. A province the spectrometer also reads is
+   * explained, as on the gravimeter; a buried one never is. `rec` limits
+   * it to what the coil has swept; pass null for the whole truth. */
+  var MAG_FLOOR_NT = 100;
+  function magContacts(body, sys, rec, surveyLvl) {
+    var mm = magMap(body, sys);
+    if (!mm) return [];
+    var sl = surveyLvl || 0, out = [];
+    (mm.sources || []).forEach(function (s) {
+      if (!s.m) return;                          // remanence: crust, not a contact
+      var nT = s.amp * NT_PER;
+      if (nT < MAG_FLOOR_NT) return;
+      var lat = Math.asin(Math.max(-1, Math.min(1, s.c[2]))), lon = Math.atan2(s.c[1], s.c[0]);
+      var cell = cellOfLatLon(lat, lon);
+      if (rec && !magRead(rec, cell)) return;
+      var cls = s.m.comp === 'rare' ? 3 : 1;
+      out.push({ id: s.m.id, kind: s.m.kind, lat: lat, lon: lon, cell: cell, nT: Math.round(nT),
+                 broad: s.broad,
+                 /* The width of the high, read as depth. A broad province
+                  * says "near the surface, spread out", not a number. */
+                 depthKm: s.broad ? null : Math.round(s.depthKm),
+                 widthKm: Math.round(s.sig * (body.radius || 1) * 2),
+                 explained: !!s.m.surface && sl >= cls });
+    });
+    out.sort(function (a, b) { return b.nT - a.nT; });
+    return out;
+  }
+  function describeMag(c) {
+    var t = '+' + (c.nT >= 1000 ? (c.nT / 1000).toFixed(1) + 'k' : String(c.nT)) + ' nT';
+    if (c.broad) return t + ' · broad, ' + c.widthKm + ' km wide, shallow';
+    return t + ' · about ' + c.depthKm + ' km down';
   }
   function fieldAt(body, sys, cell) {
     var mm = magMap(body, sys);
@@ -1388,12 +1485,13 @@
     groundMap: groundMap, localGrade: localGrade, groundAt: groundAt, cellRead: cellRead,
     cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL,
     magMap: magMap, fieldAt: fieldAt, magRead: magRead, fieldLines: fieldLines, magLevel: magLevel,
+    magContacts: magContacts, describeMag: describeMag, NT_PER: NT_PER, MAG_FLOOR_NT: MAG_FLOOR_NT,
     sourceField: sourceField, sweepContacts: sweepContacts, runSweep: runSweep, foundPort: foundPort,
     guildCredit: guildCredit, GUILD_PER: GUILD_PER, GUILD_MAX_PER_SALE: GUILD_MAX_PER_SALE,
     SWEEP_SECONDS: SWEEP_SECONDS, SWEEP_POWER: SWEEP_POWER, SWEEP_FLOOR: SWEEP_FLOOR,
     FIX_GOOD: FIX_GOOD, FIX_SPAN: FIX_SPAN, REF_KM: REF_KM,
     COVER_SHALLOW: COVER_SHALLOW, COVER_MID: COVER_MID, COVER_DEEP: COVER_DEEP,
-    BAND_REACH: BAND_REACH, bandOf: bandOf, deepBodies: deepBodies
+    BAND_REACH: BAND_REACH, bandOf: bandOf, deepBodies: deepBodies, typeKey: typeKey
   };
   global.Survey = Survey;
   if (typeof module !== 'undefined' && module.exports) module.exports = Survey;

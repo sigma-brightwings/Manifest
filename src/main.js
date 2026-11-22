@@ -16114,8 +16114,8 @@
      * lands on another name, another ship's box, a readout or a panel
      * (Render.drawHoloTargets, 2026-11-22). Queue order is priority. */
     var holoQ = Render.queueHoloTarget ? Render.queueHoloTarget : null;
-    var holo = function (pos, name, sub, color) {
-      if (holoQ) holoQ(pos, name, sub, color); else Render.drawHoloTarget(ctx, cam, pos, name, sub, color, w, h);
+    var holo = function (pos, name, sub, color, emph) {
+      if (holoQ) holoQ(pos, name, sub, color, emph); else Render.drawHoloTarget(ctx, cam, pos, name, sub, color, w, h);
     };
     if (nav) {
       holo(nav.pos, nav.name,
@@ -16130,13 +16130,15 @@
      * that is the one contact you must never have to hunt for. Hostiles
      * first, so they get the spot beside their own box. */
     if (G.encounter && G.encounter.active.length) {
-      G.encounter.active.slice().sort(function (a, b) {
-        return (b.kind === 'pirate' || b.hostileToPlayer ? 1 : 0) - (a.kind === 'pirate' || a.hostileToPlayer ? 1 : 0);
-      }).forEach(function (spec) {
+      /* Hostiles first, then whoever is scanning you (they want the spot
+       * beside their own box too), then the rest. */
+      var pri = function (s) { return s.kind === 'pirate' || s.hostileToPlayer ? 2 : scanningYou(s) ? 1 : 0; };
+      G.encounter.active.slice().sort(function (a, b) { return pri(b) - pri(a); }).forEach(function (spec) {
         if (!spec.live) return;
+        var hostile = spec.kind === 'pirate' || spec.hostileToPlayer, scan = !hostile && scanningYou(spec);
         holo(spec.live.pos, spec.name,
-          spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
-          spec.kind === 'pirate' || spec.hostileToPlayer ? '#ff6b5a' : '#7dffb0');
+          (scan ? 'SCANNING YOU · ' : '') + spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
+          hostile ? '#ff6b5a' : scan ? SCAN_AMBER : '#7dffb0', scan);
       });
     }
     if (Render.drawHoloTargets) Render.drawHoloTargets(ctx, cam, w, h, labelHud || cockpitReadoutBoxes(w, hv, h), labelBoxes);
@@ -21726,6 +21728,20 @@
   /* Who is awake and what they want. Shown in both views, because being
    * interdicted is not a thing you should be able to miss by happening to
    * be looking at the orbit display. */
+  /* WHO IS SCANNING YOU (2026-11-22, Astra: "when scanned by another ship,
+   * like a warden, that ship should be highlighted"). A patrol in inspect,
+   * not yet done with you, and close enough to be coming for the look -
+   * or a warship that has ordered you to heave to for questioning. Shown
+   * amber on the glass (a second, breathing set of brackets) and in the
+   * contacts panel: not a threat, but the one ship looking at you. */
+  var SCAN_AMBER = '#ffb84d', SCAN_SHOW_KM = 300;
+  function scanningYou(spec) {
+    if (!spec || !spec.live || spec.dead || spec.disabled || spec.hostileToPlayer) return false;
+    if (spec.questioning && spec.mode === 'inspect') return true;
+    if (spec.kind !== 'police' || spec.mode !== 'inspect' || spec.scanned || spec.target) return false;
+    return V.dist(spec.live.pos, G.ship.pos) < SCAN_SHOW_KM;
+  }
+
   function drawEncounterPanel(ctx, w, h) {
     var enc = G.encounter;
     if (!enc || !enc.active.length) return;
@@ -21743,14 +21759,31 @@
         : spec.kind === 'trader' ? 'fleeing'
         : spec.kind === 'pirate'
         ? (spec.mode === 'breakoff' ? 'breaking off' : spec.mode === 'demand' ? 'HOLDING YOU UP' : 'closing')
-        : spec.kind === 'police' ? 'inspecting' : 'escorting';
-      return [spec.name + '  (' + spec.className + ')', fmtDist(rng) + '  ' + what,
-              spec.kind === 'pirate' ? '#ff8a7a' : '#7dffb0'];
+        /* The navy at a platform (milsats.js, slice 5). */
+        : spec.questioning ? (spec.mode === 'inspect' ? 'HEAVE TO ORDERED' : 'answering an alarm')
+        : scanningYou(spec) ? 'SCANNING YOU'
+        : spec.escorting ? 'escorting'
+        : spec.kind === 'police' ? 'inspecting'
+        /* Not everything awake is an escort: the old last word was. */
+        : spec.kind === 'tug' || spec.kind === 'tender' ? 'standing by'
+        : spec.kind === 'merc' ? 'escorting' : 'keeping watch';
+      var col = spec.kind === 'pirate' ? '#ff8a7a' : what === 'SCANNING YOU' || what === 'HEAVE TO ORDERED' ? SCAN_AMBER : '#7dffb0';
+      return [spec.name + '  (' + spec.className + ')', fmtDist(rng) + '  ' + what, col];
     });
 
     var sd = G.shakedown;
     var ph = 44 + lines.length * 15 + (demand || sd ? 52 : 0);
-    var px = w / 2 - 190, py = 112;
+    /* WIDE ENOUGH FOR ITS LONGEST LINE (2026-11-22): "The Notary (Syndicate
+     * enforcer)" pushed its status onto a second line, which the height
+     * above does not allow for, so it ran into the row below. The panel
+     * now takes the width its rows need, from 380 up to half the glass. */
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    var need = 0;
+    lines.forEach(function (l) { need = Math.max(need, ctx.measureText(l[0]).width + 14 + ctx.measureText(l[1]).width); });
+    ctx.restore();
+    var pw = Math.round(Math.max(380, Math.min(w * 0.5, need + 30)));
+    var px = w / 2 - pw / 2, py = 112;
     /* NO PANEL OVER THE TAPE (2026-11-22): in the cockpit the heading tape
      * sits right where this panel always went, and the compass box showed
      * through "(shuttle)". It takes the first clear spot - where it was,
@@ -21761,22 +21794,22 @@
       labelHud.forEach(function (r) { if (r.id === 'tape') tape = r; });
       var cands = [{ x: px, y: py }];
       if (tape) {
-        cands.push({ x: tape.x0 - 12 - 380, y: py }, { x: tape.x1 + 12, y: py },
+        cands.push({ x: tape.x0 - 12 - pw, y: py }, { x: tape.x1 + 12, y: py },
                    { x: px, y: tape.y1 + 8 },
-                   { x: tape.x0 - 12 - 380, y: tape.y1 + 8 }, { x: tape.x1 + 12, y: tape.y1 + 8 });
+                   { x: tape.x0 - 12 - pw, y: tape.y1 + 8 }, { x: tape.x1 + 12, y: tape.y1 + 8 });
       }
-      var spot = Render.freeSpot(cands, 380, ph, labelHud, G._encBox, w, h);
+      var spot = Render.freeSpot(cands, pw, ph, labelHud, G._encBox, w, h);
       if (spot) { px = spot.x; py = spot.y; }
     }
-    G._encBox = [px, px + 380, py, py + ph];
-    panel(ctx, px, py, 380, ph);
+    G._encBox = [px, px + pw, py, py + ph];
+    panel(ctx, px, py, pw, ph);
 
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
     ctx.fillStyle = demand ? '#ff7a6b' : sd ? '#ffb86b' : '#7dfaff';
     ctx.fillText(demand ? 'INTERDICTION' : sd ? 'INSPECTION FEE' : 'CONTACTS', px + 14, py + 24);
     ctx.restore();
-    rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', 352);
+    rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', pw - 28);
 
     /* A crooked cop's "inspection fee" (combat.js, slice 4). */
     if (sd && !demand) {

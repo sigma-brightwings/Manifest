@@ -496,6 +496,11 @@
       troublemaker: G.troublemaker || {},
       suspended: G.suspended || {},
       onTheTake: G.onTheTake || {},
+      /* The Syndicate's grudge (hunters.js, slice 5): what they hold
+       * against you and when the squad is due. Additive. */
+      grudge: G.grudge || null,
+      /* What the overboss's collectors were seen taking, per hold (slice 5). */
+      protectionSeen: G.protectionSeen || {},
       /* WHICH START THIS CAREER CHOSE (start.js): { difficulty, focus }.
        * Additive and no version bump: an older career has none, which reads
        * as the only start there was before the choice existed. Kept so a
@@ -936,6 +941,8 @@
     G.troublemaker = data.troublemaker || {};
     G.suspended = data.suspended || {};
     G.onTheTake = data.onTheTake || {};
+    G.grudge = (data.grudge && typeof data.grudge === 'object' && data.grudge.v > 0) ? data.grudge : null;
+    G.protectionSeen = data.protectionSeen || {};
     G.start = (data.start && typeof data.start === 'object') ? data.start : null;
     G.queueJumps = data.queueJumps || {};
     G.pendingReport = data.pendingReport || null;

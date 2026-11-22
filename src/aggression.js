@@ -805,6 +805,95 @@
     });
   }
 
+  /* ---- PROTECTION (ship AI slice 5, 2026-11-22) --------------------------
+   * claude/ship-ai-profiles.md section 5, the Syndicate: "collects
+   * protection from independents in its hold". Astra chose both: it plays
+   * out live near you, and it is in the prices and the gossip everywhere
+   * else (tithe.js adjustRow, dialogue.js).
+   *
+   * In a hold, a Syndicate patrol passing an independent hull - one whose
+   * home port is not the Syndicate's, and who is not one of their runners -
+   * leans on her for a cut of what she carries. Most pay. A greedy captain
+   * with the nerve and a gun refuses, and is roughed up: a burst into her
+   * drive housing (a share of her hull, never the kill) and she runs. Once
+   * per collector per PROTECT_EVERY_S, and once per hull per PROTECT_AGAIN_S
+   * - the overboss taxes, he does not rob the same ship twice a day. */
+  var PROTECT_EVERY_S = 900, PROTECT_AGAIN_S = 7 * 86400;
+  var PROTECT_CUT = 0.04, PROTECT_MIN = 100;
+  var ROUGH_UP = 0.3;            // of her hull, and never below a fifth of it
+  function heldHere(sys) { return !!(sys && sys.pirateHeld && sys.heldBy !== 'pirate'); }
+  function independent(sys, st) {
+    var r = st.route;
+    if (!r || r.runner || r.flag === 'outlaw' || r.oneWay || r.joined || r.playerPort || r.outboard) return false;
+    var home = (sys.byId && sys.byId[r.from]) || st.from;
+    return !!home && (home.faction || '') !== 'outlaw' && !home.playerStation;
+  }
+  function protectionFee(st, greed) {
+    return Math.max(PROTECT_MIN, Math.round(cargoValue(st.manifest) * PROTECT_CUT * (0.8 + 0.4 * (greed || 0.5)) / 10) * 10);
+  }
+  /* Does she pay? A seeded answer per hull and visit: greed and nerve
+   * against the gun alongside her. */
+  function refusesProtection(G, sys, v, t) {
+    if (!(C() && C().isArmedNpc && C().isArmedNpc(v))) return false;
+    var d = SA() && SA().dials ? SA().dials(G, sys, v) : null;
+    if (!d) return false;
+    var will = d.greed * d.nerve;
+    return will > 0.25 && hash01('protect|' + (v.liftedFrom ? v.liftedFrom.id : v.id) + '|' + Math.floor(t / PROTECT_AGAIN_S)) < will;
+  }
+  function collect(sys, G, boss, st, t, hooks) {
+    var v = C().liftTrader(sys, st, t);
+    if (!v || !v.live) return null;
+    var bd = SA() && SA().dials ? SA().dials(G, sys, boss) : null;
+    var fee = protectionFee(st, bd && bd.greed);
+    st.route.protectedAt = t;
+    boss.collectedAt = t;
+    G.protectionSeen = G.protectionSeen || {};
+    var star = (G.here && G.here.id) || sys.starId || 'here';
+    var e = G.protectionSeen[star] || { n: 0, refused: 0 };
+    e.n++; e.at = t;
+    if (refusesProtection(G, sys, v, t)) {
+      e.refused++;
+      if (C().npcHull) C().npcHull(v);
+      var hit = Math.min(v.hullHp - 0.2 * v.hullMax, ROUGH_UP * v.hullMax);
+      if (hit > 0) v.hullHp -= hit;
+      v.protection = { by: boss.id, fee: fee, at: t, refused: true };
+      v.threat = boss; v.mode = 'breakoff';
+      if (SA() && SA().feel) { try { SA().feel(G, sys, v, 'hit', t); } catch (er) { /* moods optional */ } }
+      say(G, hooks, boss, nm(boss) + ' asks ' + the(v) + ' for ' + fee + ' cr of protection. She refuses - ' +
+          'a burst into her drive housing, and she runs', 6);
+    } else {
+      v.protection = { by: boss.id, fee: fee, at: t };
+      v.shakenBy = { cop: boss.id, fee: fee, at: t };
+      if (SA() && SA().feel) { try { SA().feel(G, sys, v, 'robbed', t); } catch (er2) { /* moods optional */ } }
+      say(G, hooks, boss, nm(boss) + ' collects ' + fee + ' cr of protection from ' + the(v) +
+          ' - "the overboss thanks you for your custom"', 6);
+    }
+    G.protectionSeen[star] = e;
+    return v;
+  }
+  function protection(sys, G, t, hooks) {
+    if (!heldHere(sys)) return;
+    var pats = sys.patrols || [];
+    for (var j = 0; j < pats.length; j++) {
+      var boss = pats[j];
+      if (!alive(boss) || !boss.live || boss.kind !== 'police' || boss.faction !== 'outlaw') continue;
+      if (boss.hunter || boss.target || boss.hostileToPlayer || boss.mode === 'attack') continue;
+      if (boss.collectedAt !== undefined && t < boss.collectedAt + PROTECT_EVERY_S) continue;
+      if (t < (boss.collectScanAt || 0)) continue;
+      boss.collectScanAt = t + SCAN_EVERY;
+      var Sm = S(), list = Sm.trafficAll ? Sm.trafficAll(sys, t) : [];
+      for (var i = 0; i < list.length; i++) {
+        var st = list[i];
+        if (!st || !st.pos || !st.route || st.phase === 'moored' || st.landed || st.inside) continue;
+        if (V.dist(st.pos, boss.live.pos) > SCAN_KM) continue;
+        if (st.route.protectedAt !== undefined && t - st.route.protectedAt < PROTECT_AGAIN_S) continue;
+        if (!independent(sys, st)) continue;
+        collect(sys, G, boss, st, t, hooks);
+        break;
+      }
+    }
+  }
+
   /* ---- rival empires ---------------------------------------------------- */
   function rivalsOf(G, a, b) {
     var Gx = global.Galaxy;
@@ -1071,6 +1160,7 @@
     runners(sys, G, t, hooks);
     raiders(sys, G, t, hooks);
     law(sys, G, t, hooks);
+    protection(sys, G, t, hooks);
     rivals(sys, G, t, hooks);
     fire(sys, G, t, hooks);
   }
@@ -1115,6 +1205,8 @@
     TURNCOAT_MEMORY_S: TURNCOAT_MEMORY_S, opportunistState: opportunistState, turnTurncoat: turnTurncoat,
     markCrime: markCrime, crimeOf: crimeOf, clearCrime: clearCrime, cargoValue: cargoValue,
     STRAIGHT: STRAIGHT, SHAKE_MIN: SHAKE_MIN, SHAKE_EVERY_S: SHAKE_EVERY_S, MOB_GREED: MOB_GREED, shakeDown: shakeDown,
+    PROTECT_EVERY_S: PROTECT_EVERY_S, PROTECT_AGAIN_S: PROTECT_AGAIN_S, PROTECT_CUT: PROTECT_CUT, ROUGH_UP: ROUGH_UP,
+    protection: protection, collect: collect, independent: independent, refusesProtection: refusesProtection,
     focusOf: focusOf, choosePrey: choosePrey, startRobbery: startRobbery, strip: strip,
     smuggler: smuggler, startPursuit: startPursuit, arrest: arrest, lawful: lawful, empireOf: empireOf,
     gunOf: gunOf, aimOf: aimOf, withdraw: withdraw,

@@ -584,6 +584,14 @@
         items.push(e.mob ? e.name + ' shook down one of the Syndicate\'s own runners. Brave, or stupid. I would not want to be her.'
                          : e.name + ' takes a cut off every hauler she stops. Keep a little cash where she can find it.');
       });
+      /* PROTECTION (aggression.js, slice 5): in a hold, the word is what
+       * the overboss's collectors take off the independents - seen or not. */
+      if (sys && sys.pirateHeld && sys.heldBy !== 'pirate') {
+        var ps = G && G.protectionSeen && G.protectionSeen[star0];
+        items.push(ps && ps.refused && ctx.t - ps.at < 7 * DAY
+          ? 'Somebody refused the collectors last week. They are still patching her drive housing.'
+          : 'The overboss\'s collectors take four in the hundred off every independent hull here. We all pay. Prices go up to cover it.');
+      }
       var Combat = global.Combat;
       if (Combat && Combat.systemCorruption) {
         var corr = Combat.systemCorruption(G, sys), lab = Combat.corruptionLabel(corr);
@@ -1169,7 +1177,10 @@
     id: 'work', label: 'What can you do for me?', repeat: true,
     when: function (ctx) {
       if (!Fx()) return false;
-      if (refusing(ctx)) return 'they do not deal with you';
+      /* Someone the Syndicate is angry with can still buy the peace: that
+       * is the one errand a fixer runs for anyone (slice 5). */
+      var Hn = global.Hunters;
+      if (refusing(ctx) && !(Hn && Hn.settlePrice && Hn.settlePrice(ctx.G))) return 'they do not deal with you';
       return true;
     },
     run: function (ctx) {
@@ -1199,6 +1210,24 @@
     out.push({ id: 'x-papers', sub: 'fixer', label: PAPERS.label, run: PAPERS.run });
     out.push({ id: 'x-look', sub: 'fixer', label: 'Is anyone looking for me?',
       run: function (c2) { return Fx().lookingFor(c2.G, c2.t); } });
+    /* THE GRUDGE (hunters.js, ship AI slice 5): the one way to call off a
+     * hit squad is to have somebody carry the money upstairs. */
+    out.push({ id: 'x-settle', sub: 'fixer', label: 'Can you square me with the people upstairs?',
+      when: function (c2) {
+        var H = global.Hunters;
+        if (!H || !H.settlePrice || !H.settlePrice(c2.G)) return 'nobody upstairs is angry with you';
+        if (c2.G.marks && c2.G.marks.outlaw) return 'you are marked - nobody will carry that message';
+        var pr = H.settlePrice(c2.G);
+        if ((c2.G.ship.credits || 0) < pr) return 'it would cost ' + crs(pr);
+        return true;
+      },
+      run: function (c2) {
+        var r = global.Hunters.settle(c2.G);
+        if (!r.ok) return 'Not today. ' + r.why.charAt(0).toUpperCase() + r.why.slice(1) + '.';
+        c2.state.node = null;
+        return crs(r.price) + '. I will take it upstairs myself. They will call the dogs off - ' +
+               'but they will not forget, and neither should you.';
+      } });
     out.push({ id: 'x-way', sub: 'fixer', label: 'How do I get in with the Syndicate?',
       run: function (c2) { return STANDING.run(c2) + ' ' + Fx().wayIn(c2.G, c2.t); } });
     out.push({ id: 'x-done', sub: 'fixer', label: 'That is all.',

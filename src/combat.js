@@ -6174,6 +6174,9 @@
     /* A loud act, reported: the navy's ledger (hunters.js), which is not
      * the bounty and cannot be paid off. */
     if (global.Hunters && global.Hunters.onReport) global.Hunters.onReport(G, kind, fac, G.t || 0, hooks);
+    /* A wrong against the Syndicate's own reaches the Syndicate, whatever
+     * flag the record says (hunters.js, the grudge: slice 5). */
+    if (global.Hunters && global.Hunters.onWrong) global.Hunters.onWrong(G, kind, victim, G.t || 0, hooks);
     jot(G, 'crime', 'Reported for ' + kind + (victim.name ? ' against the ' + victim.name : '') +
         ' (' + how + ')' + (extra ? ', ' + Math.round(loot) + ' cr taken' : '') +
         '. Bounty with ' + facName(G, fac) + ' now ' + Math.round(G.wanted[fac]) + ' cr');
@@ -7901,6 +7904,10 @@
     /* Who is at the gunnery console (crew.js, 2026-10-25): a marksman
      * widens the cone and hits harder, a cool hand takes heat off. */
     var gy = gunneryOf(s);
+    /* Warm guns (slice 5): a navy officer questioning you about a platform
+     * asks when you last fired, and the emitters answer for you. A mining
+     * laser does not count: it cuts rock, and its log says so. */
+    if (!gun.mining) G.lastFiredAt = t;
     var cands = targetsInRange(sys, G, t, gun.range + 1);
     for (var i = 0; i < cands.length; i++) {
       var c = cands[i];
@@ -8723,6 +8730,10 @@
       /* Busy with somebody else (aggression.js fires those guns). */
       if ((sp.target || sp.defendTarget) && !sp.hostileToPlayer) continue;
       if (!isArmedNpc(sp)) continue;                    // shuttles carry nothing
+      /* SUBDUING, NOT KILLING (milsats.js, slice 5): a warship that ordered
+       * you to heave to for questioning fires to disable - and holds fire
+       * once your hull is down, keeping you at gunpoint until you stop. */
+      if (sp.subdue && s.hullMax > 0 && s.hullHp / s.hullMax < (global.Milsats ? global.Milsats.SUBDUE_FLOOR : 0.35)) continue;
 
       /* The Syndicate's own police patrol — not a loitering pirate, which
        * stays on NPC_GUN like it always has — carries what its own
@@ -8741,7 +8752,7 @@
       var d = V.dist(sp.live.pos, s.pos);
       /* A cop with a fugitive in reach and a missile left: away it goes,
        * when the guns are not enough - running, or the shield still up. */
-      if (cop && sp.hostileToPlayer && d <= POLICE_MISSILE.range) {
+      if (cop && sp.hostileToPlayer && !sp.subdue && d <= POLICE_MISSILE.range) {
         if (sp.missilesLeft === undefined) sp.missilesLeft = POLICE_MISSILE.rack;
         var running = d > gun.range * 0.7;
         if (sp.missilesLeft > 0 && t >= (sp.missileAt || 0) &&

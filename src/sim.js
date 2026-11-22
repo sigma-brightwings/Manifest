@@ -3042,12 +3042,47 @@
     return railState(spec, sys, t);
   }
 
+  var ESCORT_OFF_KM = 6, ESCORT_SIDE_KM = 2.5;
+  function escortHost(spec, sys) {
+    if (spec._host !== undefined && spec._hostOf === sys) return spec._host;
+    var h = null, tr = sys.traffic || [];
+    for (var i = 0; i < tr.length; i++) if (tr[i].id === spec.escorting) { h = tr[i]; break; }
+    spec._host = h; spec._hostOf = sys;
+    return h;
+  }
+  function escortState(spec, sys, t, own) {
+    var host = escortHost(spec, sys);
+    if (!host || host.dead) return own;
+    var hs = trafficState(host, sys, t);
+    if (!hs || !hs.pos) return own;
+    var fwd = hs.fwd || { x: 1, y: 0, z: 0 }, right = hs.right || { x: 0, y: 1, z: 0 };
+    /* Which side she keeps: a seeded half, so two escorts on one charge
+     * (a merc and a cutter) do not sit on top of each other. */
+    var side = (spec.id.charCodeAt(spec.id.length - 1) % 2) ? 1 : -1;
+    var out = {};
+    for (var k in own) out[k] = own[k];
+    out.pos = V.add(hs.pos, V.add(V.scale(fwd, -ESCORT_OFF_KM), V.scale(right, side * ESCORT_SIDE_KM)));
+    out.vel = V.clone(hs.vel);
+    out.fwd = V.clone(fwd); out.up = V.clone(hs.up || { x: 0, y: 0, z: 1 }); out.right = V.clone(right);
+    out.phase = hs.phase; out.from = hs.from; out.to = hs.to;
+    if (hs.throttle !== undefined) out.throttle = hs.throttle;
+    return out;
+  }
+
   /* Where the responder's own timetable puts it — the ordinary rail,
    * split out so the rescue leg can read its starting point off it. */
   function railState(spec, sys, t) {
     var st;
     if (spec.rail.type === 'route') {
       st = trafficState(spec.rail.route, sys, t);
+      /* AN ESCORT KEEPS STATION ON HER CHARGE (ship AI slice 5). She used
+       * to fly her own copy of the charge's timetable, a minute behind on
+       * a rail shaped by her own drive - which measured a median 16,500 km
+       * off her charge and up to 200,000 (mercenaries the same, 18,700).
+       * Now her place IS the charge's place, ESCORT_OFF_KM astern and a
+       * little to one side in the charge's own frame: alongside by
+       * construction, and still a pure function of the clock. */
+      if (spec.escorting && st) st = escortState(spec, sys, t, st);
     } else if (spec.rail.type === 'port') {
       /* A boat that lives at a port, and is nowhere else: the temporary
        * tender a system without one launches from its nearest dock. */
@@ -3260,8 +3295,18 @@
     /* A responder on a rescue leg wakes INTO the rescue, not into the
      * shadowing every other tender does — otherwise the handoff would turn
      * an ambulance into a bystander two thousand kilometres out. */
+    /* An escort (generate.js buildEscorts, ship AI slice 5) is on duty: a
+     * heavy riding with a runner, a cutter riding with a liner. She keeps
+     * an eye on you, like the mercenaries do, rather than leaving her
+     * charge to scan you - and a Syndicate heavy in lawful space keeps her
+     * head down. */
+    /* And a warship answering a platform's alarm (milsats.js) wakes still
+     * on that job: flying to the scene, or to you if she has ordered you
+     * to heave to. */
     spec.mode = spec.rescue ? 'rescue'
+              : spec.questioning ? (spec.mode || 'respond')
               : spec.kind === 'pirate' ? 'intercept'
+              : spec.escorting ? 'shadow'
               : spec.kind === 'police' ? 'inspect' : 'shadow';
     /* THE OVERBOSS'S MARK (tithe.js). In a hold you have paid for, his
      * pirates and his own patrols wake, look, and leave you be. */

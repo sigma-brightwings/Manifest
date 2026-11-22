@@ -32,6 +32,8 @@ var Sim = require('../src/sim.js');
 var W = require('../src/weather.js');
 var GL = require('../src/gl.js');
 var Sv = require('../src/survey.js');
+require('../src/gravity.js');
+var In = require('../src/interior.js');     // slice 3: the anomalies are the interior's bodies
 var V = global.V;
 
 var pass = 0, fail = 0;
@@ -98,8 +100,9 @@ console.log('--- the field map ---');
   check('the map is cached per world', again === mm);
   var dead = find(function (b, sy) {
     if (b.magnetosphere || b.kind !== 'planet') return false;
-    var m = Sv.groundMap(b, sy);
-    return m && m.grade.ores;
+    var m = Sv.groundMap(b, sy), I = In.of(b, sy);
+    /* Ore a coil can hear: a magnetic body above the Curie depth. */
+    return m && m.grade.ores && I && I.bodies.some(function (x) { return x.magnetic && x.kind === 'province'; });
   });
   if (dead) {
     var dm = Sv.magMap(dead.b, dead.sys);
@@ -107,7 +110,13 @@ console.log('--- the field map ---');
           dead.b.name + ' max ' + dm.max.toFixed(2));
   } else check('a dead rock with ore was found', false);
   var none = find(function (b) { return !b.magnetosphere && b.type === 'iceGiant'; }) ||
-             find(function (b, sy) { var m = Sv.groundMap(b, sy); return !b.magnetosphere && (!m || !m.grade.ores); });
+             find(function (b, sy) {
+               /* Silent rock now means nothing magnetic in it at all, and no
+                * old field frozen into its crust (slice 3). */
+               var I = In.of(b, sy);
+               return !b.magnetosphere && I && !(I.remanence > 0 && !I.dynamo) &&
+                      !I.bodies.some(function (x) { return x.magnetic; });
+             });
   if (none) {
     var nm = Sv.magMap(none.b, none.sys);
     check('no field and no ore reads nothing', nm.max === 0, none.b.name);

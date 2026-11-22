@@ -60,6 +60,7 @@ console.log('--- who flies them ---');
 var seeds = ['kawartha', 'alpha', 'beta'];
 var held = 0, withHeavy = 0, mobCops = 0, mobCopsBad = 0, lawCopsBad = 0;
 var heavyOutside = 0, heavyNotPolice = 0, heldGarrison = 0, pirates = 0, piratesNotOutlaw = 0;
+var escHeavy = 0, escHeavyBad = 0;
 var copL = { s: 0, m: 0, l: 0 }, hvL = { s: 0, m: 0, l: 0 };
 var sampleHeavy = null, sampleSys = null, sampleSeed = null, sampleOpts = null;
 seeds.forEach(function (seed) {
@@ -73,6 +74,14 @@ seeds.forEach(function (seed) {
     (sys.patrols || []).forEach(function (p) {
       if (p.kind === 'pirate') { pirates++; if (p.faction !== 'outlaw') piratesNotOutlaw++; }
       if (p.kind === 'navy' && !p.passing && sys.pirateHeld) heldGarrison++;
+      /* A heavy riding with a runner (generate.js buildEscorts, ship AI
+       * slice 5) is in lawful space by design: Astra chose "heavies ride
+       * with runners", and runners work lawful fences. Counted apart. */
+      if (p.heavy && p.escorting) {
+        escHeavy++;
+        if (p.kind !== 'police' || p.faction !== 'outlaw' || p.hullClass !== 'enforcer_heavy') escHeavyBad++;
+        return;
+      }
       if (p.heavy) {
         any = true;
         if (!sys.pirateHeld) heavyOutside++;
@@ -97,6 +106,7 @@ check('nobody else\'s police changed hull or name', lawCopsBad === 0);
 check('heavies fly in holds and only in holds', withHeavy > 0 && heavyOutside === 0,
       withHeavy + ' of ' + held + ' holds');
 check('a heavy is rarer than a hold', withHeavy < held);
+check('a heavy riding with a runner is the mob\'s heavy too', escHeavy > 0 && escHeavyBad === 0, escHeavy + ' escorts');
 check('a heavy is the mob\'s police, never a navy', heavyNotPolice === 0);
 check('heavies come in every size', hvL.s > 0 && hvL.m > 0 && hvL.l > 0, 's' + hvL.s + ' m' + hvL.m + ' l' + hvL.l);
 check('still no naval garrison in any hold', heldGarrison === 0);

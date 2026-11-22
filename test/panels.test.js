@@ -164,6 +164,14 @@ console.log('no name over a name');
   /* At the right edge the name goes to the other side rather than off the glass. */
   var edge = R.placeHoloLabels([{ x: W - 40, y: 500, tw: 140, bh: 26 }], [], W, H)[0];
   check('at the edge it goes the other way, on the glass', edge.x + 140 <= W && edge.x < W - 40);
+  /* A ship scanning you wears a second, outer set of brackets: her name
+   * keeps clear of those too, and a neighbour's name keeps off them. */
+  var scan = R.placeHoloLabels([{ x: 900, y: 500, tw: 140, bh: 26, pad: 7 }], [], W, H)[0];
+  check('scanning you: the name clears the outer brackets', scan.x >= 900 + 13 + 7 + 3, scan.x);
+  var pair = R.placeHoloLabels([{ x: 900, y: 500, tw: 60, bh: 26, pad: 7 }, { x: 860, y: 520, tw: 50, bh: 26 }], [], W, H);
+  var outer = { x0: 900 - 20, x1: 900 + 20, y0: 480, y1: 520 };
+  check('and no neighbour\'s name lands on them', !(pair[1].box.x0 < outer.x1 && pair[1].box.x1 > outer.x0 && pair[1].box.y0 < outer.y1 && pair[1].box.y1 > outer.y0),
+        JSON.stringify(pair[1].box));
 })();
 
 console.log('\n' + pass + ' passed, ' + fail + ' failed');

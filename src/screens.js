@@ -7770,7 +7770,12 @@
   /* Where a display column lands on screen, taking the short way round. */
   function scanSX(vw, mapX, mapW, dc) {
     var dx = ((dc - vw.col0) % vw.nLon + vw.nLon) % vw.nLon;
-    if (dx > vw.nLon - vw.vc) dx -= vw.nLon;          // just off the left edge
+    /* Past the right edge by more than half the hidden part: it is nearer
+     * to (just off) the left. The old test, dx > nLon - vc, was dx > 0 at
+     * 1x, which threw every column but the first off the map: no deposit
+     * glyphs, no meridians, no field lines at 1x (found 2026-11-22 when the
+     * magnetic highs would not draw). */
+    if (dx > vw.vc + (vw.nLon - vw.vc) / 2) dx -= vw.nLon;
     return mapX + dx * (mapW / vw.vc);
   }
   function scanSY(vw, mapY, mapH, dr) { return mapY + (dr - vw.row0) * (mapH / vw.vr); }
@@ -7859,8 +7864,11 @@
         ru = (rx + 0.5) / n * 2 - 1; rv = (ry + 0.5) / n * 2 - 1;
         rb = Math.min(RB - 1, Math.floor(Math.sqrt(ru * ru + rv * rv) * RB));
         var ref = rN[rb] > 0 ? rSum[rb] / rN[rb] : 0;
-        lat[ri] = Math.max(0, sl.anom[ri] - ref);
-        if (lat[ri] > aHi) aHi = lat[ri];
+        /* SIGNED (planetary interiors slice 2): a low - buried ice, salt,
+         * mass that is not there - is kept, not clipped to nothing, and
+         * drawn cold below. Both scaled to the larger of the two. */
+        lat[ri] = sl.anom[ri] - ref;
+        if (Math.abs(lat[ri]) > aHi) aHi = Math.abs(lat[ri]);
       }
     }
 
@@ -7872,11 +7880,14 @@
         if (isNaN(sl.g[k])) { d[o + 3] = 0; continue; }
         var ink = gravWellInk((sl.g[k] - gLo) / (gHi - gLo));
         /* The anomaly, on its own scale, added as heat. */
-        var a = aHi > 0 ? lat[k] / aHi : 0;
-        a = Math.pow(Math.max(0, a), 0.6);
-        d[o]     = Math.min(255, ink[0] + Math.round(230 * a));
-        d[o + 1] = Math.min(255, ink[1] + Math.round(150 * a * a));
-        d[o + 2] = Math.min(255, ink[2] - Math.round(60 * a));
+        var sa = aHi > 0 ? lat[k] / aHi : 0;
+        var a = Math.pow(Math.max(0, sa), 0.6);
+        /* A low goes cold: violet into the blue, the well darkened under
+         * it - the opposite of the warm heat a dense body raises. */
+        var lo = Math.pow(Math.max(0, -sa), 0.6);
+        d[o]     = Math.max(0, Math.min(255, ink[0] + Math.round(230 * a) + Math.round(70 * lo)));
+        d[o + 1] = Math.max(0, Math.min(255, ink[1] + Math.round(150 * a * a) - Math.round(90 * lo)));
+        d[o + 2] = Math.max(0, Math.min(255, ink[2] - Math.round(60 * a) + Math.round(110 * lo)));
         d[o + 3] = 255;
       }
     }
@@ -7997,7 +8008,9 @@
       ctx.strokeStyle = 'rgba(0,0,0,' + (a2 * 0.75).toFixed(2) + ')';
       ctx.lineWidth = hot2 ? 4.5 : 3.5;
       ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = hot2 ? 'rgba(255,186,110,' + a2.toFixed(2) + ')'
+      /* A low (slice 2) rings cold, as it is drawn cold on the disc. */
+      ctx.strokeStyle = c.low ? 'rgba(176,156,255,' + a2.toFixed(2) + ')'
+                      : hot2 ? 'rgba(255,186,110,' + a2.toFixed(2) + ')'
                              : 'rgba(190,225,245,' + (a2 * 0.85).toFixed(2) + ')';
       ctx.lineWidth = hot2 ? 2.2 : 1.5;
       ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
@@ -8051,7 +8064,11 @@
       cy2 += 15;
       ctx.fillStyle = cc.explained ? MFD_DIM : '#ffb978';
       var head = (cc.explained ? '  ' : '! ') +
-                 (cc.kind === 'buried' ? 'buried' : cc.kind === 'fissile' ? 'hotspot' : 'province');
+                 /* Ice and salt are "buried" like any body no spectrometer
+                  * sees: the reading says low, the name is the player's
+                  * to put on it (Astra's decision 2). */
+                 (cc.kind === 'buried' || cc.kind === 'ice' || cc.kind === 'salt' ? 'buried'
+                  : cc.kind === 'fissile' ? 'hotspot' : 'province');
       ctx.fillText(head, pxl, cy2);
       ctx.fillStyle = cc.explained ? 'rgba(140,170,195,0.8)' : '#e8d8b8';
       var line = Gr.describe(cc);
@@ -8070,8 +8087,18 @@
     }
     if (!contacts.length) {
       ctx.fillStyle = MFD_DIM;
-      ctx.fillText('Nothing over ' + res.mgal + ' mGal. A finer instrument would', pxl, cy2 + 16);
-      ctx.fillText('read deeper into the same rock.', pxl, cy2 + 30);
+      /* A giant (slice 2) has no rock to hold a lump, and the top grade has
+       * nothing finer to recommend: say what is true for each. */
+      if (Gr.isGiant && Gr.isGiant(body)) {
+        ctx.fillText('No rock here to hold a lump: a giant is gas and', pxl, cy2 + 16);
+        ctx.fillText('ice over a core. Only the well itself reads.', pxl, cy2 + 30);
+      } else if (lvl >= 4) {
+        ctx.fillText('Nothing over ' + res.mgal + ' mGal. This rock is quiet,', pxl, cy2 + 16);
+        ctx.fillText('as far down as any instrument can read.', pxl, cy2 + 30);
+      } else {
+        ctx.fillText('Nothing over ' + res.mgal + ' mGal. A finer instrument would', pxl, cy2 + 16);
+        ctx.fillText('read deeper into the same rock.', pxl, cy2 + 30);
+      }
     }
     ctx.restore();
 
@@ -8079,7 +8106,8 @@
     ctx.save();
     ctx.font = 'italic 10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(255,185,120,0.75)';
-    ctx.fillText('! something heavy your survey kit cannot name', pxl, bottom - 34);
+    /* Not "heavy" any more (slice 2): a low is mass that is missing. */
+    ctx.fillText('! something your survey kit cannot name - a high is mass, a low is mass missing', pxl, bottom - 34);
     ctx.restore();
     return true;
   }
@@ -8228,6 +8256,27 @@
         if (fcid && dp0.cid !== fcid) continue;
         scanGlyph(ctx, dp0.cid, sxc(scanX(dp0.lo, flip, nLon) + 0.5), syr(nLat - 0.5 - dp0.la),
                   gsz, SCAN_INK[dp0.cid] || '#7dffb0');
+      }
+    }
+    /* THE MAGNETOMETER'S HIGHS (interiors slice 3), ringed where the list
+     * names them: warm for one nothing aboard explains, as on the gravity
+     * slice. A broad province gets a wide faint ring the size of its patch
+     * so it does not read as a pinpoint. */
+    if (ui.layer !== 'res' && hasMag && rec && Sv.magContacts) {
+      var mcs0 = Sv.magContacts(body, G.sys, rec, lvl);
+      for (var mi = 0; mi < mcs0.length; mi++) {
+        var mc0 = mcs0[mi], MX = sxLon(mc0.lon), MY = syLat(mc0.lat);
+        var mcol = mc0.explained ? 'rgba(190,225,245,0.85)' : 'rgba(255,186,110,0.95)';
+        scanHalo(ctx, function () { ctx.arc(MX, MY, 6, 0, 6.2832); }, mcol, mc0.explained ? 1.4 : 2);
+        if (mc0.broad) {
+          var rpx = Math.max(10, (mc0.widthKm / 2) / (2 * Math.PI * (body.radius || 1)) * nLon * cw);
+          ctx.save(); ctx.setLineDash([3, 4]);
+          /* Wider east-west toward the poles, as the patch itself is on
+           * this projection: a circle there would undersell it. */
+          var rpxX = rpx / Math.max(0.2, Math.cos(mc0.lat));
+          scanHalo(ctx, function () { ctx.ellipse(MX, MY, rpxX, rpx, 0, 0, 6.2832); }, mcol, 1);
+          ctx.restore();
+        }
       }
     }
 
@@ -8436,7 +8485,12 @@
       ctx.fillStyle = '#ffd36b';
       ctx.fillText('X ' + show.x + '   Y ' + (latDeg >= 0 ? '+' : '') + latDeg.toFixed(1) + '°', mapX, ry);
       var parts = [], gl = [];
-      if (rec && Sv.magRead(rec, show.cell)) parts.push('field ' + Sv.fieldAt(body, G.sys, show.cell).toFixed(2));
+      if (rec && Sv.magRead(rec, show.cell)) {
+        parts.push('field ' + Sv.fieldAt(body, G.sys, show.cell).toFixed(2));
+        /* The part of it that is the rock, not the core: what a prospector reads. */
+        var mmc = Sv.magMap(body, G.sys), an = mmc && mmc.anom ? mmc.anom[show.cell] * (Sv.NT_PER || 50000) : 0;
+        if (an >= 50) parts.push('+' + Math.round(an) + ' nT');
+      }
       else if (hasMag) parts.push('field: not read');
       if (cellsR && cellsR[show.cell]) {
         gl = Sv.groundAt(body, G.sys, show.cell).filter(function (g) {
@@ -8592,7 +8646,51 @@
       ctx.fillText((mmx ? mmx.max : 0).toFixed(2), px2 + panelW - 10, y + 12);
       ctx.textAlign = 'left';
       y += 28;
-      if (mmx && !mmx.dipole) { ctx.fillText('no dipole: only ore-province anomalies', px2 + 10, y); y += 14; }
+      if (mmx && !mmx.dipole) { ctx.fillText('no dipole: only what the crust holds', px2 + 10, y); y += 14; }
+      if (mmx && mmx.remanence) { ctx.fillText('remanent crust: old field frozen in the rock', px2 + 10, y); y += 14; }
+    }
+
+    /* THE MAGNETIC LAYER LISTS WHAT THE COIL HEARD, where the others list
+     * deposits: the gravimeter's list has a sibling (interiors slice 3). */
+    if (ui.layer === 'mag' && hasMag) {
+      y += 14;
+      ctx.fillStyle = '#5d8fa4';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var mcs = Sv.magContacts ? Sv.magContacts(body, G.sys, rec, lvl) : [];
+      var mUn = mcs.filter(function (c) { return !c.explained; }).length;
+      ctx.fillText('MAGNETIC HIGHS  ' + mcs.length + (mUn ? '  ·  ' + mUn + ' unexplained' : ''), px2 + 10, y);
+      y += 6;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      if (!mcs.length) {
+        y += 14; ctx.fillStyle = '#4f7d90';
+        ctx.fillText(rec && rec.covM >= 0.05 ? 'nothing over ' + Sv.MAG_FLOOR_NT + ' nT read yet' : 'not enough mapped', px2 + 10, y);
+      }
+      var mRows = Math.max(2, Math.floor((bottom - 70 - y) / 28));
+      mcs.slice(0, mRows).forEach(function (mc) {
+        y += 16;
+        var mla = Math.floor(mc.cell / nLon), mlo = mc.cell % nLon;
+        var MXl = scanX(mlo, flip, nLon), MYl = mla - 89.5;
+        ctx.fillStyle = mc.explained ? '#9fc4d4' : '#ffb978';
+        ctx.fillText((mc.explained ? '  ' : '! ') + (mc.broad ? 'province' : 'buried'), px2 + 10, y);
+        ctx.fillStyle = '#7fd6c0';
+        ctx.fillText('X' + MXl + ' Y' + (MYl >= 0 ? '+' : '') + Math.round(MYl), px2 + 150, y);
+        y += 12;
+        ctx.fillStyle = mc.explained ? 'rgba(140,170,195,0.85)' : '#e8d8b8';
+        ctx.fillText(clipText(Sv.describeMag(mc), 40), px2 + 22, y - 1);
+        (function (d, la_, lo_) {
+          hot(px2 + 6, y - 28, panelW - 12, 30, function () {
+            ui.pin = { key: T.key, cell: d.cell, x: scanX(lo_, flip, nLon) };
+            ui.cx = scanX(lo_, flip, nLon) + 0.5;
+            ui.cy = nLat - 0.5 - la_;
+            if (ui.sweep === 2) ui.sweep = 1;
+          }, 'pin this high');
+        })(mc, mla, mlo);
+      });
+      ctx.font = 'italic 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(255,185,120,0.75)';
+      ctx.fillText('! a high your survey kit cannot name', px2 + 10, bottom - 26);
+      ctx.restore();
+      return;
     }
 
     y += 14;

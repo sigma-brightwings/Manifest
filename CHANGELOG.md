@@ -40,6 +40,207 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-22, a stale test: escorts were counted as patrols)
+
+The full suite on ship AI slice 5 (full-suite5) was 143 of 144 green. The red one was economy.test.js, "the most permissive systems are patrolled thinner than the strictest". It counted every police-kind ship in `sys.patrols`, and slice 5's escorts are stored there too. Across its 150 seeds, the strictest third has 2.41 real patrols per faction and the most permissive 1.73, so the rule still holds. But escorts run 0.92 per faction against 2.05: Syndicate heavies ride with runners, and the permissive systems are the busy ones. That tipped the total over. The test now leaves out ships that are `escorting`, since they go where their charge goes rather than patrolling. economy.test.js: 208 pass. No game code changed.
+
+### Changed (2026-11-22, planetary interiors slice 3: the magnetometer hears the interior)
+
+The plan's slice 3 (claude/planetary-interiors.md). The magnetic anomaly used to be the ore-grade map: every metal province was a bump, whatever it was made of and however deep. It is now built from the interior's bodies (`survey.js magSources`, `magMap`).
+
+- **Only what can hold a magnetisation is heard.** Iron reads full strength, sulphide half, the rare-metal mixes faintly (0.15). Fissile, ice and salt are silent. Nothing below the Curie depth is heard, because rock that hot can't stay magnetised.
+- **A province** is ore spread through the crust over its whole patch, so it reads as a broad rise the width of the patch. An iron province reads what the old ore anomaly read at its centre.
+- **A buried body** is a lump. Its high is about as wide as it is deep, and its strength falls as (size/depth)³, the dipole law. A deep body is much quieter to a coil than to a gravimeter, which loses only the square. A high is never narrower than one cell, so it can't fall between cell centres.
+- **Remanence.** On a world whose dynamo has died, 3–7 broad, faint patches of old field are frozen into the crust (like Mars's southern highlands). No ore lies under them. They are on the map but never in the contact list.
+- **Measured before switching** (tools/measure-magnetics.js, 120 systems, 2,177 worlds with ore). Of 7,598 province highs:
+  - 3,564 keep their strength (or never showed);
+  - 3,851 weaken, mostly rare-metal and sulphide provinces;
+  - 183 vanish, all of them below the Curie depth on hot worlds.
+  Of 2,918 buried bodies, 924 now raise a high of 500 nT or more, which the old map never showed.
+- **The magnetometer has a contact list**, beside the gravimeter's (`Survey.magContacts`, `describeMag`). On the MAGNETIC layer it replaces the deposits list as MAGNETIC HIGHS. It shows readings only (decision 2): "+5.2k nT · about 68 km down" for a lump, judged from the width of its high; "+11.4k nT · broad, 190 km wide, shallow" for a province. It never names a composition.
+  - It lists only highs over ground the coil has swept, loudest first, and nothing under 100 nT.
+  - A province the spectrometer also reads is explained, as on the gravimeter. A buried body never is, and gets a "!" and a warm colour.
+  - Click a row to pin it and walk the map there.
+- **Rings on the map** mark each high: warm if unexplained. A province also gets a dashed ellipse the size of its patch, stretched east–west toward the poles as the patch itself is on this projection.
+- **The cell readout** adds the rock's own part of the field, e.g. "+3400 nT", after the total.
+- **The panel** says "no dipole: only what the crust holds", and "remanent crust: old field frozen in the rock" where that applies.
+- **Units.** 1.0 on the field scale is 50,000 nT (`Survey.NT_PER`), an Earth-strength polar field.
+
+**Fixed on the way: the scanner map at 1x lost everything drawn on top of it.** `scanSX` takes the short way round the seam. Its test, `dx > nLon - vc`, becomes `dx > 0` when the whole world is in view, so every column but the first was thrown off the left edge. At 1x that meant no deposit glyphs, no meridians, no longitude labels and no field lines, and it had been that way since 1.3.1. It showed up when the magnetic highs wouldn't draw. Now a column moves to the left only when it is nearer there than off the right edge.
+
+**Saves.** Nothing stored changes: the field is computed from the world, and a magnetometer record still marks only which cells were swept. An old save sees the new highs over ground it has already flown.
+
+**Tests.**
+- New magnetics.test.js (22 checks, ground group):
+  - building the field moves nothing, and the same seed gives the same field;
+  - every source is magnetic and above Curie; ice, salt, fissile and giants are silent;
+  - a buried body reads as (size/depth)³, and its high stands over it (145 of 145);
+  - deeper bodies of the same make are quieter;
+  - remanence appears only where the dynamo has died, and is never a contact;
+  - contacts are readings only, loudest first, none under the floor, none over unswept ground, and buried ones are never explained.
+- magnetometer.test.js loads the interior. A "dead rock with anomalies" is now one with a magnetic province; a "silent" world is one with nothing magnetic in it and no remanence.
+
+**Seen in the real build** (tools/probe-maghighs.js, X:\Shared_AI\maghighs). Mirven I b, which has no dipole, shows six highs: five provinces and one unexplained buried body at +5.2k nT, about 68 km down. Mirven IV shows its remanent patches as faint blue washes under two province highs.
+
+### Changed (2026-11-22, planetary interiors slice 2: the gravimeter reads lows, and giants hold no lumps)
+
+The plan's slice 2 (claude/planetary-interiors.md). Astra's decision 3: buried ice and salt read as dips.
+
+- **Gravity is signed** (`gravity.js anomAt`, `surfaceSignal`, `slice`, `contacts`). A body lighter than the rock around it is a mass deficit: its reading is negative, and a contact carries `low`. The instrument's sensitivity is to the size of a reading, so a −131 mGal low shows on a grade that reads to 70. Contacts are ordered by size, high or low.
+- **Light bodies.** `Gravity.lightBodies`, all hashes, no draws:
+  - **Buried ice:** the poleward patches the water map already laid on dry worlds, each now with a depth (0.5–12 km) and a size.
+  - **Salt:** 0–2 evaporite bodies under desert worlds only, 1–20 km down.
+  - Never inside an ice shell, where ice in ice is no contrast.
+  - Over 24 systems: 156 ice and 27 salt bodies, and 181 of them read as lows at grade 4.
+- **A reading, not a verdict** (decision 2). The line says "-131 mGal low, 8.3 km down, 10 km across, needs a drilling team", and its head says "buried", the same as any body no spectrometer can see. The game never says "ice".
+- **What can explain a low.** A shallow ice low is explained by a kit that reads water, because the water map shows that patch. Deeper ice and salt are never explained.
+- **The slice shows dips.** The lateral-anomaly picture used to clip everything below zero. Lows now draw cold, violet darkening into the blue well, the opposite of the warm heat a dense body raises. Their contact rings are violet.
+- **The footnote** no longer says "something heavy": a high is mass, a low is mass missing.
+- **A giant holds no lumps.** The ground map lays provinces and buried bodies on every world, and the gravimeter used to pass them all on, so it read ore inside a gas giant's hydrogen. Giants now have no gravity sources, matching the interior. A giant's page says so: "No rock here to hold a lump." At grade 4, an empty world no longer suggests a finer instrument.
+- **One list.** `Interior.of` now takes its masses, ice and salt included, straight from `Gravity.sourcesOf`, with the same hashes slice 1 used. The interior and the gravimeter can't disagree about what is down there.
+
+**Tests.**
+- interior.test.js gains 8 checks (28 in all):
+  - giants have no sources;
+  - ice and salt are sources, salt only under deserts, and never in an ice shell;
+  - lows read negative and are flagged;
+  - the line says "low";
+  - shallow ice is explained by a water reading, salt and deep ice never;
+  - the slice dips below zero (-36.7 mGal deepest in the sample);
+  - the interior's list is exactly the gravimeter's.
+- gravity.test.js: "nothing below the rung's sensitivity" now means the size of the reading, high or low (44 pass).
+
+**Seen in the real build** (tools/probe-gravlows.js, X:\Shared_AI\shots-gravlows). On Mirven II b the strongest low reads −131 mGal, and its violet ring sits at the limb. Mirven VI, a gas giant, reads nothing.
+
+### Added (2026-11-22, the ship scanning you is highlighted)
+
+Astra: "when scanned by another ship, like a warden, that ship should be highlighted."
+
+- **On the glass.** A patrol coming in to scan you (in inspect, not yet done, within 300 km), or a warship that has ordered you to heave to, is boxed in amber with a second set of brackets outside the first that pulse. Its label reads "SCANNING YOU · interceptor · 41.95 km". Amber because it is neither friendly green nor hostile red: it is the one ship looking at you.
+- **In the contacts panel** it reads SCANNING YOU, or HEAVE TO ORDERED, in amber.
+- **Labels keep clear of the outer brackets** (`Render.placeHoloLabels` takes a `pad`), both its own name and a neighbour's.
+- Tests: panels.test.js gains two checks (15).
+
+### Fixed (2026-11-22, the contacts panel: rows that ran into each other, and everyone "escorting")
+
+- **The panel is as wide as its longest row.** "The Notary (Syndicate enforcer) 2,500 km ATTACKING" pushed its status onto a second line, which the panel's height did not allow for, so it ran into the row below. The panel now takes the width its rows need, from 380 px up to half the glass.
+- **Everyone was "escorting".** That was the last word for any awake ship with no other status, so a port tug and a navy cutter answering an alarm both said it. A tug or tender now says "standing by", a navy ship on a job says what the job is, and anything else says "keeping watch". Mercenaries and the new escorts still say "escorting".
+
+### Added (2026-11-22, ship AI slice 5: navy and Syndicate doctrine)
+
+claude/ship-ai-profiles.md section 7, item 5. Astra's calls:
+- protection: "both", live near you and in the prices and gossip;
+- escorts: heavies ride with runners, and the navy escorts liners;
+- grudges: "a hit squad comes";
+- the navy at a hit platform: "subdue and question anyone near the platform who could've done it. They will attempt to disable, but they will not hesitate to escalate their use of force if resisted."
+
+**Escorts** (`generate.js buildEscorts`, its own seeded stream, so nothing else in a system moves):
+- **Runners.** A Syndicate runner working a lawful fence takes a heavy with her 15% of the time in a clean system, up to 40% in a crooked one.
+- **Liners.** In an empire system with law in its sky, 30% of liner runs fly with an escort: the navy's own warship if the system has a navy, otherwise a police interceptor ("Shepherd 14").
+- **The outlaw cap still holds.** Outlaws never outnumber the law in lawful space, so liners get their escorts first and heavies ride only within what that leaves. Names never repeat: once a name list runs out, the next is numbered ("The Underboss 2").
+- **An escort and her charge are one flight** (`ShipAI.orgOf`, any `escorting`), and a woken escort keeps watch rather than leaving her charge to scan you.
+
+**Escorts actually alongside** (`Sim.railState` / `escortState`). An escort used to fly her own copy of her charge's timetable, a minute behind, on a path shaped by her own drive. Measured over 30 systems, that put her a median **16,500 km** off her charge and up to 200,000 km. The existing mercenary escorts had the same problem (median 18,700 km). An escort's position is now her charge's position at that moment, 6 km astern and 2.5 km to one side: **7 km every time**, still worked out from the clock. This also fixes the mercenaries.
+
+**The hit squad** (`hunters.js`, a third ledger, `G.grudge`, saved):
+- **What starts it.** A REPORTED wrong against Syndicate traffic (their runners, whatever her papers say, plus heavies, enforcers and their systems' traffic) adds points: hold-up 20, assault 12, kill 40, killing a heavy 60. An unidentified hull (the shroud) gives them no name.
+- **When they come.** At 40 points the word goes upstairs ("That was Syndicate traffic. Somebody upstairs will hear about it."). Two days later, in **any** system, half an hour after you arrive and once you are out of dock, two enforcers drop out of slipspace 2,500 km behind you: "Somebody upstairs would like a word. They are not here for a tithe." Three come at 120 points. Names: The Auditor, The Notary, Final Notice, Courtesy Call, Account Closed…
+- **It never fades.** Leave a system and the next one sends them again. Kill them and, if it is reported, the grudge grows.
+- **A fixer squares it** ("Can you square me with the people upstairs?") for 3,000 cr + 150 per point. That clears the grudge and their warrant, but not your standing with them. A fixer who otherwise won't deal with you will still take this one errand. Nobody carries the message for a marked pilot. The fixer's "is anyone looking for me?" now covers it.
+
+**The navy answers a platform** (`milsats.js`):
+- **The alarm.** A defence platform that is hit, or destroyed, raises an alarm. The nearest warship answers, the navy's own first even when a police cutter is closer, and flies to it.
+- **The order.** At the scene she looks for anyone within 3,000 km. Finding you: "You there - heave to for questioning about the attack on DP-1 Coldwater Relay." Hold position and she comes to you. Gone, and she finds nobody and stands down.
+- **The questions.** Inside the scan's own range (60 km), matched for 4 s:
+  - transponder on, they already know it was you, and fine you on the spot if you can pay;
+  - running silent, guns fired within 15 minutes of the attack are "still warm", and you are charged by name;
+  - cold guns, and you go with a note on the file.
+- **Subdue.** Run (drive lit and the range opening for 15 s, or 25 km further off than when she called) and she opens disabling fire: guns, no missiles. She holds fire once your hull is under 35%, and comes in to talk at gunpoint.
+- **Lethal.** Fire on her at any point and the gloves come off.
+- **The platform holds its fire** while she has you under orders, unless you shoot it again.
+- **Warm guns.** Firing a weapon now stamps `G.lastFiredAt`. A mining laser doesn't count.
+- **Not yet:** questioning NPCs found near a platform. Today only your guns can hit one.
+
+**Protection** (`aggression.js protection`, `tithe.js`, `dialogue.js`):
+- **Live near you.** In a Syndicate system, a Syndicate patrol passing an independent hull (one from a port that isn't theirs, and not a runner) collects 4% of her cargo's value: "The Patron collects 45,850 cr of protection from the Fenwick Wain - 'the overboss thanks you for your custom'". A captain with enough greed and nerve, and a gun, refuses and is roughed up: 30% of her hull, never below a fifth, and she runs. Each collector collects once per 15 minutes, and each hull pays once a week.
+- **In the prices.** An independent port in a Syndicate system passes the cut on: 3% dearer to buy from, 3% meaner to sell to.
+- **In the gossip.** "The overboss's collectors take four in the hundred off every independent hull here," or, after someone has refused, "They are still patching her drive housing."
+
+**Found by the probe, fixed** (tools/probe-doctrine.js, shots in X:\Shared_AI\shots-doctrine):
+- **Shot to pieces while doing as told.** Sitting still as ordered, the probe's ship was destroyed by the platform it was being questioned about. Fixed: the platform holds fire while the warship has you under orders.
+- **Held still and shot anyway.** A navy cutter needs about three minutes to close 60 km, and the first version allowed 90 s before "failure to heave to". Then the range opening because *she* drifted was being counted as *you* running. Fixed: running now means your drive is lit and the range is opening.
+- **Questions that never came.** The first questioning range was 2 km, but the law holds 45 km off to scan, so she backed away and never asked. Now the scan's own rule applies.
+
+**Tests.**
+- test/doctrine.test.js (53 checks, combat group):
+  - escorts add nothing else and stay in their lanes;
+  - the grudge, the squad's timing, dock-waiting, size and arrival, and settling it;
+  - the alarm's choice of ship, the order, holding still, drifting versus running, subdue and holding fire (with a control that fires), the three verdicts, lethal, nobody found, no law at all, and the platform holding its fire;
+  - protection collected, once at a time, once a week, refused by the right captain;
+  - the price cut in a Syndicate system, and nowhere else.
+- **Three older tests had frozen the old world, and were updated to say so.**
+  - turncoats.test.js caught real breaks (outlaws outnumbering the law, a duplicate name), fixed in the code.
+  - tithe.test.js asked about a lawful port while passing a Syndicate system as the system; it now checks both cases.
+  - syndicate-fleet.test.js said heavies fly only in Syndicate systems; heavies riding with runners are counted on their own.
+
+### Added (2026-11-22, planetary interiors slice 1: one interior per world, data only)
+
+Astra brought the plan (project doc claude/planetary-interiors.md): "make the magnetic field of a surveyed planet correspond to the rest of the planet's features." Until now gravity knew a core and the magnetometer knew a dipole, and the two had never been introduced. Slice 1 builds the one interior that every instrument will read. **Nothing reads it yet, so nothing in play changes.**
+
+**Decided with Astra today:**
+- The field follows the interior: the dipole is rebuilt from the core in slice 6.
+- A contact line shows readings only. A "probable X" label unlocks with better kit or Guild standing.
+- Buried ice and salt read as dips on the gravimeter.
+- There is a Curie depth: below it rock is too hot to stay magnetised, so iron there is heavy on the gravimeter and silent on the coil.
+- A drill confirms what a body is made of.
+- The cutaway is its own scanner layer, INTERIOR.
+
+**`src/interior.js`, `Interior.of(body, sys)`** (new). Pure and seeded from hashes, with no rng draws, cached per body. It gives each world:
+- **Layers, outside in:** crust (or an ice shell, with a water ocean under it where tides keep it warm), mantle (convecting, solid, a magma ocean, or water or solid ice), outer core and inner core. Giants get an envelope, metallic hydrogen or an ionic ocean, and a rock-and-ice core.
+- **The core is gravity.js's own.** `rc` and `kc` are taken from `profileOf` unchanged, and the new layers are names on that same two-density profile, not extra weight. Giving the crust its own density would have moved g, and every gravity contact with it, on every world.
+- **Heat:** from type, size (a big world keeps its heat) and tidal kneading (a moon of a giant). Heat decides how much of the core is still liquid. Earth-like heat gives an inner core about a third of the core's radius, close to Earth's.
+- **A dynamo** needs a liquid outer core at least 0.08 of the radius thick, and a dynamo number (shell × heat × spin) of at least 0.4. The spin weights are the old roll's (×1.2 fast, ×0.7 slow, ×0.6 tidally locked). A magma ocean is nearly as hot as the core under it, so little heat leaves the core and a molten world's dynamo is weaker (×0.6). Giants always have one. `drive` (0–1) is how hard the dynamo runs. It is not yet a field strength: slice 6 turns it into one using buildMagnetospheres' own draws.
+- **The Curie depth** comes from type, shallower on a hotter world: about 19–43 km on terran worlds, 1–6 km on molten ones, and through the shell into the rock on icy ones.
+- **Old magnetised crust** (`remanence`) on some worlds with no dynamo, the way Mars has patches.
+- **Every mass, tagged with what it is made of:** each gravity source (provinces, fissile hotspots, buried bodies), plus the buried ice the water map already knew about, which now gets a depth and a size.
+  - Fissile hotspots are fissile-bearing.
+  - A body whose rare-metal share is over 0.55 is heavy rare-metal. That is the same test grade IV uses for "dense for its size", so the two can't disagree.
+  - The rest are iron-nickel (60%) or sulphide.
+  - Ice is lighter than the rock around it. Ice inside an ice shell is no contrast, so it isn't listed.
+  - Each mass records whether it lies above the Curie depth and could be heard by a coil.
+
+**Tuned by measuring, over 2,576 worlds in 120 systems** (`tools/measure-interiors.js`). The first guesses gave desert worlds a field 1% of the time (17% today) and molten ones 98% (15% today). After tuning:
+
+| type | field today | dynamo |
+|---|---|---|
+| terran | 52% | 55% |
+| ocean | 54% | 57% |
+| tundra | 35% | 38% |
+| desert | 17% | 19% |
+| molten | 15% | 40% |
+| rocky | 17% | 0% |
+| moons, iceballs | 1–9% | 0% |
+| giants | 100% | 100% |
+
+The shares now roughly match today's, but they come from the planet instead of a dice roll. So the worlds that have one aren't the same worlds: about two-thirds of terran and ocean worlds agree. 83 worlds with ports would gain or lose a field when slice 6 lands, and each will be named in its changelog entry.
+
+**Small additions to survey.js:**
+- `groundMap` keeps its buried-ice patches as `buriedIce`. Nothing in survey.js reads them, so the maps are unchanged.
+- `typeKey` is exported, so the interior and the ore table agree on what a world is.
+
+**A seam found, not yet fixed:** `Gravity.sourcesOf` lists ore provinces and buried bodies on gas and ice giants too, so the gravimeter can read solid lumps inside a gas giant. The interior gives giants none. Fixing gravity is slice 2's job, when sources get signed.
+
+**Tests.** test/interior.test.js (20 checks, ground group):
+- The same seed builds the same interior, and asking for one changes no body and no system.
+- The profile is gravity.js's own.
+- The layers tile each world without a gap.
+- Every rocky dynamo has a liquid outer core, and every giant has one.
+- Every gravity source on a solid world is in the interior, with a composition matching the grade IV tell.
+- Nothing below the Curie depth is magnetic.
+- Earth-like worlds often have a dynamo, and dead rock and moons rarely do.
+
+packed (12), packed-browser (16), survey (44), gravity (44), magnetometer (21), magnetosphere (20) and ground (36) still pass.
+
 ### Changed (2026-11-22, no name over a name: ship labels and the contacts panel keep clear)
 
 Astra: "build the no overlap rule in." The no-overlap rule the dashboard screens and panels already follow now covers the names on the glass and the contacts panel too. The screenshots showed three problems: two ships 20 px apart printing their names through each other ("Warden 15 / interceptor" through "Tallow Lighter / shuttle"), a cop's name written across the speed readout, and the CONTACTS box sitting on the heading tape.

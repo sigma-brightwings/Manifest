@@ -1364,6 +1364,7 @@
      * fork. opts.noLanes / opts.noWorkers leave them out. */
     if (!opts.noLanes) buildLanes(sys);
     if (!opts.noWorkers) buildWorkers(sys, base);
+    if (!opts.noEscorts) buildEscorts(sys, base);
     return sys;
   }
 
@@ -4951,6 +4952,113 @@
        * another NPC, so that case cannot arise yet: damageNpc in combat.js
        * has no caller but the player's own guns. */
       r.runner = true;
+    }
+  }
+
+  /* --- escorts for their own (2026-11-22, ship AI slice 5) ----------------
+   * Astra chose both: "heavies ride with runners" and "navy escorts liners".
+   * The mercenary escort (buildPatrols, above) is the shape: a patrol on a
+   * route with the host's own endpoints and schedule, a minute behind, so
+   * the two rails stay together without any AI. `escorting` names the host
+   * route, which is what makes them one flight (shipai.js orgOf).
+   *
+   *   RUNNERS. A Syndicate runner working a lawful system's fence takes a
+   *   heavy with her more often where the law is crooked - the more crime,
+   *   the more there is to lose, and the less anyone minds a heavy.
+   *   LINERS. In an empire's system with law in its sky, a share of liner
+   *   runs fly with a cutter alongside: the navy's own warship where the
+   *   system has one, otherwise a police interceptor. No law, no escort.
+   *
+   * Own substream, run after the runners and lanes it reads, drawing for
+   * every candidate in a fixed order; adds patrols and moves nothing else. */
+  var RUNNER_ESCORT = [0.15, 0.40];   // chance at crime 0 and at crime 100
+  var LINER_ESCORT = 0.30;
+  var ESCORT_LAG_S = 60;              // a minute behind, like the mercenaries
+  function buildEscorts(sys, base) {
+    var er = base.fork('escorts');
+    var routes = sys.traffic || [];
+    sys.patrols = sys.patrols || [];
+    var used = {};
+    sys.patrols.forEach(function (p) { if (p.name) used[p.name.replace(/^(The|FNS) /, '')] = true; });
+    /* A fresh name off the list, and once the list is spent, the same name
+     * numbered ("The Underboss 2") - never two hulls with one name. */
+    function named(list, prefix) {
+      var free = list.some(function (n) { return !used[n]; });
+      var n = freshName(er, list, used);
+      return free ? prefix + n : numberedName(sys, prefix + n, 2);
+    }
+    var k = 0;
+    var crime = sys.crimeScore === undefined ? 40 : sys.crimeScore;
+    var pRun = RUNNER_ESCORT[0] + (RUNNER_ESCORT[1] - RUNNER_ESCORT[0]) * Math.max(0, Math.min(1, crime / 100));
+    var outlaw = sys.factionById && sys.factionById.outlaw;
+    var lawful = sys.patrols.filter(function (p) {
+      return !p.outlaw && p.faction !== 'outlaw' && (p.kind === 'police' || p.kind === 'navy');
+    });
+    var navy = lawful.filter(function (p) { return p.kind === 'navy'; });
+    function shadow(host, spec) {
+      var A = sys.byId[host.from], B = sys.byId[host.to];
+      if (!A || !B) return null;
+      var id = 'esc' + (k++);
+      var route = patrolRoute(id, '', spec, A, B, sys, er, (host.t0 || 0) - ESCORT_LAG_S);
+      route.cruise = host.cruise; route.layover = host.layover; route.period = host.period;
+      return { id: id, route: route };
+    }
+    /* NEVER THE MAJORITY (generate.js buildPatrols, 2026-11-22): in lawful
+     * space a heavy rides only while the outlaws in the sky stay no more
+     * than the lawful guns. The liners' escorts are placed first, then the
+     * heavies within what is left. Every candidate's roll is drawn first, in
+     * route order, so the stream does not depend on who got an escort. */
+    var outlawN = sys.patrols.filter(function (p) { return p.outlaw || p.faction === 'outlaw'; }).length;
+    var lawN = sys.patrols.filter(function (p) {
+      return !p.outlaw && p.faction !== 'outlaw' && (p.kind === 'police' || p.kind === 'navy' || p.kind === 'capital');
+    }).length;
+    var cands = [];
+    for (var c0 = 0; c0 < routes.length; c0++) {
+      var rc = routes[c0];
+      if (rc.runner || (rc.cls === 'liner' && !rc.runner)) cands.push({ r: rc, roll: er.next() });
+    }
+    cands.sort(function (a, b) { return (a.r.runner ? 1 : 0) - (b.r.runner ? 1 : 0); });
+    for (var i = 0; i < cands.length; i++) {
+      var r = cands[i].r, roll = cands[i].roll;
+      var isRunner = !!r.runner;
+      if (isRunner) {
+        if (!outlaw || roll >= pRun) continue;
+        if (!sys.pirateHeld && outlawN + 1 > lawN) continue;
+        var hs = { cls: 'police', accel: HEAVY_SPEC.accel, size: HEAVY_SPEC.size, color: outlaw.color, label: HEAVY_SPEC.label };
+        var sh = shadow(r, hs);
+        if (!sh) continue;
+        outlawN++;
+        var hl = hashedSizeLetter('heavy', sh.id, (sys && sys.seed) || '');
+        sys.patrols.push({
+          id: sh.id, kind: 'police', faction: 'outlaw', heavy: true, escorting: r.id,
+          name: named(HEAVY_NAMES, 'The '),
+          className: HEAVY_SPEC.label, color: outlaw.color,
+          size: HEAVY_SPEC.size * (hl === 'l' ? 1.25 : hl === 's' ? 0.8 : 1),
+          accel: HEAVY_SPEC.accel, hullClass: 'enforcer_heavy', sizeLetter: hl,
+          rail: { type: 'route', route: sh.route }
+        });
+      } else {
+        if (sys.pirateHeld || !lawful.length || roll >= LINER_ESCORT) continue;
+        var home = sys.byId[r.from];
+        var fac = home && home.faction && home.faction !== 'outlaw' ? home.faction : lawful[0].faction;
+        var useNavy = navy.length > 0;
+        var cls = useNavy ? PATROL_CLASSES.navy : PATROL_CLASSES.police;
+        var ps = { cls: useNavy ? 'navy' : 'police', accel: cls.accel, size: cls.size, color: cls.color, label: cls.label };
+        var sp = shadow(r, ps);
+        if (!sp) continue;
+        lawN++;
+        var fobj = sys.factionById && sys.factionById[fac];
+        sys.patrols.push({
+          id: sp.id, kind: useNavy ? 'navy' : 'police', faction: fac, escorting: r.id,
+          name: useNavy ? named(NAVY_NAMES, 'FNS ') : numberedName(sys, 'Shepherd', 1 + er.int(0, 30)),
+          /* The class's own label: what she IS. That she is escorting is
+           * `escorting`, which the contacts panel reads ("escorting"). */
+          className: cls.label,
+          color: (fobj && fobj.color) || cls.color,
+          size: cls.size, accel: cls.accel,
+          rail: { type: 'route', route: sp.route }
+        });
+      }
     }
   }
 
