@@ -15004,6 +15004,16 @@
                          : 'The turret  —  nobody on it; your best gunner sits here, or a good engineer can slave it from below', 6);
         return;
       }
+      /* At a reactor's glass (shipdeck.js, the reactor block and the naval
+       * decks): what she is making, and whether she is scrammed. */
+      var rxPlan = G.walk && G.walk.plan && (G.walk.plan.ship || G.walk.plan);
+      if (it.kind === 'engine' && rxPlan && rxPlan.naval && rxPlan.naval.reactors && global.ShipDeck.reactorPower) {
+        var rxShip = walkHull(), rxBase = rxShip._base || rxShip, rxP = global.ShipDeck.reactorPower(rxBase, G.t);
+        var scrammed = rxBase.reactor && rxBase.reactor.scramAt !== undefined && rxBase.reactor.scramAt !== null;
+        say(scrammed ? 'Reactor scrammed  —  rods in, ' + (rxP * 100).toFixed(1) + ' % and falling: the glow is her decay heat'
+                     : 'Reactor at ' + Math.round(rxP * 100) + ' %' + (rxBase.docked ? '  —  her hotel load, at the berth' : '  —  the rods follow the drive'), 5);
+        return;
+      }
       if (it.kind === 'engine') { say('The drive console  —  reactor temperature, flow, and a log the engineers keep by hand', 5); return; }
       if (it.kind === 'medcab' || it.kind === 'medkit') {
         say(it.kind === 'medkit' ? 'Medical supplies  —  dressings, a splint, a trauma kit, and the auto-injectors'

@@ -251,6 +251,10 @@
       el('br'), portSel, el('button', { text: 'Dock', on: { click: function () { dockAt(portSel.value); refresh(true); } } }),
       el('button', { text: 'Launch', on: { click: launch } }),
       el('h4', { text: 'STATE' }),
+      el('label', { text: 'reactor ' }),
+      el('button', { text: 'Scram', on: { click: function () { reactor('scram'); } } }),
+      el('button', { text: 'Restart', on: { click: function () { reactor('restart'); } } }),
+      el('br'),
       el('label', { text: 'hull % ' }), hullIn,
       el('br'), el('label', { text: 'credits ' }), credIn,
       el('button', { text: 'Set', on: { click: function () { G().ship.credits = +credIn.value || 0; log('credits ' + G().ship.credits); } } }),
@@ -260,6 +264,20 @@
     panel.addEventListener('keydown', function (e) { if (e.key !== '`') e.stopPropagation(); });
     panel.addEventListener('keyup', function (e) { e.stopPropagation(); });
     doc.body.appendChild(panel);
+  }
+  /* The reactor (shipdeck.js reactorPower): scram drops her to the
+   * afterglow; restart brings her back up, slowly. Your ship. */
+  function reactor(how) {
+    var s = ship(), SD = global.ShipDeck, g = G();
+    if (!s || !SD || !SD.scramReactor) return;
+    if (how === 'scram') SD.scramReactor(s, g.t); else SD.restartReactor(s, g.t);
+    log('reactor ' + (how === 'scram' ? 'scrammed' : 'restarting'));
+  }
+  function reactorLine() {
+    var s = ship(), SD = global.ShipDeck, g = G();
+    if (!s || !SD || !SD.reactorPower) return '-';
+    var p = SD.reactorPower(s, g.t), sc = s.reactor && s.reactor.scramAt !== undefined && s.reactor.scramAt !== null;
+    return (p * 100).toFixed(1) + ' %' + (sc ? '  SCRAMMED' : '');
   }
   function setHull(pct) {
     var s = ship();
@@ -292,6 +310,7 @@
       'aboard  ' + (w ? (whole && whole.decks ? deckName(whole, w.plan.deck || 'main') : 'her deck') : 'seated / flying'),
       'room    ' + (room ? roomName(room) : '-'),
       'at      ' + (w ? 'x ' + w.x.toFixed(2) + '  z ' + w.z.toFixed(2) + '  floor ' + (w.plan.floorY || 0).toFixed(2) : '-'),
+      'reactor ' + reactorLine(),
       'fps     ' + Math.round(g.fps || 0)
     ].join('\n');
     if (!lists) return;
@@ -318,7 +337,7 @@
   }
   function after(fn) { return function () { var r = fn.apply(null, arguments); if (open) refresh(true); return r; }; }
   become = after(become); goTo = after(goTo);
-  H.toggle = toggle; H.become = become; H.goTo = goTo; H.checkDecks = checkDecks; H.dockAt = dockAt; H.enterStar = enterStar;
+  H.toggle = toggle; H.reactor = function (how) { reactor(how); }; H.become = become; H.goTo = goTo; H.checkDecks = checkDecks; H.dockAt = dockAt; H.enterStar = enterStar;
   /* ` opens and closes it — first, before the game hears the key. */
   global.addEventListener('keydown', function (e) {
     if (e.key === '`' || e.code === 'Backquote') { toggle(); e.preventDefault(); e.stopImmediatePropagation(); }

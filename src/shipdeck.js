@@ -1519,10 +1519,12 @@
       rods: axis === 'h' ? { face: 'fwd', n: 5 } : { face: 'top', n: 5 },
       window: { z: (rxr.z1 + ctl.z0) / 2, x0: wx0, x1: wx1, y0: c.floor + 0.7, y1: c.floor + Math.min(ENGINE_H - 0.3, 2.3), faces: 'fwd' }
     };
-    /* The tank is in the way (navalMesh draws it this size). */
+    /* The tank is in the way: it stands against the bulkhead, across the
+     * window and the core, back past the core by her jacket (reactorTank). */
     var hx = axis === 'h' ? clen / 2 : cr, hz = cr;
-    items.push({ kind: 'core', x: cxr, z: spec.core.z, label: '', silent: true,
-                 counter: [cxr - hx - 0.5, spec.core.z - hz - 0.5, cxr + hx + 0.5, spec.core.z + hz + 0.5] });
+    var tkx0 = Math.max(rxr.x0 + 0.02, Math.min(wx0 - 0.15, cxr - hx - 0.45)), tkx1 = Math.min(rxr.x1 - 0.02, Math.max(wx1 + 0.15, cxr + hx + 0.45));
+    var tkz0 = Math.max(rxr.z0 + 0.3, Math.min(spec.core.z - hz - spec.jacket, rxr.z1 - 1.2));
+    items.push({ kind: 'core', x: cxr, z: spec.core.z, label: '', silent: true, counter: [tkx0, tkz0, tkx1, rxr.z1] });
     /* The panel under the glass: the reactor's controls and the drive's,
      * worked by whoever has the engineering watch. */
     items.push({ kind: 'engine', x: cxr, z: ctl.z0 + 0.3, yaw: Math.PI, label: 'Reactor and drive control  \u2014  the glass',
@@ -1668,7 +1670,9 @@
    * core and its glass lit blue (stage 3 builds the real fittings). */
   var NAVAL_TINT = { engine: 'lockWall', aux: 'lockWall', reactor: 'lockWall', reactorctl: 'console', magazine: 'lockWall',
                      hangar: 'lockWall', platform: 'lockWall', tramway: 'lockWall', passage: 'passWall', cross: 'passWall', lobby: 'passWall', landing: 'passWall' };
-  var CHERENKOV = '!#58b8ff', CHERENKOV_DIM = '!#2a6fb8';
+  /* The reactor window's glass (gl.js '~h': opacity h/15) and the rod
+   * drives' lamps. The glow itself is reactorGlowMesh's. */
+  var ROD_LAMP = '!#7dff9a';
   function deckFy(p, dk) { return p.deckY && p.deckY[dk] !== undefined ? p.deckY[dk] : p.floorY; }
   function navalMesh(m, pal, p) {
     var rs = p.rooms.filter(function (r) { return r.kind === 'naval'; });
@@ -1691,17 +1695,22 @@
           if (Math.abs(d.wall[1] - r.z0) < 1e-4 && xc > r.x0 && xc < r.x1) cuts.z0.push(xc);
         }
       });
+      /* The reactor's window through the bulkhead between reactor and
+       * control: a hole in the reactor's forward wall and in control's aft
+       * one (glowMesh is what is seen through it). */
+      var windows = { x0: [], x1: [], z0: [], z1: [] };
+      ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+        var w = rx.window;
+        if (!w) return;
+        if (rx.room === r.id) windows.z1.push({ u0: w.x0, u1: w.x1, v0: w.y0, v1: w.y1 });
+        if (rx.control === r.id) windows.z0.push({ u0: w.x0, u1: w.x1, v0: w.y0, v1: w.y1 });
+      });
       function wallRun(side) {
         var alongX = side === 'z0' || side === 'z1', fixed = r[side], a0 = alongX ? r.x0 : r.z0, a1 = alongX ? r.x1 : r.z1;
         var P = function (u, y) { return alongX ? [u, y, fixed] : [fixed, y, u]; };
-        var at = a0;
-        cuts[side].slice().sort(function (a, b) { return a - b; }).forEach(function (cc) {
-          var g0 = cc - DOOR_HW, g1 = cc + DOOR_HW;
-          if (g0 > at) quad(m, P(at, fy), P(g0, fy), P(g0, cy), P(at, cy), wall);
-          if (cy > fy + DOOR_H) quad(m, P(g0, fy + DOOR_H), P(g1, fy + DOOR_H), P(g1, cy), P(g0, cy), wall);
-          at = Math.max(at, g1);
-        });
-        if (a1 > at) quad(m, P(at, fy), P(a1, fy), P(a1, cy), P(at, cy), wall);
+        var holes = cuts[side].map(function (cc) { return { u0: cc - DOOR_HW, u1: cc + DOOR_HW, v0: fy, v1: fy + DOOR_H }; })
+          .concat(windows[side]);
+        wallHoles(m, P, a0, a1, fy, cy, holes, wall);
       }
       ['x0', 'x1', 'z0', 'z1'].forEach(wallRun);
       /* A light down the middle, along the room's length. */
@@ -1764,40 +1773,170 @@
         quad(m, [it.x - 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 1.52, it.z + 0.003], [it.x - 0.32, fy + 1.52, it.z + 0.003], pal.hatch);
       }
     });
-    /* The reactors: the core lit blue in its room, and the glass in the
-     * bulkhead to control glowing with it. */
+    /* THE REACTORS (2026-11-23, "finish the reactor glow"). The water
+     * jacket's tank stands against the bulkhead, so the window in it looks
+     * straight into the water: control's side sees the core through the
+     * glass, lit by its own Cherenkov light (glowMesh, drawn at whatever
+     * power she is making). Here, the parts that do not glow: the tank's
+     * steel outside, seen in the reactor's room; the window's reveal
+     * through the bulkhead and its bolted frame; the glass, faintly
+     * tinted; the control rods in the water and their drives. */
     ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
-      var rr = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
-      if (!rr) return;
-      var fy = deckFy(p, rr.deck), c = rx.core, x = c.x, z = c.z;
-      var half = rx.axis === 'h' ? [c.len / 2, c.r, c.r] : [c.r, c.len / 2, c.r];
-      var yc = fy + Math.min(rr.y1 * 0.45, 1.5);
-      /* The water jacket's tank, steel, with the core somewhere in it; its
-       * face to the glass is where the water shows, lit by the core. */
-      var tx0 = x - half[0] - 0.5, tx1 = x + half[0] + 0.5, ty0 = Math.max(fy, yc - half[1] - 0.5), ty1 = Math.min(fy + rr.y1 - 0.1, yc + half[1] + 0.5);
-      var tz0 = z - half[2] - 0.5, tz1 = z + half[2] + 0.5;
-      box(m, tx0, ty0, tz0, tx1, ty1, tz1, pal.bulk, pal.overhead);
-      quad(m, [tx0 + 0.12, ty0 + 0.12, tz1 + 0.004], [tx1 - 0.12, ty0 + 0.12, tz1 + 0.004], [tx1 - 0.12, ty1 - 0.12, tz1 + 0.004], [tx0 + 0.12, ty1 - 0.12, tz1 + 0.004], CHERENKOV_DIM);
-      /* The core, seen through that face: brighter, smaller, in the middle. */
-      quad(m, [x - half[0], yc - half[1], tz1 + 0.006], [x + half[0], yc - half[1], tz1 + 0.006], [x + half[0], yc + half[1], tz1 + 0.006], [x - half[0], yc + half[1], tz1 + 0.006], CHERENKOV);
-      /* The rod drives: lying down, a row along the top of her face, each
-       * coming in from the front; standing, a cluster on her head. */
-      var n = rx.rods.n;
+      var T = reactorTank(p, rx);
+      if (!T) return;
+      var w = rx.window, fy = T.fy, zb = T.zb, zc = T.zc;
+      box(m, T.x0, T.y0, T.z0, T.x0 + 0.04, T.y1, zb, pal.bulk);
+      box(m, T.x1 - 0.04, T.y0, T.z0, T.x1, T.y1, zb, pal.bulk);
+      box(m, T.x0, T.y0, T.z0, T.x1, T.y1, T.z0 + 0.04, pal.bulk);
+      box(m, T.x0, T.y1 - 0.04, T.z0, T.x1, T.y1, zb, pal.overhead);
+      /* The window's reveal, through the bulkhead's thickness. */
+      if (zc - zb > 1e-4) {
+        quad(m, [w.x0, w.y0, zb], [w.x1, w.y0, zb], [w.x1, w.y0, zc], [w.x0, w.y0, zc], pal.jamb);
+        quad(m, [w.x0, w.y1, zb], [w.x1, w.y1, zb], [w.x1, w.y1, zc], [w.x0, w.y1, zc], pal.jamb);
+        quad(m, [w.x0, w.y0, zb], [w.x0, w.y1, zb], [w.x0, w.y1, zc], [w.x0, w.y0, zc], pal.jamb);
+        quad(m, [w.x1, w.y0, zb], [w.x1, w.y1, zb], [w.x1, w.y1, zc], [w.x1, w.y0, zc], pal.jamb);
+      }
+      /* The frame on control's face, bolted, and the glass a hand's width
+       * in: thick, and only faintly blue of itself. */
+      var fz = zc + 0.02;
+      box(m, w.x0 - 0.14, w.y0 - 0.14, zc, w.x1 + 0.14, w.y0, fz, pal.jamb);
+      box(m, w.x0 - 0.14, w.y1, zc, w.x1 + 0.14, w.y1 + 0.14, fz, pal.jamb);
+      box(m, w.x0 - 0.14, w.y0, zc, w.x0, w.y1, fz, pal.jamb);
+      box(m, w.x1, w.y0, zc, w.x1 + 0.14, w.y1, fz, pal.jamb);
+      for (var bi = 0; bi <= 6; bi++) {
+        var bx = w.x0 - 0.07 + (w.x1 - w.x0 + 0.14) * bi / 6;
+        [w.y0 - 0.07, w.y1 + 0.07].forEach(function (by) { box(m, bx - 0.015, by - 0.015, fz, bx + 0.015, by + 0.015, fz + 0.012, pal.rib); });
+      }
+      /* No pane drawn: gl.js draws see-through faces by dithering, which
+       * greyed the whole view of the water (2026-11-23 probe). The frame
+       * and the reveal say it is thick glass. */
+      /* The control rods, dark against the glow: lying down, they come in
+       * from the front, along her top; standing, down from her head. Their
+       * drives sit on control's face over the window (lying down) or on
+       * the tank's lid (standing). */
+      var c = T.core, n = rx.rods.n;
       for (var ri = 0; ri < n; ri++) {
         var u2 = (ri + 0.5) / n - 0.5;
-        if (rx.rods.face === 'fwd') box(m, x + u2 * c.len - 0.05, ty1 - 0.35, tz1, x + u2 * c.len + 0.05, ty1 - 0.2, tz1 + 0.6, pal.rib);
-        else box(m, x + u2 * 0.8 - 0.05, ty1, z - 0.05, x + u2 * 0.8 + 0.05, Math.min(fy + rr.y1 - 0.05, ty1 + 0.6), z + 0.05, pal.rib);
+        if (rx.rods.face === 'fwd') {
+          var rxx = c.x + u2 * c.hx * 1.6, ry = c.y + c.hy + 0.06;
+          box(m, rxx - 0.025, ry - 0.025, c.z + c.hz * 0.3, rxx + 0.025, ry + 0.025, zb - 0.04, pal.rib);
+          box(m, rxx - 0.05, w.y1 + 0.2, fz, rxx + 0.05, w.y1 + 0.5, fz + 0.22, pal.console);
+          quad(m, [rxx - 0.03, w.y1 + 0.42, fz + 0.222], [rxx + 0.03, w.y1 + 0.42, fz + 0.222], [rxx + 0.03, w.y1 + 0.46, fz + 0.222], [rxx - 0.03, w.y1 + 0.46, fz + 0.222], ROD_LAMP);
+        } else {
+          var rzz = c.z + u2 * 0.5 * Math.max(0.3, c.hz * 2), rxz = c.x + (ri % 2 ? 0.12 : -0.12);
+          box(m, rxz - 0.025, c.y + c.hy * 0.3, rzz - 0.025, rxz + 0.025, T.y1 - 0.04, rzz + 0.025, pal.rib);
+          box(m, rxz - 0.06, T.y1, rzz - 0.06, rxz + 0.06, Math.min(fy + T.roomH - 0.05, T.y1 + 0.45), rzz + 0.06, pal.console);
+        }
       }
-      /* The glass, on both faces of the bulkhead, in its bolted frame. */
-      /* Just proud of each face: the reactor's side of the bulkhead is at
-       * its room's forward wall, control's at its aft wall. */
-      var w = rx.window, wz0 = rr.z1 - 0.004, wz1 = w.z + (w.z - rr.z1) + 0.004;
-      [wz0, wz1].forEach(function (wz) {
-        quad(m, [w.x0, w.y0, wz], [w.x1, w.y0, wz], [w.x1, w.y1, wz], [w.x0, w.y1, wz], CHERENKOV);
-        box(m, w.x0 - 0.12, w.y0 - 0.12, wz - 0.02, w.x1 + 0.12, w.y0, wz + 0.02, pal.jamb);
-        box(m, w.x0 - 0.12, w.y1, wz - 0.02, w.x1 + 0.12, w.y1 + 0.12, wz + 0.02, pal.jamb);
-      });
     });
+  }
+  /* A flat wall from a0 to a1 along it, y0 to y1 up it, with rectangular
+   * holes ({u0, u1, v0, v1}: doors, windows) cut out. Split at every
+   * hole's edges along the wall; each strip is walled wherever no hole
+   * covers it. */
+  function wallHoles(m, P, a0, a1, y0, y1, holes, col) {
+    var hs = holes.map(function (h) {
+      return { u0: Math.max(a0, h.u0), u1: Math.min(a1, h.u1), v0: Math.max(y0, h.v0), v1: Math.min(y1, h.v1) };
+    }).filter(function (h) { return h.u1 > h.u0 + 1e-6 && h.v1 > h.v0 + 1e-6; });
+    var cuts = [a0, a1];
+    hs.forEach(function (h) { cuts.push(h.u0, h.u1); });
+    cuts.sort(function (a, b) { return a - b; });
+    for (var i = 0; i + 1 < cuts.length; i++) {
+      var ua = cuts[i], ub = cuts[i + 1];
+      if (ub - ua < 1e-6) continue;
+      var over = hs.filter(function (h) { return h.u0 <= ua + 1e-6 && h.u1 >= ub - 1e-6; })
+        .sort(function (a, b) { return a.v0 - b.v0; });
+      var at = y0;
+      over.forEach(function (h) {
+        if (h.v0 > at + 1e-6) quad(m, P(ua, at), P(ub, at), P(ub, h.v0), P(ua, h.v0), col);
+        at = Math.max(at, h.v1);
+      });
+      if (y1 > at + 1e-6) quad(m, P(ua, at), P(ub, at), P(ub, y1), P(ua, y1), col);
+    }
+  }
+  /* Where a reactor's tank, core and window are, in the plan's metres. The
+   * tank stands on the reactor room's floor against its forward wall (the
+   * bulkhead the window is in), across the window and the core, and back
+   * past the core by her water jacket. */
+  function reactorTank(p, rx) {
+    var rr = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
+    if (!rr || !rx.window) return null;
+    var ctl = p.rooms.filter(function (q) { return q.id === rx.control; })[0];
+    var fy = deckFy(p, rr.deck), c = rx.core, w = rx.window;
+    var hx = rx.axis === 'h' ? c.len / 2 : c.r, hy = rx.axis === 'h' ? c.r : c.len / 2, hz = c.r;
+    var yc = fy + Math.min(rr.y1 * 0.45, 1.5);
+    var x0 = Math.max(rr.x0 + 0.02, Math.min(w.x0 - 0.15, c.x - hx - 0.45));
+    var x1 = Math.min(rr.x1 - 0.02, Math.max(w.x1 + 0.15, c.x + hx + 0.45));
+    var y1 = Math.min(fy + rr.y1 - 0.1, Math.max(w.y1, yc + hy) + 0.35);
+    var zb = rr.z1, z0 = Math.max(rr.z0 + 0.3, Math.min(c.z - hz - (rx.jacket || 1.2), zb - 1.2));
+    return { fy: fy, roomH: rr.y1, x0: x0, x1: x1, y0: fy, y1: y1, z0: z0, zb: zb,
+             zc: ctl ? ctl.z0 : w.z + (w.z - zb),
+             core: { x: c.x, y: yc, z: Math.min(c.z, zb - hz - 0.5), hx: hx, hy: hy, hz: hz } };
+  }
+
+  /* THE GLOW (2026-11-23). The water in a reactor's tank and her core,
+   * lit by the core's Cherenkov light at `level` (0 cold, 1 full power):
+   * the faces seen through the glass, each split into a fine grid so the
+   * light can fall off across it (per-vertex colour, `vcol`, which gl.js
+   * draws; the 2D path takes each face's own colour). Brightest at the
+   * core, a deep blue by the tank's walls, near black when she is cold.
+   * Self-lit throughout: the water's light is its own. One mesh per level,
+   * made when first wanted (render.js queueCockpitRoom). */
+  var GLOW_COLD = [0.02, 0.05, 0.08], GLOW_BLUE = [0.16, 0.52, 1.0], GLOW_HOT = [0.80, 0.94, 1.0];
+  /* By the square root of her power, as an eye takes light: an afterglow of
+   * a few percent is a faint blue, not black. And spread far enough that a
+   * Capital's three-metre window is lit water, not grey. */
+  function glowColour(level, d) {
+    var I = Math.sqrt(level) * (0.3 + 0.7 * Math.exp(-d / 1.4));
+    var k = Math.min(1, I * 1.5), hot = Math.max(0, I - 0.55) / 0.45;
+    return [0, 1, 2].map(function (i) {
+      var c = GLOW_COLD[i] + (GLOW_BLUE[i] - GLOW_COLD[i]) * k;
+      return Math.min(1, c + (GLOW_HOT[i] - c) * hot);
+    });
+  }
+  function hex3(c) {
+    return '#' + c.map(function (u) { var h = Math.round(Math.max(0, Math.min(1, u)) * 255).toString(16); return h.length < 2 ? '0' + h : h; }).join('');
+  }
+  function reactorGlowMesh(p, level) {
+    var m = mesh();
+    m.vcol = [];
+    level = Math.max(0, Math.min(1, level || 0));
+    ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+      var T = reactorTank(p, rx);
+      if (!T) return;
+      var c = T.core;
+      function dist(q) {
+        var dx = Math.max(0, Math.abs(q[0] - c.x) - c.hx), dy = Math.max(0, Math.abs(q[1] - c.y) - c.hy), dz = Math.max(0, Math.abs(q[2] - c.z) - c.hz);
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      /* A face of the water, a grid of cells about 20 cm across. */
+      function sheet(o, U, V, nu, nv) {
+        for (var i = 0; i < nu; i++) for (var j = 0; j < nv; j++) {
+          var P = function (a, b) { return [o[0] + U[0] * a + V[0] * b, o[1] + U[1] * a + V[1] * b, o[2] + U[2] * a + V[2] * b]; };
+          var q = [P(i / nu, j / nv), P((i + 1) / nu, j / nv), P((i + 1) / nu, (j + 1) / nv), P(i / nu, (j + 1) / nv)];
+          var cols = q.map(function (v) { return glowColour(level, dist(v)); });
+          var mid = [0, 1, 2].map(function (k) { return (cols[0][k] + cols[1][k] + cols[2][k] + cols[3][k]) / 4; });
+          var n0 = m.v.length;
+          q.forEach(function (v, k) { m.v.push(v); m.vcol.push(cols[k]); });
+          m.f.push([n0, n0 + 1, n0 + 2], [n0, n0 + 2, n0 + 3]);
+          m.c.push('!' + hex3(mid), '!' + hex3(mid));
+        }
+      }
+      var e = 0.05, x0 = T.x0 + e, x1 = T.x1 - e, y0 = T.y0 + e, y1 = T.y1 - e, z0 = T.z0 + e, z1 = T.zb - 0.005;
+      var nx = Math.max(2, Math.ceil((x1 - x0) / 0.2)), ny = Math.max(2, Math.ceil((y1 - y0) / 0.2)), nz = Math.max(2, Math.ceil((z1 - z0) / 0.2));
+      sheet([x0, y0, z0], [x1 - x0, 0, 0], [0, y1 - y0, 0], nx, ny);          // the back of the tank
+      sheet([x0, y0, z0], [0, 0, z1 - z0], [0, y1 - y0, 0], nz, ny);          // her sides
+      sheet([x1, y0, z0], [0, 0, z1 - z0], [0, y1 - y0, 0], nz, ny);
+      sheet([x0, y0, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // the floor
+      sheet([x0, y1, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // and the water's surface
+      /* The core: white-blue at power, a dull slate when she is cold. */
+      var coreCol = '!' + hex3([0, 1, 2].map(function (k) { return 0.22 + (GLOW_HOT[k] + 0.12 - 0.22) * Math.sqrt(level); }));
+      var b0 = m.f.length;
+      box(m, c.x - c.hx, c.y - c.hy, c.z - c.hz, c.x + c.hx, c.y + c.hy, c.z + c.hz, coreCol);
+      var rgbC = coreCol.slice(2).match(/../g).map(function (h) { return parseInt(h, 16) / 255; });
+      while (m.vcol.length < m.v.length) m.vcol.push(rgbC);
+    });
+    return m;
   }
   /* The leaves of the naval doors, each at its own doorway. */
   function navalLeaves(pal, p, fy0) {
@@ -3594,9 +3733,45 @@
     if (skip.indexOf('z1') < 0) quad(m, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], wall);
   }
 
+  /* THE REACTOR'S POWER (2026-11-23), 0..1, for the glow. Ticking over on
+   * her hotel load at a berth; at sea, more with the drive's throttle; and
+   * eased, rods moving at the speed rods move. A SCRAM drops her at once
+   * to the afterglow of her decay heat, about 7 % and fading over minutes
+   * to a faint 1.5 %, until she is restarted, when she comes back up slower
+   * than she runs. Kept on the ship (`reactor`, `_rx`), worked out from
+   * the game's clock `t` (s). */
+  var RX_DOCKED = 0.2, RX_IDLE = 0.3, RX_AFTER = 0.06, RX_AFTER_TAU = 300, RX_FLOOR = 0.015;
+  function reactorPower(ship, t) {
+    if (!ship) return 0;
+    var st = ship._rx || (ship._rx = { p: null, t: t, slow: false });
+    var rs = ship.reactor;
+    if (rs && rs.scramAt !== undefined && rs.scramAt !== null) {
+      var age = Math.max(0, t - rs.scramAt);
+      st.p = RX_FLOOR + RX_AFTER * Math.exp(-age / RX_AFTER_TAU);
+      st.t = t; st.slow = true;
+      return st.p;
+    }
+    var target = ship.docked ? RX_DOCKED : Math.min(1, RX_IDLE + (1 - RX_IDLE) * Math.max(0, ship.throttle || 0));
+    if (st.p === null) { st.p = target; st.t = t; return st.p; }
+    var dt = Math.max(0, Math.min(3600, t - st.t));
+    st.t = t;
+    var tau = target > st.p ? (st.slow ? 20 : 4) : 1.5;
+    st.p += (target - st.p) * (1 - Math.exp(-dt / tau));
+    if (st.slow && Math.abs(target - st.p) < 0.01) st.slow = false;
+    return st.p;
+  }
+  function scramReactor(ship, t) { if (ship) ship.reactor = { scramAt: t }; }
+  function restartReactor(ship, t) {
+    if (!ship) return;
+    ship.reactor = null;
+    if (ship._rx) { ship._rx.t = t; ship._rx.slow = true; }
+  }
+
   var ShipDeck = {
     DOOR_HW: DOOR_HW, DOOR_H: DOOR_H, WALL_T: WALL_T, PASSAGE_LEN: PASSAGE_LEN,
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
+    reactorGlowMesh: reactorGlowMesh, reactorPower: reactorPower, scramReactor: scramReactor, restartReactor: restartReactor,
+    reactorTank: reactorTank,
     PALETTES: PALETTES, FLAT_HULLS: FLAT_HULLS, BLOCK_HULLS: BLOCK_HULLS, blockVariant: blockVariant, SYNDICATE: SYNDICATE, NAVY: NAVY,
     CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
     paletteFor: paletteFor, plan: plan, planFitted: planFitted, updateDoors: updateDoors, leafTravel: leafTravel,

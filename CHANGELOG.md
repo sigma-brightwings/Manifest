@@ -40,6 +40,21 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-23, the reactor glow: a window into the water)
+
+- **Reactor control looks into the reactor.** The window over the control panel opens onto the reactor's water tank. The core sits in the water, and the control rods come in from above (in from the front on the Cutter and the other lying-down reactors). Every reactor gets this: the reactor block on the L hulls, and the naval reactor rooms on the Capital, Carrier, Meridian, Leviathan and Crawler.
+- **There's no glass pane.** The game's see-through glass draws as a grey dither, which spoiled the view, so the window is a bolted frame and a deep reveal with nothing in it. Reading it as heavy glass is left to you.
+- **The glow follows the reactor's power.**
+  - At the berth she runs at hotel load (20%), and the water is a soft blue.
+  - In flight her power is 30% plus 70% of the throttle. The water goes bright blue, and white-hot round the core at full drive.
+  - Power rises over a few seconds and falls quicker than that. The brightness goes with the square root of the power, so low power still shows. The light is strongest at the core and fades out to the tank's walls.
+- **Scram.** Rods in, and the chain reaction stops at once. What's left is decay heat: about 7% of full, falling over minutes to a faint 1.5%. The water dims to that dull blue but doesn't go dark. A restart climbs back up slowly, over about 20 seconds.
+- **E at the reactor control panel** gives the power and why it's at that level: *"her hotel load, at the berth"*, *"the rods follow the drive"*, or *"scrammed: the glow is her decay heat"*.
+- **Developer's panel:** a reactor line in the status section, and *Scram* and *Restart* buttons.
+- **Nothing in play scrams a reactor yet.** It's the developer panel's button for now; when a scram should happen in play is still to be decided.
+- **Tests:** `reactorglow.test.js` checks that nothing solid stands between the window and the core on every reactor-carrying hull and layout, that the tank's back wall is brightest behind the core, that the glow rises with power, and that a scram falls to its decay heat.
+- **Saves:** unchanged. The reactor's state isn't saved; a loaded ship's reactor is running.
+
 ### Changed (2026-11-23, the reactor block: Astra's layout for the L hulls)
 
 Astra drew it: *"grow the hulls, put it in a like this space, split the reactor room in two so the crew can operate panels in the room for controlling the reactor."* The Kestrel, Cutter, Longhaul and Tanker now have her layout on their one deck:

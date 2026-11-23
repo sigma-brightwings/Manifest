@@ -18559,6 +18559,7 @@
    * only while you are out of it; seated, you are where it is, and its
    * back would stand between you and the rear screens. Door leaves are
    * moved by however far each door's `open` has eased (shipdeck.js). */
+  var GLOW_STEPS = 16;
   function queueCockpitRoom(cam, ship, opts) {
     opts = opts || {};
     var d = shipInterior(ship), SD = global.ShipDeck;
@@ -18581,6 +18582,18 @@
      * far down it is, in the same metres as the room. */
     var AL = global.Airlock, base = ship._base || ship;
     parts.push({ mesh: (AL && base.airlock ? AL.lampGreen(base) : false) ? d.meshes.lampOk : d.meshes.lampNo });
+    /* HER REACTORS' GLOW (2026-11-23): the water and core behind the glass,
+     * at the power she is making now (shipdeck.js reactorPower: idle at a
+     * berth, up with the drive, an afterglow after a scram). In GLOW_STEPS
+     * steps, on the square root of her power so the dim end - the
+     * afterglow - still has steps of its own; each step's mesh made once. */
+    if (d.plan.naval && d.plan.naval.reactors && d.plan.naval.reactors.length && SD.reactorGlowMesh) {
+      var Gm = global.Game, pw = SD.reactorPower(base, Gm && isFinite(Gm.t) ? Gm.t : 0);
+      var gs = Math.round(Math.sqrt(Math.max(0, Math.min(1, pw))) * GLOW_STEPS);
+      d.glowMeshes = d.glowMeshes || {};
+      if (!d.glowMeshes[gs]) d.glowMeshes[gs] = SD.reactorGlowMesh(d.plan, Math.pow(gs / GLOW_STEPS, 2));
+      parts.push({ mesh: d.glowMeshes[gs] });
+    }
     /* Not from outside her (noPortals): there her exterior model draws the
      * ramp, and drawing it a second time here, in the room's metres, put
      * two copies of every rail in the same place - the shimmer Astra saw
