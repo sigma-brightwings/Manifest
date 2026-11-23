@@ -31,8 +31,8 @@
   var Release = {
     /* Three parts because electron-builder's latest.yml sorts on semver
      * and a two-part number does not parse as one. */
-    version: '1.5.2',
-    name: 'Rhombicuboctahedron',
+    version: '1.6.0',
+    name: 'Stella Octangula',
     /* 'Manifest 1.5.2 "Rhombicuboctahedron"' -- the one way it is written out. */
     label: function () { return 'Manifest ' + Release.version + ' \u201c' + Release.name + '\u201d'; }
   };

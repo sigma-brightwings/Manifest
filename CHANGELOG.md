@@ -40,6 +40,41 @@ before they update.
 
 ## Unreleased
 
+## 1.6.0 "Stella Octangula" (2026-11-23)
+
+Worlds with a second body inside them, and systems with a second sun.
+*Stella octangula* means eight-pointed star: two tetrahedra pushed through
+each other, so that one solid is made of two. This is the release where
+a system can have two suns, every world got an interior under its
+surface and weather over it, and the space between worlds filled with
+relays, drilling teams and captains who decide things for themselves.
+
+- **More than one sun,** and a giant over a living moon.
+- **Worlds worth visiting:** appeal, ferries that carry people, a passage
+  board that follows appeal, and the resort pad.
+- **Planetary interiors:** one interior per world. The gravimeter reads its
+  lows, the magnetometer hears its core, and the INTERIOR cutaway shows it.
+  The scanner's readout sits over the surface, and its map is a globe.
+- **Weather with a climate:** clouds with a body, a storm you descend
+  through, vapour off the tips, a sky when you fly in air.
+- **Com-sats:** the relay network and your own com-sat, RTGs and dark
+  relays, islands felt everywhere, armed defence platforms, and drawn
+  icons for what things are.
+- **Drilling teams:** an outpost dug out into a port of yours, and the
+  world's own teams opening new ground ports on a dated schedule. A port's
+  pit is cut through the world's own ground.
+- **Ship AI:** six roles and a captain's character, flights and moods,
+  what a civilian does when the guns come out, the crooked law, navy and
+  Syndicate doctrine, traders who turn pirate when a fortune passes, ships
+  on the lanes, and the ship scanning you highlighted.
+- **Cockpits by hull,** chosen at the yard, two abreast with a co-pilot's
+  chair, and the HUD on the glass.
+- **Also:** weapon hits leave hot metal and wounds, a hold can become a
+  hardpoint, saves go to and from a file, the beacon hand is no longer
+  paid, and the title is set in Aldrich (provisional).
+- **Saves:** careers from 1.5.x load as they are. The save format is
+  unchanged (VERSION 6).
+
 ### Changed (2026-11-23, the title is set in Aldrich)
 
 The wordmark on the title card and the loading screen is now "MANIFEST"

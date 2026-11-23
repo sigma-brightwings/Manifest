@@ -30,7 +30,9 @@ check('and so does the lockfile, which is the copy nobody was watching',
 check('including the root package entry inside it',
       !!(lock.packages && lock.packages[''] && lock.packages[''].version === pkg.version),
       (lock.packages && lock.packages[''] ? lock.packages[''].version : 'missing') + ' vs ' + pkg.version);
-check('the name is a name, not a number', /^[A-Z][a-z]+$/.test(Release.name), Release.name);
+/* Words, not digits: one or more capitalised words (1.6.0 "Stella
+ * Octangula" was the first name of two; polytopes often are). */
+check('the name is a name, not a number', /^[A-Z][a-z]+( [A-Z][a-z]+)*$/.test(Release.name), Release.name);
 check('it is written out with both', Release.label().indexOf(pkg.version) >= 0 && Release.label().indexOf(Release.name) >= 0, Release.label());
 var html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
 check('index.html loads it before main.js', html.indexOf('src/release.js') >= 0 && html.indexOf('src/release.js') < html.indexOf('src/main.js'));
