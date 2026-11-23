@@ -7,6 +7,15 @@
  */
 var fs = require('fs'), path = require('path');
 var pkg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package.json'), 'utf8'));
+/* THE THIRD COPY (2026-11-22). There are not two copies of the version,
+ * there are three - the lockfile carries it too - and only two were ever
+ * checked. It sat at "0.1.0" from before 1.0 until an `npm install` in a
+ * fresh clone quietly corrected it, and then drifted again IMMEDIATELY:
+ * 1.5.2 shipped with a lockfile still saying 1.5.1. Harmless in itself,
+ * since npm resolves dependencies from the tree below rather than this
+ * field, but it is a number about this build that says the wrong thing,
+ * and the whole point of this file is one release and one number. */
+var lock = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'package-lock.json'), 'utf8'));
 var Release = require('../src/release.js');
 var pass = 0, fail = 0;
 function check(name, ok, info) {
@@ -16,6 +25,11 @@ function check(name, ok, info) {
 console.log('--- one release, one number, one name ---');
 check('the game and the packager carry the same version', Release.version === pkg.version, Release.version + ' vs ' + pkg.version);
 check('and the same name', Release.name === pkg.releaseName, Release.name + ' vs ' + pkg.releaseName);
+check('and so does the lockfile, which is the copy nobody was watching',
+      lock.version === pkg.version, lock.version + ' vs ' + pkg.version);
+check('including the root package entry inside it',
+      !!(lock.packages && lock.packages[''] && lock.packages[''].version === pkg.version),
+      (lock.packages && lock.packages[''] ? lock.packages[''].version : 'missing') + ' vs ' + pkg.version);
 check('the name is a name, not a number', /^[A-Z][a-z]+$/.test(Release.name), Release.name);
 check('it is written out with both', Release.label().indexOf(pkg.version) >= 0 && Release.label().indexOf(Release.name) >= 0, Release.label());
 var html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');

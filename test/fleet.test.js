@@ -123,6 +123,54 @@ console.log('--- wages run on the same kind of clock ---');
   check('but its clock still moves', empty.paidTo === 30 * DAY, empty.paidTo);
 })();
 
+console.log('--- nobody adrift is on the payroll ---');
+/* A WAGE RUNS WHILE THEY ARE ABOARD, which is crew.js's own phrase for
+ * what a wage is. The roster work of 2026-11-22 made a hand cast off the
+ * hull STAY on the books, flagged `out`, so the ship screen can show her
+ * and you can be told to go and get her - Crew.present(ship) is the list
+ * of who is actually at their post.
+ *
+ * settle() went on billing Crew.aboard, which is the books. Measured on
+ * 1.5.2 before the fix: with one of two hands adrift, present was 1 hand
+ * at 54 cr/day and aboard was 2 at 122, and the desk charged the 122. She
+ * was paid 68 cr/day to fall away behind the ship.
+ *
+ * Asserted through settle() rather than against a list, because the list
+ * was never the thing that was wrong - the money was. */
+(function () {
+  var here = person('gunner', 3), gone = person('engineer', 3);
+  var s = shipOf('talon', 100000, [here, gone]);
+  s.wagesTo = 0;
+  var G = gameAt(10 * DAY, s, []);
+  var before = s.credits;
+
+  /* Cast off: still on the books, marked, not at her post. */
+  gone.out = 'adrift';
+  check('she is still on the books', Crew.aboard(s).length === 2, Crew.aboard(s).length + ' listed');
+  check('but not at her post', Crew.present(s).length === 1, Crew.present(s).length + ' at post');
+
+  Fleet.settle(G, G.t);
+  var spent = before - s.credits;
+  var onlyHere = Crew.dailyWage(here) * 10;
+  var bothOfThem = (Crew.dailyWage(here) + Crew.dailyWage(gone)) * 10;
+  check('the desk bills the hand who was at her post',
+        spent === onlyHere, spent + ' vs ' + onlyHere);
+  check('and not the one on the beacon',
+        spent !== bothOfThem,
+        'billing both would have been ' + bothOfThem + ' cr');
+
+  /* And when she is picked up, her wage runs again - the flag is the only
+   * thing holding it, so clearing it has to be enough. */
+  delete gone.out;
+  s.wagesTo = 10 * DAY;
+  var before2 = s.credits;
+  G.t = 20 * DAY;
+  Fleet.settle(G, G.t);
+  check('recovered, she is back on the payroll',
+        before2 - s.credits === (Crew.dailyWage(here) + Crew.dailyWage(gone)) * 10,
+        (before2 - s.credits) + ' cr for ten days of two hands');
+})();
+
 console.log('--- the bill, settled at the desk ---');
 (function () {
   var s = shipOf('talon', 100000, [person('gunner', 3)]);

@@ -1803,6 +1803,47 @@ mining stuff with".
 - **`tools/electron-probe.cjs`** gives probes a `file(name, text)` helper
   that writes into the probe's output folder.
 
+### Fixed (2026-11-22, the hand on the beacon was still being paid)
+
+1.5.2 made the crew roster mean the right thing: a hand outside or adrift
+stays on the books with an `out` flag, rescues no longer duplicate her, the
+dead are struck off, old careers reconcile on the first frame, and
+`Crew.present(ship)` is the list of who is actually at their post. The ship
+screen even refuses to pay off somebody who is out there.
+
+**Three callers never moved across, and one of them costs credits.**
+Measured on 1.5.2 before anything was touched: with Ada Vance adrift on a
+beacon, `Crew.present` is one hand at 54 cr/day and `Crew.aboard` - which
+under this naming is the whole books - is two at 122.
+
+- **`fleet.js` billed the books.** She was paid **68 cr/day to fall away
+  behind the ship**, which is the one thing crew.js says out loud a wage
+  does not do: *"a wage that runs while they are aboard."* The desk now
+  settles against who is at their post.
+- **The medic reported "2 aboard, and everyone fit to work"** while one of
+  the two suffocated on a beacon.
+- **And she was still drawn walking the decks as an NPC**, standing in the
+  corridor and adrift at the same time.
+
+**Deliberately not changed**, because they are right as they stand: the
+three places that REBUILD `s.crew` (paying a hand off, signing one on, a
+friend coming aboard) need the whole books or they would erase her;
+`concourse.js` marks who is signed on so the hiring hall cannot re-offer a
+woman who is already yours; and `recap.js` walks the books on purpose, so
+it can report who is *not* aboard.
+
+- **Saves:** unaffected. The flag and the roster are 1.5.2's; this only
+  changes who reads which list.
+- **Tests:** `test/fleet.test.js` 218 -> 223, asserting through the real
+  `Fleet.settle` rather than against a list, because the list was never
+  what was wrong - the money was. Confirmed to fail against the old line:
+  1,360 cr billed where 680 was owed.
+- **Also:** the lockfile drifted again, immediately. `package-lock.json`
+  shipped in 1.5.2 still saying 1.5.1, having previously sat at `0.1.0`
+  since before 1.0. `release.test.js` pinned release.js against
+  package.json and never looked at the third copy; it does now, 6 -> 8
+  checks.
+
 ## 1.5.2 "Rhombicuboctahedron" (2026-11-19)
 
 The stations come alive, and the first piece of mining's last stage. A

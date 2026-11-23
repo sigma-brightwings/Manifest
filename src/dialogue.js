@@ -1412,7 +1412,11 @@
                ' Forward guns are clean.' + (kn ? ' ' + CrewM.KNACKS[kn].what.charAt(0).toUpperCase() + CrewM.KNACKS[kn].what.slice(1) + '.' : '');
       }
       if (role === 'medic') {
-        var n = (global.Crew && global.Crew.aboard ? global.Crew.aboard(s).length : 0);
+        /* Those at their post: the line is "everyone fit to work", and
+         * a hand adrift on a beacon is neither. */
+        var CrewP = global.Crew;
+        var n = (CrewP && CrewP.present ? CrewP.present(s).length
+                                        : (CrewP && CrewP.aboard ? CrewP.aboard(s).length : 0));
         return n + ' aboard, and everyone fit to work.' + (f < 0.4 ? ' If she takes any more hits, that will change.' : '');
       }
       return (s.docked ? 'Snug in the clamps.' : 'Steady.') + ' Hull ' + Math.round(f * 100) + '%, ' +
