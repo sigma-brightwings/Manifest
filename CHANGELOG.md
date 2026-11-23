@@ -40,6 +40,24 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-23, the developer's panel)
+
+- A developer's harness for testing features without playing all the way to them (`src/devharness.js`). It is on only in a developer's run. The page has to be opened with `?dev`, which the Electron shell does when it isn't packaged or is started with `--dev`. The released game has no key or code to reach it.
+- `` ` `` (the key left of 1) opens and closes it. While one of its fields has the keyboard, the game hears nothing.
+- What it shows and does:
+  - **Status:** system, port, hull type and integrity, deck, room and compartment number, x/z/floor, fps.
+  - **Ship:** become any hull, including the Crawler in any livery, with a full crew if you want one.
+  - **Aboard:** stand up, go straight to any room on any deck, and check her decks. The check confirms every room can be reached from her airlock at sea, at general quarters, and at GQ with the tram out. It also lists rooms narrowed, lowered, dropped, or outside her hull.
+  - **World:** go to any star by name, dock at any port in the system, launch.
+  - **State:** a hull-integrity slider, which is what the tram's battery rule reads, and credits.
+- Everything it does goes through the game's own functions, so a save made afterwards is an ordinary save of that state. Use a scratch career.
+- `main.js` now lends the panel three of its functions (`GameDev`: stand up, say, deck label). `tools/probe-devharness.js` drives the panel in the real game.
+
+### Added (2026-11-23, decks for the other ships: the Crawler's engineering flat)
+
+- The Crawler has a lower engineering flat (auxiliary machinery and the reactor) under her junction deck. Ladders and an escape trunk lead up to it, and it has the merchant-style vertical core behind its glass.
+- The L hulls (Kestrel, Cutter, Longhaul, Tanker) have the same flat, built but switched off (`FLAT_HULLS`). A 3 m flat doesn't fit inside them unless the hulls grow 13 to 21 m, and that would break the nose-cockpit fit. That decision is waiting on Astra.
+
 ### Added (2026-11-23, decks for the large ships — stage 2, walk them)
 
 Astra: *"okay. let's build it."* The Capital, the Carrier, the Meridian and
