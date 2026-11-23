@@ -66,7 +66,7 @@ var GROUPS = {
   ships: [
     'test/outside.test.js',
     'test/ships.test.js', 'test/shipyard.test.js', 'test/start.test.js',
-    'test/crew.test.js', 'test/fleet.test.js', 'test/shipdeck.test.js',
+    'test/crew.test.js', 'test/fleet.test.js', 'test/shipdeck.test.js', 'test/navaldeck.test.js',
     'test/nosecockpit.test.js', 'test/walk.test.js', 'test/npc.test.js',
     'test/towers.test.js', 'test/airlock.test.js', 'test/hull-seal.test.js',
     'test/dialogue.test.js', 'test/boarding.test.js', 'test/boarding3.test.js'

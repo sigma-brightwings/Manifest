@@ -40,6 +40,56 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-23, decks for the large ships — stage 1, the layout)
+
+Astra: *"for the capital and carrier, use the precedent of US naval ships of
+the post WW2 era for the multi-deck layout. I want there to be multiple ways
+to connect up those decks and rooms"*, and *"all large size ships need
+multiple decks and different rooms, larger reactor rooms"*, the military
+reactor lying down with its rods fed from the front and a slab of glass
+holding back the water, *"so we can see the cherenkov glow."* The design is
+`claude/naval-decks.md`. This is its first stage: the layout as data, and
+the tests that hold it. **Nothing in the game reads it yet**, so no ship has
+changed inside; stages 2-3 put walls round it and let you walk it.
+
+- **`src/navaldeck.js`** (`NavalDeck.layout(hullId)`) lays out every L and
+  XL hull:
+  - **Capital** as the nuclear cruiser *Long Beach*: CIC under the bridge;
+    main deck; 2nd deck (damage control); 3rd deck with missile magazines
+    fore and aft; 4th deck engineering with **two reactor rooms**.
+  - **Carrier** as *Forrestal* / *Kitty Hawk*: flag bridge and island base
+    (04, the flight deck); gallery deck 03 with ready rooms and CIC; hangar
+    deck 1 in three bays behind fire curtains, the airlock in the starboard
+    sponson; 2nd deck; 4th deck engineering with two reactors and the tram.
+  - **Meridian** (A promenade, B cabins, C crew and machinery) and
+    **Leviathan** (accommodation, then a tunnel and machinery deck with the
+    tram), after merchant practice: lettered decks, stair towers,
+    watertight doors that close on damage only.
+  - **Kestrel, Cutter, Longhaul, Tanker, Crawler**: an engineering flat
+    under their own deck, with an engine room and a reactor.
+- **Navy rules kept:** deck numbers (1 main, 2, 3 below; 01, 02 above);
+  compartment numbers deck-frame-position-use (`2-120-1-L`, odd to
+  starboard, even to port, frames of 4 ft from the stem); **no door through
+  a main bulkhead below the damage-control deck**; ladders in pairs, **up
+  and forward to starboard, down and aft to port**, which crew routes keep.
+- **Ways between decks:** inclined ladders, scuttles, escape trunks, twin
+  side passageways with cross-passages, the lift, the tram. Every
+  watertight compartment has its own way up.
+- **General quarters (condition Zebra)** dogs every Z fitting: on the 2nd
+  deck the passage doors in the main bulkheads and the hatches over the
+  ladders. The scuttles in those hatches, the trunks, the lift and the tram
+  stay open, so every room is still reachable. Bow to stern on the
+  Capital's 2nd deck goes up over the main deck instead.
+- **Reactor rooms:** a compact core in a water jacket that is both coolant
+  and shield; military cores (Capital, Carrier, Cutter, Navy and Syndicate
+  Crawlers) lie down with rod drives on the forward face, civilian ones
+  stand with drives on top. The glass is in the bulkhead to reactor
+  control; the reactor is entered only through control's X-ray door or up
+  its escape trunk.
+- `tools/hull-envelope.js` measures each large hull's inside slice by slice;
+  the band the decks are laid in comes from it.
+- `test/navaldeck.test.js` (ships group, 47 checks).
+
 ### Fixed (2026-11-22, the hand on the beacon was still being paid)
 
 1.5.2 made the crew roster mean the right thing: a hand outside or adrift
