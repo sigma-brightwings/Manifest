@@ -8423,7 +8423,7 @@
    * read. Null without weather (no air, or none to speak of). */
   function overheadAt(port, gb) {
     if (!Weather || !Weather.overhead || !port || !port.parentBody || !gb) return null;
-    return Weather.overhead(port.parentBody, gb.up, G.t);
+    return Weather.overhead(port.parentBody, gb.up, G.t, G.sys);
   }
   function eyeUnderStreet(port, cam) {
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
@@ -8552,6 +8552,35 @@
     if (!best) return null;
     if (eyeUnderStreet(best, cam)) return null;
     return best;
+  }
+  /* THE SKY IN FLIGHT (2026-11-22). The sky over a port (groundSky) only
+   * ever came on at a port: in a ground port's cut and within 30 km of a
+   * sea platform. Everywhere else, flying in a world's air, the screen
+   * above the horizon was cleared to space - a black, starry sky at noon
+   * three kilometres over the sea, found by the overcast probe while
+   * tuning the weather's dimming (the dimming was going dark against
+   * black, which is why every overcast looked like dusk).
+   *
+   * So: wherever the eye is inside a world's air, the same sky, at the
+   * eye's own vertical, with the weather overhead there. Thinned by how
+   * much air is left above the eye - sqrt(rho here / rho at the ground),
+   * the arithmetic GLWorld's airOf already uses - so it fades through a
+   * dark-blue stratosphere to space as you climb out, rather than
+   * snapping off at some height. Below FLIGHT_SKY_MIN it is not drawn at
+   * all and the planet seen from outside its air is the picture again. */
+  var FLIGHT_SKY_MIN = 0.03;
+  function flightSky(cam) {
+    if (!G.sys || !cam || !cam.eye || !Sim.atmosphereContext) return null;
+    var atmo = Sim.atmosphereContext(cam.eye, G.sys, G.t);
+    if (!atmo || !atmo.body || !atmo.body.atmosphere || !(atmo.body.atmosphere.rho0 > 0)) return null;
+    var off = V.sub(cam.eye, atmo.pos), r = V.len(off);
+    var alt = r - atmo.body.radius;
+    if (!(r > 0) || alt < 0) return null;
+    var thin = Math.sqrt(Math.max(0, Sim.airDensity(atmo.body, alt)) / atmo.body.atmosphere.rho0);
+    if (!(thin > FLIGHT_SKY_MIN)) return null;
+    var up = V.scale(off, 1 / r);
+    return { body: atmo.body, up: up, sun: sunDirAt(cam.eye), thin: thin,
+             wx: Weather && Weather.overhead ? Weather.overhead(atmo.body, up, G.t, G.sys) : null };
   }
   function seaPortNear(cam) {
     if (!G.ship || !G.sys || !cam || !cam.eye || !Render.seaPosts) return null;
@@ -9776,6 +9805,11 @@
                    : (!mapMode() ? seaSkyPort(cam) : null);
     var groundSkyNow = skyPortNow ? groundSky(skyPortNow) : null;
     if (groundSkyNow) buried = null;
+    /* Anywhere else in a world's air: the sky in flight (flightSky). Not
+     * underground, not in the map, and the port's own sky wins at a port. */
+    var flySky = (!skyPortNow && !mapMode() && !buried && glLive() && global.GLWorld.skyOver)
+               ? flightSky(cam) : null;
+    if (flySky) groundSkyNow = global.GLWorld.skyOver(flySky.body, flySky.up, flySky.sun, flySky.wx, flySky.thin);
     /* Berthed in a shed: the shed is the world. See enclosedPort.
      *
      * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
@@ -9794,6 +9828,8 @@
      * it, which would have shown one frame of empty space through the roof
      * on the way in. */
     var rock = buried || inside;
+    /* In a shed the shed is the world: no flight sky through its roof. */
+    if (flySky && rock) { flySky = null; groundSkyNow = null; }
 
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
@@ -9803,9 +9839,13 @@
        * planet pass for the haze that makes the horizon. See GLWorld.skyAt.
        * Its own lines, apart from the ground's shading, on purpose. */
       if (groundSkyNow && global.GLWorld.setGroundSky) {
-        var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
-        global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
-          sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
+        if (flySky) {
+          global.GLWorld.setGroundSky(flySky.body, flySky.up, flySky.sun, flySky.wx, flySky.thin);
+        } else {
+          var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
+          global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
+            sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
+        }
         global.GLWorld.drawGroundSky(cam);
       }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
@@ -11268,9 +11308,24 @@
      * kilometres of water and the world outside loses its contrast, which
      * is most of what makes being under weather feel different from being
      * above it. One fill. */
+    /* PAINTED OVER, NOT ADDED (2026-11-22). The canopy's glass pass runs
+     * just before this and leaves the context in 'lighter', and nothing
+     * here said otherwise - so the dark wash under a deck was ADDED to
+     * the view and brightened it, and the murk inside a storm summed to
+     * flat white. Found by logging the fills on a probe descent: every
+     * one of them went through as 'lighter'. Each block says what it
+     * means now. */
     if (wx.gloom > 0.02) {
       ctx.save();
-      ctx.globalAlpha = Math.min(0.66, wx.gloom * 0.78);
+      ctx.globalCompositeOperation = 'source-over';
+      /* LIGHT UNDER PLAIN OVERCAST, HEAVY IN A STORM (2026-11-22). Since
+       * the flight sky, the sky itself is grey under a deck (overcastSky
+       * dims it by the gloom); this wash on top of it was a second
+       * darkening, and an ordinary overcast noon read as dusk. So the wash
+       * now carries what the sky cannot - a storm's dark heart - and only
+       * a touch for a plain deck: 0.52 gloom under Mirven II's overcast
+       * gave 0.40 alpha before and 0.16 now; a storm's 0.94 still 0.66. */
+      ctx.globalAlpha = Math.min(0.66, wx.gloom * (0.30 + 0.45 * Math.min(1, wx.storm / 0.8)));
       /* Neutral and dark. The first wash was a blue-grey and, laid over a
        * world whose own air is tinted, came out teal — the view from under
        * an overcast looked like the view from under water. */
@@ -11282,11 +11337,43 @@
     /* IN the cloud, not under it: the window fills with grey and you fly
      * on instruments, which is the entire reason a cloud deck is a place
      * and not a texture. */
-    if (wx.inCloud > 0.05) {
+    /* GRADED (2026-11-22): the column's density at your height, so the
+     * murk thickens and thins as you go down through a storm, and it is
+     * lit from above - pale near the top of the deck, dark in a storm's
+     * heart and under a deep one (gloom is the cloud above you). Then
+     * WISPS: a few soft banks in front of the murk that rise past the
+     * glass as you descend and drift as you fly, so moving through cloud
+     * reads as moving, not as a grey screen. Three gradients a frame. */
+    if (wx.inCloud > 0.02) {
+      var dens = wx.inCloud, op = 1 - (wx.vis !== undefined ? wx.vis : Math.exp(-3.2 * dens));
+      var lightC = 1 - 0.75 * Math.max(wx.gloom || 0, wx.storm * 0.8);
+      /* Night takes the whole colour down, not just the lit part of it:
+       * the first cut scaled only the top term and a storm at midnight
+       * came out the same mid-grey as one at dusk. */
+      var dayC = wx.day !== undefined ? 0.12 + 0.88 * wx.day : 1;
+      var cr = Math.round((70 + 100 * lightC) * dayC), cg = Math.round((76 + 104 * lightC) * dayC),
+          cb = Math.round((88 + 112 * lightC) * dayC);
       ctx.save();
-      ctx.globalAlpha = Math.min(0.94, wx.inCloud * 1.05);
-      ctx.fillStyle = '#9aa6b8';
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = Math.min(0.96, op * 1.04);
+      ctx.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
       ctx.fillRect(0, 0, w, h);
+      /* The banks: positions from altitude and real time, no state. A
+       * bank is wider than the screen, so its edge is what you see. */
+      var altK = (wx.alt || 0) * 0.9, now = performance.now() / 1000;
+      for (var bk = 0; bk < 3; bk++) {
+        var ph = altK * (0.55 + 0.25 * bk) + bk * 1.7;
+        var by = h * (1.15 - ((ph % 1.6) + 1.6) % 1.6);
+        var bx = w * (0.5 + 0.35 * Math.sin(now * 0.05 * (bk + 1) + bk * 2.1));
+        var br = Math.max(w, h) * (0.55 + 0.2 * bk);
+        var gr = ctx.createRadialGradient(bx, by, br * 0.05, bx, by, br);
+        var a0 = Math.min(0.55, dens * (0.30 + 0.12 * bk)) * (1 - Math.min(1, op) * 0.6);
+        gr.addColorStop(0, 'rgba(' + Math.min(255, cr + 30) + ',' + Math.min(255, cg + 30) + ',' + Math.min(255, cb + 30) + ',' + a0.toFixed(3) + ')');
+        gr.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = gr;
+        ctx.fillRect(0, 0, w, h);
+      }
       ctx.restore();
     }
 
@@ -11306,6 +11393,12 @@
          * white rectangle is not a flash, it is a missing frame. Lower, so
          * the sky goes pale and what is falling through it stays visible. */
         var lit = Math.min(0.5, env * wx.storm * (0.40 + 0.50 * sp.salt[1]));
+        /* NOT WHILE PAUSED (2026-11-22). The stroke's phase is sim time,
+         * so a pause that lands on a strike holds the flash forever - a
+         * canopy gone pale-white for as long as the menu is up. Found by
+         * the storm probe, which pauses: every frame inside the cell read
+         * 105 grey before the flash and 238 after it. */
+        if (G.paused) lit = 0;
         if (lit > 0.01) {
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
@@ -11497,7 +11590,12 @@
     if (!Weather || !Weather.aloft) return;
     var wx = Weather.aloft(G.ship, G.sys, G.t);
     if (!wx) return;
+    /* Without the glass's glow: a shadow blur on a full-screen fill is a
+     * blur of the whole screen, every frame. */
+    ctx.save();
+    ctx.shadowBlur = 0;
     weatherFall(ctx, cam, w, h, wx);
+    ctx.restore();
   }
 
   /* THE SAME WEATHER FROM OUTSIDE THE HULL: the chase camera, and standing
@@ -11511,6 +11609,64 @@
     var wx = Weather.aloft(G.ship, G.sys, G.t);
     if (!wx) return;
     weatherFall(ctx, cam, w, h, wx);
+  }
+
+  /* ---- vapour, from the seat (2026-11-22) ---------------------------------
+   * The tip trails and the sheet over the hull are drawn in the world, and
+   * from the seat you see neither: the tips are behind you and the sheet is
+   * on the hull under the glass. What a pilot does see in a hard pull in wet
+   * air is vapour boiling off the canopy rails and the leading edges just
+   * outside it, streaming past the frame. So: short white wisps in the
+   * outer part of the glass, running outward from where you are going
+   * (the stagnation point, as the re-entry streaks do), crowded toward the
+   * side you are pulling toward - the lifting side, where the pressure is
+   * lowest. Hashed off a time bucket like the rain: no state.
+   *
+   * Drawn with the weather, before the instruments: it is outside. */
+  function drawCanopyVapour(ctx, cam, w, h) {
+    var v = G.vapour && G.vapour.player;
+    if (!v || !v.flow) return;
+    var s = Math.min(1, v.sheet + 0.25 * v.tip);
+    if (!(s > 0.04)) return;
+    var p = cam.projectDir(v.flow);
+    var x = w / 2, y = h / 2;
+    if (p && p.x > -w * 0.2 && p.x < w * 1.2 && p.y > -h * 0.2 && p.y < h * 1.2) { x = p.x; y = p.y; }
+    /* The lifting side, on the screen. */
+    var lx = 0, ly = -1;
+    if (v.liftDir) {
+      lx = V.dot(v.liftDir, cam.r); ly = -V.dot(v.liftDir, cam.u);
+      var lm = Math.hypot(lx, ly);
+      if (lm > 1e-6) { lx /= lm; ly /= lm; } else { lx = 0; ly = -1; }
+    }
+    var tS = nowSeconds(), bucket = Math.floor(tS * 24);
+    var reach = Math.hypot(w, h);
+    var n = Math.round(10 + 40 * s);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0;            // the glass's glow, on long strokes, is the ladder's cost again
+    ctx.lineCap = 'round';
+    for (var band = 0; band < 2; band++) {
+      ctx.strokeStyle = 'rgba(240,244,250,' + ((0.16 + 0.40 * s) * (band ? 0.55 : 1)).toFixed(3) + ')';
+      ctx.lineWidth = (2 + 5 * s) * (band ? 1.8 : 1);
+      ctx.beginPath();
+      for (var i = band; i < n; i += 2) {
+        /* Angles bunched toward the lifting side: a uniform draw over a fan
+         * that narrows as the pull hardens. */
+        var u = hashUnit(i * 4.13 + bucket * 0.173);
+        var spread = (u - 0.5) * Math.PI * (1.6 - 0.9 * s);
+        var ang = Math.atan2(ly, lx) + spread;
+        /* The outer part of the GLASS: the canopy frame is about a quarter
+         * of the diagonal out from the middle, and the first cut started
+         * these past it, where the frame hid them. */
+        var r0 = reach * (0.13 + 0.20 * hashUnit(i * 2.31 + bucket * 0.611));
+        var len = reach * (0.04 + 0.10 * s) * (0.5 + hashUnit(i * 6.07 + bucket * 0.33));
+        var ca = Math.cos(ang), sa = Math.sin(ang);
+        ctx.moveTo(x + ca * r0, y + sa * r0);
+        ctx.lineTo(x + ca * (r0 + len), y + sa * (r0 + len));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /* ---- re-entry, from the seat --------------------------------------------
@@ -16048,6 +16204,14 @@
     }
 
     Render.glassBegin(ctx, aperture);
+    /* THE WEATHER FIRST, THEN THE INSTRUMENTS ON TOP OF IT (2026-11-22).
+     * It used to be the last thing inside the glass, which was harmless
+     * while the murk was (wrongly) added; painted over properly, a storm's
+     * heart erased the ladder, the air data and every box - "fly on
+     * instruments" with the instruments gone. The cloud and the rain are
+     * outside the canopy; the HUD is projected on the inside of it. */
+    drawCanopyWeather(ctx, cam, w, h);
+    drawCanopyVapour(ctx, cam, w, h);
     /* The glass is laid out against the VIEW, which ends at the icon bar
      * when the band is stowed (see draw), not against the window. */
     var hv = cam.h || h;
@@ -16165,7 +16329,6 @@
     drawCanopyPlasma(ctx, cam, w, h);
     drawCanopyShieldFlare(ctx, cam, w, h);
     drawCanopyShieldRim(ctx, aperture, w, h);
-    drawCanopyWeather(ctx, cam, w, h);
     Render.glassEnd(ctx);
 
     if (shell) {
@@ -19635,7 +19798,16 @@
   var CONTRAIL_LIFE = 9;             // s before a point has blown away
   var MISSILE_TRAIL_LIFE = 4.5;
   var CONTRAIL_MAX_PTS = 42;
-  var CONTRAIL_MAX_TRAILS = 24;
+  /* Room for the tip pairs as well (2026-11-22): three trails a hull now,
+   * when she is pulling in wet air. */
+  var CONTRAIL_MAX_TRAILS = 48;
+  /* THE TIP VORTICES. Short-lived and laid finely: a vortex core is a thin
+   * line that is gone in a couple of seconds, and in a hard turn it curves
+   * fast enough that the hull trail's third of a second would draw it as
+   * a polygon. Below TIP_MIN nothing is laid. */
+  var TIP_LIFE = 2.2;
+  var TIP_STEP = 0.08;
+  var TIP_MIN = 0.08;
   var CONTRAIL_MIN_SPEED = 0.06;     // km/s through the air before one forms
 
   function trailStore() {
@@ -19655,7 +19827,7 @@
    *   - a missile's smoke: YOUR ship's, because the fight is in your frame
    *     and smoke that holds still against the rock and the ships you are
    *     looking at is what reads as left behind. */
-  function layPoint(key, pos, life, vel) {
+  function layPoint(key, pos, life, vel, step) {
     var store = trailStore();
     var tr = store.by[key];
     if (!tr) {
@@ -19666,7 +19838,7 @@
       }
     }
     tr.life = life;
-    if (G.t - tr.last < CONTRAIL_STEP) return tr;
+    if (G.t - tr.last < (step || CONTRAIL_STEP)) return tr;
     tr.last = G.t;
     tr.pts.push({ p: V.clone(pos), t: G.t, v: vel ? V.clone(vel) : null });
     if (tr.pts.length > CONTRAIL_MAX_PTS) tr.pts.shift();
@@ -19677,12 +19849,21 @@
    * Returns the thickness factor, or 0 for nothing — so the same call
    * answers "should there be a trail" and "how heavy is it". */
   function airTrailStrength(pos, vel) {
-    if (!Sim.atmosphereContext) return 0;
+    var air = airAt(pos, vel);
+    if (!air || !(air.rho > 0.02)) return 0;      // the top of the air is thin
+    if (air.through < CONTRAIL_MIN_SPEED) return 0;
+    return Math.max(0, Math.min(1, air.rho * 0.9)) * Math.min(1, air.through / 0.9);
+  }
+  /* The air at a point and how fast a hull is going through it: density,
+   * the air's own velocity (it turns with its world), the hull's velocity
+   * against it. Null outside any air. Shared by the hull's trail and the
+   * vapour off its tips (2026-11-22). */
+  function airAt(pos, vel) {
+    if (!Sim.atmosphereContext) return null;
     var atmo = Sim.atmosphereContext(pos, G.sys, G.t);
-    if (!atmo || !atmo.body || !atmo.body.atmosphere) return 0;
+    if (!atmo || !atmo.body || !atmo.body.atmosphere) return null;
     var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
     var rho = Sim.airDensity(atmo.body, alt);
-    if (!(rho > 0.02)) return 0;                  // the top of the air is thin
     /* THROUGH THE AIR, AND THE AIR TURNS WITH ITS WORLD (2026-11-02). The
      * speed was measured against the world's centre, so a hull held still
      * over the ground - a sea platform's pad carrying her down, at a few
@@ -19699,9 +19880,57 @@
       var rr = V.sub(pos, atmo.pos);
       airVel = V.add(atmo.vel, V.scale(V.cross(ax, rr), om));
     }
-    var through = V.len(V.sub(vel, airVel));
-    if (through < CONTRAIL_MIN_SPEED) return 0;
-    return Math.max(0, Math.min(1, rho * 0.9)) * Math.min(1, through / 0.9);
+    var rel = V.sub(vel, airVel);
+    return { rho: rho, airVel: airVel, rel: rel, through: V.len(rel), body: atmo.body };
+  }
+
+  /* What a lifted NPC feels, from how her velocity is changing: the change
+   * less gravity, which is what her thrust and the air are doing to her.
+   * Her own last velocity is kept beside the trails; the first frame of a
+   * ship reads as level flight. */
+  /* SMOOTHED over about a third of a second: her velocity is stepped by
+   * the sim, not by the frame, so a frame-to-frame difference is zero, then
+   * a spike, then zero - a hull that flickered vapour on alternate frames. */
+  var npcVel = {};
+  function npcFelt(key, pos, vel) {
+    var prev = npcVel[key];
+    if (!prev || !(G.t - prev.t > 1e-4) || G.t - prev.t > 2) {
+      npcVel[key] = { v: V.clone(vel), t: G.t, f: prev && prev.f };
+      return prev ? prev.f || null : null;
+    }
+    var dt = G.t - prev.t;
+    var acc = V.scale(V.sub(vel, prev.v), 1 / dt);
+    var raw = Sim.acceleration ? V.sub(acc, Sim.acceleration(pos, G.sys, G.t)) : acc;
+    var k = Math.min(1, dt / 0.3);
+    var f = prev.f ? V.add(V.scale(prev.f, 1 - k), V.scale(raw, k)) : raw;
+    npcVel[key] = { v: V.clone(vel), t: G.t, f: f };
+    return f;
+  }
+  /* The vapour a flyer is pulling out of the air this moment, or null
+   * outside air. `load` is the felt pull across the airflow in g, with its
+   * direction (`liftDir`, world) for the sheet drawn on the lifting side.
+   * A ship with no felt reading (her first frame) is flying level: 1 g.
+   * The air's wet is looked up at most twice a second per hull - it is
+   * the weather, and the weather does not change between frames. */
+  var humCache = {};
+  function vapourFor(f, felt) {
+    var air = airAt(f.pos, f.vel);
+    if (!air || !(air.rho > 0.02) || !(air.through > 0.03)) return null;
+    var flow = V.scale(air.rel, 1 / air.through);
+    var load = 1, liftDir = null;
+    if (felt) {
+      var across = V.addScaled(felt, flow, -V.dot(felt, flow));
+      var a = V.len(across);
+      load = a / Sim.G0;
+      liftDir = a > 1e-9 ? V.scale(across, 1 / a) : null;
+    }
+    var hc = humCache[f.key];
+    if (!hc || Math.abs(G.t - hc.t) > 0.5) {
+      hc = humCache[f.key] = { t: G.t, h: Weather && Weather.humidity ? Weather.humidity({ pos: f.pos }, G.sys, G.t) : 0.25 };
+    }
+    var v = Weather && Weather.vapourOf ? Weather.vapourOf(load, hc.h, air.through, air.rho) : { tip: 0, sheet: 0 };
+    v.load = load; v.liftDir = liftDir; v.hum = hc.h; v.flow = flow;
+    return v;
   }
 
   function stepContrails() {
@@ -19716,28 +19945,54 @@
      * something that teleports is a line across the sky. */
     var flyers = [];
     if (!G.ship.docked && !G.ship.landed) {
-      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel });
+      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel, ship: G.ship,
+                    felt: Sim.feltAccel ? Sim.feltAccel(G.ship, G.sys, G.t) : null });
     }
     var live = (G.encounter && G.encounter.active) || [];
     for (i = 0; i < live.length; i++) {
       var sp = live[i];
       var lp = sp.live || sp;
       if (!lp || !lp.pos || !lp.vel) continue;
-      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel });
+      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel, ship: lp, spec: sp });
     }
+    var vap = G.vapour || (G.vapour = {});
+    var seen = {};
     for (i = 0; i < flyers.length; i++) {
       var f = flyers[i];
+      var feltV = f.felt || npcFelt(f.key, f.pos, f.vel);
       var strength = airTrailStrength(f.pos, f.vel);
-      if (strength <= 0) continue;
       var dom = Sim.dominantBody ? Sim.dominantBody(f.pos, G.sys, G.t) : null;
       /* A trail is left in the AIR, and drifts with it - the world's spin at
        * that point, not its centre (2026-11-03); on a fast equator the
        * difference is a trail sliding off sideways at a couple of km/s. */
-      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE,
-                        dom && Sim.surfaceVelocity ? Sim.surfaceVelocity(dom, f.pos, G.sys, G.t)
-                        : (dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null));
-      tr.air = strength;
+      var drift = dom && Sim.surfaceVelocity ? Sim.surfaceVelocity(dom, f.pos, G.sys, G.t)
+                : (dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null);
+      if (strength > 0) {
+        var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE, drift);
+        tr.air = strength;
+      }
+      /* THE TIPS (2026-11-22). See Weather.vapourOf: the pull across the
+       * airflow and the wet of the air decide it. Laid from the hull's own
+       * tips (Sim.hullBox, her true span), a quarter of her length aft of
+       * centre where the tips of every hull in the library sit. */
+      var v = vapourFor(f, feltV);
+      if (v) { vap[f.key] = v; seen[f.key] = 1; }
+      if (!v || !(v.tip > TIP_MIN) || !f.ship.right || !f.ship.fwd) continue;
+      var box = Sim.hullBox ? Sim.hullBox(f.spec || f.ship) : [0.02, 0.006, 0.025];
+      var half = box[0] * 0.5, aft = -box[2] * 0.25;
+      var tl = layPoint(f.key + ':tl', V.addScaled(V.addScaled(f.pos, f.ship.right, -half), f.ship.fwd, aft),
+                        TIP_LIFE, drift, TIP_STEP);
+      var trR = layPoint(f.key + ':tr', V.addScaled(V.addScaled(f.pos, f.ship.right, half), f.ship.fwd, aft),
+                         TIP_LIFE, drift, TIP_STEP);
+      tl.tip = trR.tip = v.tip;
     }
+    /* Nothing kept for a hull that has gone: the caches are bounded by
+     * the flyers there are now. */
+    var alive = {};
+    for (i = 0; i < flyers.length; i++) alive[flyers[i].key] = 1;
+    for (var vk in vap) if (!seen[vk]) delete vap[vk];
+    for (vk in npcVel) if (!alive[vk]) delete npcVel[vk];
+    for (vk in humCache) if (!alive[vk]) delete humCache[vk];
 
     /* Missiles. Their own key so a trail survives the round that laid it,
      * which is the whole reason the store is keyed rather than hung off
@@ -19774,6 +20029,15 @@
       var pts = tr.pts.map(function (q) {
         return q.v ? { p: V.addScaled(q.p, q.v, G.t - q.t), t: q.t } : q;
       });
+      /* A tip vortex is a thin bright core that hardly spreads before it
+       * is gone - not a puffy trail. */
+      if (tr.tip !== undefined) {
+        Render.drawContrail(ctx, cam, pts, G.t, {
+          life: tr.life, width: 0.25 + 0.6 * tr.tip, spread: 1.2,
+          alpha: 0.22 + 0.55 * tr.tip, color: '250,252,255'
+        });
+        continue;
+      }
       Render.drawContrail(ctx, cam, pts, G.t, {
         life: tr.life,
         /* A motor smokes heavier than a wingtip, and a hull in thick air
@@ -20707,6 +20971,11 @@
      * a ship reads from far away while it is coming in. */
     Render.drawReentryPlasma(ctx, cam, G.ship, shipLen(),
                              G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
+    /* And the vapour she pulls out of wet air in a hard turn (2026-11-22). */
+    var pv = G.vapour && G.vapour.player;
+    if (pv && pv.sheet > 0.03 && Render.drawVapourSheet && Sim.hullBox) {
+      Render.drawVapourSheet(ctx, cam, G.ship, Sim.hullBox(G.ship), pv.sheet, pv.liftDir, pv.flow, nowSeconds());
+    }
     playerShieldShell(ctx, cam);
     drawHullBlooms(ctx, cam, G.ship);
     drawShipScars(ctx, cam, G.ship, 'hull:' + (G.ship.hullId || 'talon'), shipLen(G.ship), G.ship);

@@ -47,7 +47,7 @@ var GROUPS = {
   core: [
     'tools/lint-globals.js', 'test/packed.test.js', 'test/packed-browser.test.js',
     'test/self.test.js', 'test/release.test.js', 'test/physics.test.js',
-    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/precip.test.js',
+    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/climate.test.js', 'test/precip.test.js',
     'test/blacksites.test.js', 'test/intel.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
@@ -91,7 +91,7 @@ var GROUPS = {
     'test/appeal.test.js', 'test/tourism.test.js', 'test/resorts.test.js', 'test/seams.test.js', 'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/interior.test.js', 'test/magnetics.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/interior.test.js', 'test/magnetics.test.js', 'test/interior-cut.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [

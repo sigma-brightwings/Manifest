@@ -333,6 +333,98 @@
     }
     return { sea: sea, ice: ice, lava: !!T.lava };
   }
+  /* THE SURFACE UNDER THE READOUT (2026-11-22). Astra: the scanner's
+   * readout should be superimposable on a map of the surface. One colour
+   * per cell, asked of the same arithmetic gl.js paints the planet with
+   * (Weather.terrainAt: elevation, seas, ice, biome), so the map's coasts
+   * are the coasts you can see from orbit; and a class per cell (0 land,
+   * 1 sea, 2 ice, 3 lava) for the outline style and its coastlines. A
+   * giant has no surface: its cloud colour in latitude bands. Cached per
+   * body; nothing stored. Where it may be SHOWN is the screen's business
+   * (only over ground you have flown). */
+  var SURF_CACHE = new WeakMap();
+  function hexUnit(h) {
+    var m = /^#?([0-9a-f]{6})$/i.exec(h || '');
+    if (!m) return [0.5, 0.5, 0.5];
+    var v = parseInt(m[1], 16);
+    return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+  }
+  function surfaceMap(body, sys) {
+    if (!body || (body.kind !== 'planet' && body.kind !== 'moon')) return null;
+    var hit = SURF_CACHE.get(body);
+    if (hit && hit.sys === sys) return hit;
+    var W = global.Weather;
+    var rgb = new Uint8Array(NCELL * 3), cls = new Uint8Array(NCELL);
+    var fr = spinFrame(body, 0), base = hexUnit(body.color);
+    var giant = /giant/i.test(body.type || '');
+    if (giant || !W || !W.terrainAt) {
+      for (var g = 0; g < NCELL; g++) {
+        var cc = CELL_CENTRES[g], lat = Math.asin(Math.max(-1, Math.min(1, cc[2])));
+        var band = 0.85 + 0.15 * Math.sin(lat * 9 + hash01(body.id + 'band') * 6);
+        rgb[g * 3] = Math.min(255, base[0] * band * 255);
+        rgb[g * 3 + 1] = Math.min(255, base[1] * band * 255);
+        rgb[g * 3 + 2] = Math.min(255, base[2] * band * 255);
+      }
+      hit = { sys: sys, rgb: rgb, cls: cls, giant: true };
+      SURF_CACHE.set(body, hit);
+      return hit;
+    }
+    var T = W.terrainOf(body), seaC = hexUnit(T.sea), iceC = [0.90, 0.94, 0.97];
+    var sunB = null;
+    if (body.habitableBand === 'terminator' && global.Sim && global.Sim.bodyPosition && sys && sys.root) {
+      var sp = global.Sim.bodyPosition(sys.root, sys, 0), bp = global.Sim.bodyPosition(body, sys, 0);
+      var dd = { x: sp.x - bp.x, y: sp.y - bp.y, z: sp.z - bp.z }, dl = len(dd) || 1;
+      sunB = W.bodyFixed(body, scale(dd, 1 / dl), 0);
+    }
+    var EL = W.elevationAt, HS = 0.004;
+    for (var i = 0; i < NCELL; i++) {
+      var p = cellBodyFixed(fr, i);
+      var t = W.terrainAt(body, p, sunB);
+      var land = t.bio && t.bio.rgb ? t.bio.rgb : base;
+      /* A little relief, as the picture's light gives it. */
+      var sh = 0.82 + 0.36 * Math.max(0, Math.min(1, t.elev));
+      var r = land[0] * sh, gg = land[1] * sh, b = land[2] * sh;
+      var s = t.sea, ic = t.ice;
+      /* TEXTURE (2026-11-22, Astra: "the ice caps read as untextured").
+       * The planet picture gets its texture from the sun across the
+       * relief and from ground-detail mottling; a flat map has neither, so
+       * a cap was one flat white. Two terms from the same elevation field:
+       *   HILLSHADE, the slope toward a light from the north-west, from
+       *     the field a quarter-cell east and north of the centre;
+       *   MOTTLE, the same field at six times the frequency - sastrugi and
+       *     melt-pond grain on ice, a little grain on rock.
+       * Ice also takes a faint blue-grey where the mottle runs low, as the
+       * picture's ice does ("bright ground is subtle", gl.js). */
+      var hs = 0, mo = 0.47;
+      /* Pack ice over a sea is ground to the eye: it gets the texture too
+       * (the first cut skipped every sea cell, and a polar cap on an ocean
+       * world is nearly all sea underneath - so it stayed flat). */
+      var solid = Math.max(1 - s, ic);
+      if (EL && solid > 0.02) {
+        var ex = -p.y, ey = p.x, el2 = Math.sqrt(ex * ex + ey * ey) || 1;
+        ex /= el2; ey /= el2;
+        var nx = -p.z * ey, ny = p.z * ex, nz = p.x * ey - p.y * ex;
+        var e0 = t.elev;
+        var e1 = EL(body, { x: p.x + ex * HS, y: p.y + ey * HS, z: p.z });
+        var e2 = EL(body, { x: p.x + nx * HS, y: p.y + ny * HS, z: p.z + nz * HS });
+        hs = Math.max(-0.25, Math.min(0.25, 0.12 * ((e2 - e0) - (e1 - e0)) / HS));
+        mo = EL(body, { x: p.x * 6, y: p.y * 6, z: p.z * 6 });
+      }
+      var mf = Math.max(0, Math.min(1, (mo - 0.34) / 0.26));
+      var iceT = [iceC[0] - 0.08 * (1 - mf), iceC[1] - 0.05 * (1 - mf), iceC[2] - 0.01 * (1 - mf)];
+      r = r + (seaC[0] - r) * s; gg = gg + (seaC[1] - gg) * s; b = b + (seaC[2] - b) * s;
+      r = r + (iceT[0] - r) * ic; gg = gg + (iceT[1] - gg) * ic; b = b + (iceT[2] - b) * ic;
+      var grain = 1 + (hs + (mo - 0.47) * (0.25 + 0.35 * ic)) * solid;
+      r *= grain; gg *= grain; b *= grain;
+      rgb[i * 3] = Math.max(0, Math.min(255, r * 255));
+      rgb[i * 3 + 1] = Math.max(0, Math.min(255, gg * 255));
+      rgb[i * 3 + 2] = Math.max(0, Math.min(255, b * 255));
+      cls[i] = ic >= 0.5 ? 2 : s >= 0.5 ? (t.lava ? 3 : 1) : 0;
+    }
+    hit = { sys: sys, rgb: rgb, cls: cls, giant: false };
+    SURF_CACHE.set(body, hit);
+    return hit;
+  }
   /* A field of bumps, normalised so its best cell is 1, over a floor. */
   function bumps(list, floor) {
     var f = new Float32Array(NCELL), top = 0;
@@ -1485,7 +1577,7 @@
     groundMap: groundMap, localGrade: localGrade, groundAt: groundAt, cellRead: cellRead,
     cellOfLatLon: cellOfLatLon, cellOfWorld: cellOfWorld, NCELL: NCELL,
     magMap: magMap, fieldAt: fieldAt, magRead: magRead, fieldLines: fieldLines, magLevel: magLevel,
-    magContacts: magContacts, describeMag: describeMag, NT_PER: NT_PER, MAG_FLOOR_NT: MAG_FLOOR_NT,
+    magContacts: magContacts, describeMag: describeMag, surfaceMap: surfaceMap, NT_PER: NT_PER, MAG_FLOOR_NT: MAG_FLOOR_NT,
     sourceField: sourceField, sweepContacts: sweepContacts, runSweep: runSweep, foundPort: foundPort,
     guildCredit: guildCredit, GUILD_PER: GUILD_PER, GUILD_MAX_PER_SALE: GUILD_MAX_PER_SALE,
     SWEEP_SECONDS: SWEEP_SECONDS, SWEEP_POWER: SWEEP_POWER, SWEEP_FLOOR: SWEEP_FLOOR,

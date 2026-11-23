@@ -162,5 +162,27 @@ console.log('--- the contact list ---');
   } else check('a world with both kinds of high was found', false);
 })();
 
+console.log('--- the surface under the readout (2026-11-22) ---');
+(function () {
+  /* Its coasts are the survey's coasts: the same terrain the ground map's
+   * sea and ice came from, so a readout over it lines up with the land. */
+  var wet = worlds.filter(function (x) { var g = Sv.groundMap(x.b, x.sy); return g && g.sea; });
+  var agree = 0, total = 0;
+  wet.slice(0, 6).forEach(function (x) {
+    var g = Sv.groundMap(x.b, x.sy), s = Sv.surfaceMap(x.b, x.sy);
+    for (var i = 0; i < Sv.NCELL; i += 7) {
+      var gc = g.ice[i] >= 0.5 ? 2 : g.sea[i] >= 0.5 ? 1 : 0;
+      if (s.cls[i] === 3) continue;                                   // lava: the ground map counts it dry
+      total++; if (gc === s.cls[i]) agree++;
+    }
+  });
+  check('the surface map\'s land, sea and ice are the ground map\'s', wet.length > 0 && agree === total,
+        agree + '/' + total + ' sampled cells');
+  var x0 = wet[0];
+  check('it is cached and the same each time', Sv.surfaceMap(x0.b, x0.sy) === Sv.surfaceMap(x0.b, x0.sy));
+  var giant = worlds.filter(function (x) { return /giant/i.test(x.b.type || ''); })[0];
+  check('a giant gets cloud bands, not coasts', giant && Sv.surfaceMap(giant.b, giant.sy).giant === true);
+})();
+
 console.log((fail ? '' : '') + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

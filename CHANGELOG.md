@@ -40,6 +40,209 @@ before they update.
 
 ## Unreleased
 
+### Fixed (2026-11-22, a sky when you fly in air)
+
+- **Flying in a world's air there was no sky.** The sky built for the ground ports on 2026-11-02 (gradient, haze, dusk, the overcast ceiling) only came on inside a ground port's cut or within 30 km of a sea platform. Everywhere else, above the horizon was cleared to space: at noon 3 km over Mirven II's sea, a black, starry sky. Found while tuning the cloud dimming. Under a deck, that dimming was going dark against black, which is why every overcast looked like dusk.
+  - **Now that sky is drawn wherever the eye is inside a world's air,** at the eye's own vertical, with the weather overhead there. A port's own sky still wins at a port, and nothing changes in the map, underground or in a shed.
+  - **It thins as you climb:** the sky is scaled by the air left at the eye (`GLWorld.skyOver` and `setGroundSky` take a `thin`). On Mirven II it is a full blue sky at 3 km, a darkening blue at 30 km, and stars coming out through it at 50 km. Above that it stops and the planet seen from space takes over.
+- **The dark wash under a cloud deck is light for plain overcast and heavy for storms.** The sky itself is now grey under a deck, so the wash was a second darkening.
+  - Mirven II's ordinary overcast (gloom 0.52): opacity 0.40 before, 0.16 now. A storm (gloom 0.94) is still 0.66.
+  - Probe shots at 3 km for clear, overcast, storm and night are in tools/probe-overcast.js.
+
+### Added (2026-11-22, vapour off the tips and over the hull)
+
+Astra, on the cloud work: "if this works, we might be able to do some contrails on ship leading tips / edges for control surfaces in atmosphere." This is the vapour a lifting body pulls out of wet air, not an engine contrail. Lift is low pressure, low pressure is cold, and cold wet air condenses: in the cores of the vortices off the tips, and in a sheet over the lifting side in a hard pull.
+
+- **It follows the pull and the wet** (`Weather.vapourOf`):
+  - The pull is what the hull feels across the airflow, in g. For your ship that's the felt acceleration. For an NPC it's her velocity change less gravity, smoothed over a third of a second.
+  - The wet is how near the air is to making cloud (`Weather.humidity`), from the same column the murk reads.
+  - These hulls have no wing lift, so one that is coasting is in free fall and lays nothing.
+  - Measured by flying it (probe-vapour, Mirven II, 250 m/s, vertical and lateral thrusters held, 2.7 g):
+
+    | Air | Coasting | 2.7 g pull |
+    |---|---|---|
+    | Wet (under a deck) | 0.00 | 0.49 |
+    | Dry (high inland) | 0.00 | 0.05, under the cut, so nothing is drawn |
+- **Tip vortices:** two thin, short-lived trails (2.2 s) from each hull's real tips (`Sim.hullBox`, her true span), laid every 0.08 s so a hard turn curves smoothly. This covers your ship and every lifted NPC.
+- **The sheet:** from outside, a hull pulling hard in wet air wears soft white vapour over her lifting side, streaming aft (`Render.drawVapourSheet`).
+- **From the seat**, where you can see neither: vapour streams past the canopy, outward from where you're heading and crowded toward the side you're pulling toward. It is drawn with the weather, under the instruments and without the glass's glow blur.
+- The existing trail behind a hull in air is unchanged. Room for trails went from 24 to 48, three per hull.
+
+### Changed (2026-11-22, clouds with a body: lit tops, and a storm you descend through)
+
+Astra asked for clouds that feel volumetric: "the sun properly lighting the tops of them", and "if you go down through a storm, that should be obvious in the weather changing and the view going from clear to reduced visibility as the density of the cloud increases", in layers from the highest cloud down to nearly sea level, cheap enough for the RX 540. Real raymarched volumes are not affordable on that card, so this fakes the parts the eye reads.
+
+- **From orbit, the deck has relief.** One extra look at the cloud field, a short step toward the sun, tells each point whether it is a top or sunward face (lit) or a far flank (in its own shadow). The step shrinks with the sun overhead, so noon lights a deck evenly and a low sun rakes it.
+  - **Storm towers** take that shading harder than the ordinary deck, because they stand far above it.
+  - **Clouds cast shadows** on the clear ground beside them, from the same lookup.
+  - **Thin edges are see-through:** a cloud's ragged edge lets the ground show; its body does not.
+  - **Cloud tops keep the light** a little past the ground's terminator.
+- **A low layer:** stratus and sea fog, under the deck, cut lower where the air is wet and over water. Measured from the field: about 1% of the sky over dry ground, up to a third over a wet sea.
+- **The column has a shape.** At any place, the deck now has a height profile: thin at the top, densest about 40% of the way up, thinner toward the base, then clear underneath. Over a storm, the base sinks and the top climbs (on Mirven II, about 3 km to 41 km). A storm descent on Mirven II, by Weather.aloft:
+
+  | Altitude | Density | Visibility | Gloom |
+  |---|---|---|---|
+  | 48 km | 0.00 | 1.00 | 0.00 |
+  | 38 km | 0.25 | 0.44 | 0.33 |
+  | 30 km | 0.54 | 0.18 | 0.74 |
+  | 22 km | 0.82 | 0.07 | 0.90 |
+  | 14 km | 0.75 | 0.09 | 0.96 |
+  | 7 km | 0.48 | 0.21 | 0.97 |
+  | 1.4 km | 0.00 | 1.00 | 0.97 (under it, in the rain) |
+
+- **The murk on the glass is graded:** it thickens and thins with that density, is pale near the top of a deck and dark in a storm's heart, and has three soft banks that rise past the canopy as you descend. It is black at night.
+- **Rain stops at the top of the cloud.** Over a storm's 41 km anvil, the old fade put rain on the glass at 48 km, in clear air.
+
+Cost, measured on the RX 540 with a cloudy disc filling the glass (5-second averages, two runs each): 32.7 ms a frame without the new lookups, 34.8 ms with them. The first version took 36.3 ms; cutting the sunward look and the low layer to two octaves of noise (the sunward look borrows this point's own fine detail) recovered 1.5 ms of that.
+
+### Fixed (2026-11-22, the weather on the canopy)
+
+- **The dark under a cloud deck was brightening the view.** The canopy's glass pass leaves the canvas in additive mode, and the weather never set it back, so the "darken under the deck" wash was *added* to the scene. That had been true since the wash was written (2026-11-03). Inside a storm, the murk summed to flat white. Found by logging every fill on a probe descent. Both now paint over the view.
+- **The weather erased the instruments.** It was drawn last inside the glass, over the HUD. Once it painted properly, a storm's heart hid the ladder, the air data and every box. The weather is outside the canopy and the HUD is projected on it, so the weather now goes on first.
+- **Weather drew with the glass's glow blur on**, a shadow blur over a full-screen fill every frame. Inside weather on the RX 540: about 21 fps before, about 30 after.
+- **Pausing during a lightning strike held the flash**, leaving the canopy pale white for as long as the pause lasted. No flash while paused.
+
+### Changed (2026-11-22, the weather has a climate)
+
+Astra asked: "weather patterns are modeled, or just faked?" They were faked: one noise field, cut at one level per world, so a desert coast was as likely to be overcast as an ocean. She wants them modelled because the data is to be sold to the planners of new stations. This is slice 1 of that plan (claude/climate-and-met-data.md): the model.
+
+- **The cut now depends on where you are**, by a planet's general circulation (`Weather.climateWet`, every number in `Weather.K` as `CL_*`):
+  - **The rain belt** sits under the sun and follows it north and south with the seasons, part of the way.
+  - **The dry belts** at about 30° are where the risen air comes down dry, which is where deserts sit.
+  - **The storm tracks** sit at about 57°.
+  - **The poles** are dry, cold air holding little water.
+  - **Open water** feeds cloud, and high inland ground starves it.
+  - **Slopes:** the prevailing wind (trades from the east in the tropics, westerlies in the middle latitudes, easterlies at the poles) is lifted up a windward slope and rains, then comes down the far side dry, the rain shadow.
+  - **Ice** holds little water.
+  - **Storms** start more readily in the wet belts.
+- **Seasons are real:** the rain belt moves with the sun's latitude on the world at that moment. A world tilted 31° has a sun that wanders from −31° to +31° over its year.
+- **Each world keeps its cloud.** The multiplier is divided by its own mean over the sphere, per world, so climate moves cloud around a world without adding or taking any. The generator's cloud column still means what it was tuned to: the worst world is 1.5% off.
+- **Who has none:** giants, twilight worlds and airless rock keep the old behaviour exactly.
+- **One sky, everywhere:**
+  - the shader runs the same function from the same numbers (`climateWet` and `elevFixed` in gl.js, with `uClimate` and the season from `uSunDir`);
+  - port forecasts, the weather aloft and the ground sky pass the climate to `sample()`.
+  - The picture, the forecast and the climate record a sounder will build all agree.
+- **Measured** (tools/measure-climate.js, 60 systems), cloud by |latitude| band (0–13°, 13–26°, 26–39°, 39–52°, 52–65°, 65–78°, 78–90°):
+  - terran worlds: 41%, 22%, 13%, 31%, 28%, 12%, 7%. Wet tropics, dry subtropics, cloudy storm tracks, clear poles. Sea is 27% clouded against land's 21%.
+  - Ocean worlds run 54% at the equator down to 11% at the poles.
+  - Deserts and iceballs barely change: their cloud column is too low for the cut to move.
+
+**Saves.** Nothing is stored. The weather at any hour is still a pure function of the world, the place and the time, so the same hour has the same sky. But it is a different sky from before: cloud has moved off the dry belts and onto the rain belt and storm tracks.
+
+**Tests.** New climate.test.js (19 checks, core group):
+- the belts' order, and the rain belt following the sun;
+- sea wetter than high land, windward wetter than lee;
+- the prevailing wind's direction by latitude;
+- every world's mean multiplier is 1 (55 worlds);
+- no climate term on giants, twilight worlds or airless rock;
+- seasons span the tilt;
+- the shader, read as source:
+  - it carries the same function;
+  - all 21 climate numbers it uses exist in `Weather.K`;
+  - both the cloud cut and the storm threshold read it;
+  - the season is the sun on the spin axis;
+  - gl.js hands it the world's own mean.
+
+weather.test.js: its source check of main.js's `Weather.overhead` call now expects the system to be passed (64 pass).
+
+**Seen in the real build** (tools/probe-climate.js, X:\Shared_AI\climate). Over Mirven II's north storm track the climate reads wet 1.38, the forecast at the sub-ship point reads cloud 0.90, and the picture there is cloud. Over the equator the climate reads wet 1.72, with clear sky under the ship at that hour, and the picture is clear there too. The shader compiles and draws.
+
+### Fixed (2026-11-22, ice caps on the surface map read as untextured)
+
+Astra: "the ice caps read as untextured." The planet picture gets its texture from the sun across the relief and from ground-detail mottling, and a flat map has neither, so a cap came out as one flat white. Worse, the relief the map did have was only applied to dry land, and a polar cap on a wet world is nearly all sea underneath, so the cap had no texture at all.
+
+`Survey.surfaceMap` now adds two terms from the same elevation field the planet is painted from:
+- **Hillshade:** the slope toward a light from the north-west, from the field a quarter-cell east and north of each cell's centre, within ±25%.
+- **Mottle:** the field at six times the frequency, the grain of sastrugi and melt ponds. It is stronger on ice and faint on rock. Ice also turns a faint blue-grey where the mottle runs low, as the picture's ice does.
+
+Pack ice over a sea now counts as ground for this, so it gets the texture too. Land gets the same hillshade and so reads with more relief. The land, sea and ice classes are unchanged, so coastlines don't move. One surface map now takes about 260 ms to build, once per world.
+
+**Seen in the real build** (tools/probe-globe.js, X:\Shared_AI\globe): Mirven II's north polar cap, looked down on from the globe, is mottled and shaded under both the resources and the magnetic layers.
+
+### Added (2026-11-22, the scanner map on a globe)
+
+Astra: "can we wrap the gridmap onto a globe?"
+
+- **A GLOBE / FLAT button** sits in the scanner's top row, after INTERIOR, and O does the same. It works on the RESOURCES, MAGNETIC and BOTH layers; GRAVITY and INTERIOR are cuts and stay as they are. It starts FLAT.
+- **Everything on the map is on the globe.** The flat map is drawn whole at 1x into an offscreen texture (4 px a cell), with the readouts, surface, graticule, deposit glyphs, magnetic rings, field lines, drones, outposts, digs, ground track and ship. That texture is then wrapped onto a sphere, so the globe can never show something the map doesn't, or miss something it does.
+  - The globe is drawn orthographically, as seen out of a window, with the limb darkened and the edge lit like the cutaways'.
+  - Shapes the flat map has to stretch come back true on the globe: a province's ellipse becomes the circle it is.
+- **Turning it:**
+  - The arrows turn it 15° a press: → brings the east round to face you, ↑ tips the north toward you.
+  - SWEEP FOLLOW keeps the ship's ground point facing you.
+  - The centre longitude and latitude are written under the globe.
+- **Pointing works.** The hover readout and click-to-pin project back through the sphere to the cell under the pointer, and the selected cell is marked on the globe. Off the disc, or on the far side, nothing is picked. In the probe, 187 points sent to the screen and back landed within 3e-12°. The probe checks that projection, not a real click.
+- **Cost.** The pixel-to-texel table is cached per view and only rebuilt when the view moves half a degree. A still globe costs one pass over the table a frame. In the probe window (not representative hardware), a still globe frame took about 25 ms and a turning one about 35 ms.
+
+**Saves.** Unchanged: GLOBE is a screen setting, like SURFACE.
+
+**Seen in the real build** (tools/probe-globe.js, X:\Shared_AI\globe). Mirven II with its northern two-thirds swept and TRUE COLOUR on. O and the arrow keys were pressed through the game's own key handling.
+- On the resources layer, the ore-rich peninsula shows in radar colours on its own land.
+- Turned east and tipped north, the ice cap's edge rings the pole.
+- On the magnetic layer, the two province highs sit on their land as circles, and the unswept south stays dark.
+
+### Added (2026-11-22, the surface under the scanner's readout)
+
+Astra: the scanner readout should be superimposable on a map of the surface, switchable, and shown only where you've flown.
+
+- **A SURFACE button** at the top of the scanner's side panel, beside LEGEND, cycles OFF → TRUE COLOUR → OUTLINE. V does the same. It starts OFF.
+  - **TRUE COLOUR** is the planet as it looks from orbit, dimmed under the readout: its biomes, seas and ice caps, with a little relief.
+  - **OUTLINE** is flat land, sea, ice and lava.
+  - A giant has no surface, so it shows its cloud colour in latitude bands.
+- **Only where you've flown.** The surface fills in on the cells your scanner or magnetometer has swept. Unflown ground stays the dark checker.
+- **The readout goes over it part-transparent**, so both show: the magnetic ramp at 60% of its old strength and the resource colours at 65%. "Flown, nothing worth digging" no longer paints over the ground.
+- **Coastlines and ice edges are drawn on top of everything** as a thin pale line, so the shape of the land survives any readout.
+- **One coastline.** `Survey.surfaceMap` asks `Weather.terrainAt`, the same arithmetic the planet picture is painted with and the same one the ground map's water came from. Its coasts are the coasts you see from orbit, and a deposit on the map sits on the land it's on. It is cached per body and nothing is saved.
+
+**Saves.** Unchanged; the switch is a screen setting.
+
+**Tests.** magnetics.test.js gains 3 checks (25 in all):
+- the surface map's land, sea and ice agree with the ground map's in all 55,548 sampled cells;
+- it is cached;
+- a giant gets bands.
+
+**Seen in the real build** (tools/probe-surface.js, X:\Shared_AI\surface). Mirven II, terran, has its northern two-thirds swept. Coastlines run under the magnetic layer, the two ore provinces' highs sit on the land patches the resources layer shows ore on, and the south stays blank. V was pressed through the game's own key handling.
+
+### Added (2026-11-22, planetary interiors slice 4: the INTERIOR cutaway)
+
+The plan's slice 4 (claude/planetary-interiors.md). Astra's decision 6 makes this its own scanner layer, a picture of the rock, apart from the GRAVITY slice, which is a picture of the field. Open it with the INTERIOR button or the I key. 1/2/3 pick the XY/YZ/ZX cut, as on the gravity slice.
+
+- **It draws what your kit can tell apart, never the true interior** (`Interior.measured`). Layers the instruments can't separate merge into one band, so a boundary you haven't measured leaves no edge behind to give it away. A world nothing has read is one hatched band marked "unmeasured".
+- **What each gravimeter grade adds:**
+  - grade 1: the core, against everything above it;
+  - grade 2: the crust, or on an icy world the low-density lid, "ice, perhaps water";
+  - grade 3: water under the ice, and the mantle's state (convecting, solid, or a magma ocean);
+  - grade 4: the inner core inside the outer.
+  - On a giant: grade 1 shows fluid over a core, and grade 2 separates the envelope from the deep fluid.
+- **Depths carry their error:** ±25%, 15%, 7% and 3% of the depth at grades 1–4, e.g. "5,250±150 km". Depth is pinned far more tightly than the gravimeter's sideways resolving length, because a whole shell of rock pulls together. The drawn edges are as soft as that error.
+- **The magnetometer adds, once a quarter of the world is swept:**
+  - the Curie depth, as a dashed ring;
+  - a liquid core, but only where a dipole and the interior's dynamo agree. Until slice 6 rebuilds the field from the core, a rolled field over a dead core is not claimed as liquid;
+  - an induced field on an icy moon of a magnetised giant. Something under the ice conducts, so the ocean shows at grade 2 (Europa, in our own sky).
+  - A magnetometer alone draws no boundaries, because only gravity sees density steps. It still gives the Curie depth and its notes.
+- **Contacts on the cut:** gravity contacts as warm rings (violet for a low) and buried magnetic highs as cyan diamonds, each at the depth it was read at. They fade when the cut barely touches them.
+- **The panel** lists the layers with their depths, what the field says, and what the next instrument up would add.
+- **The look:** the cut edge glows like the other cutaways', and the axes are arrows. Layers too thin to see, such as a 75 km crust on a 9,600 km world, are drawn at least 3 px thick, and the footer says so.
+
+**Saves.** Nothing new is saved: it is all computed from the seed and the survey record.
+
+**Tests.** New interior-cut.test.js (19 checks, ground group). Over 598 worlds:
+- with no instrument, every world is one unmeasured band, and a magnetometer alone draws no boundaries;
+- every edge drawn is a true edge, with no two neighbouring bands alike, and a finer grade never shows fewer layers;
+- each grade adds what it should;
+- the Curie depth appears only once a quarter is swept, and lands within 1 km of the truth;
+- a liquid core is claimed only where dipole and dynamo agree (15 worlds), and never over a dead core (30 worlds);
+- the induced ocean shows at grade 2 on all 20 ocean moons;
+- a finer grade quotes a smaller error, and the core top lies within its quoted error.
+
+**Seen in the real build** (tools/probe-interior.js, X:\Shared_AI\interior):
+- Mirven I, a desert world: rock over a core at grade 1, 5,250±1300 km down; crust, mantle and core at grade 2; at grade 4 the crust (75±2 km), a convecting mantle, an outer core and a solid inner core.
+- Mirven VI: envelope, conducting metallic hydrogen, and a core.
+- A magnetometer alone: one hatched disc, with the Curie depth noted.
+- The starting system has no ocean moon, so the induced-ocean case is checked by the test only.
+
+**Fixed on the way:** the hatching left the lower-left of the disc bare. Its lines now start far enough left to reach that edge.
+
 ### Fixed (2026-11-22, a stale test: escorts were counted as patrols)
 
 The full suite on ship AI slice 5 (full-suite5) was 143 of 144 green. The red one was economy.test.js, "the most permissive systems are patrolled thinner than the strictest". It counted every police-kind ship in `sys.patrols`, and slice 5's escorts are stored there too. Across its 150 seeds, the strictest third has 2.41 real patrols per faction and the most permissive 1.73, so the rule still holds. But escorts run 0.92 per faction against 2.05: Syndicate heavies ride with runners, and the permissive systems are the busy ones. That tipped the total over. The test now leaves out ships that are `escorting`, since they go where their charge goes rather than patrolling. economy.test.js: 208 pass. No game code changed.

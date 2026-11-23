@@ -1194,6 +1194,7 @@
     'uniform vec3 uAtmoColor;',
     'uniform float uCloud;',      // 0..1 coverage
     'uniform float uOcean;',      // sea level, 0 = no sea at all
+    'uniform vec3 uClimate;',     // x: climate on; y: the world's mean wet (divisor); z: its sea is water
     'uniform vec3 uSeaColor;',
     'uniform float uIce;',        // how far the caps reach, 0 = none
     'uniform float uSeed;',
@@ -1290,12 +1291,46 @@
     '  for (int i = 0; i < 4; i++) { s += a * vnoise(p); p *= 2.03; a *= 0.5; }',
     '  return s;',
     '}',
+    /* The same sum, handing back the first two octaves on the side (.y),
+     * and those two on their own (2026-11-22): the cloud tops' sunward
+     * look needs only the broad shape of the field, so it pays for two
+     * octaves and borrows this point's own fine detail for the rest. */
+    'vec2 fbmSplit(vec3 p) {',
+    '  float s = 0.0, a = 0.5, s2 = 0.0;',
+    '  for (int i = 0; i < 4; i++) { s += a * vnoise(p); if (i == 1) s2 = s; p *= 2.03; a *= 0.5; }',
+    '  return vec2(s, s2);',
+    '}',
+    'float fbm2(vec3 p) { return 0.5 * vnoise(p) + 0.25 * vnoise(p * 2.03); }',
     /* Rotate about an arbitrary unit axis — Rodrigues, four lines. spinY
      * only ever turned about world +y, which is not where any of these
      * worlds actually keep their poles. */
     'vec3 spinAbout(vec3 v, vec3 k, float a) {',
     '  float c = cos(a), s = sin(a);',
     '  return v * c + cross(k, v) * s + k * (dot(k, v) * (1.0 - c));',
+    '}',
+    /* CLIMATE (2026-11-22): Weather.climateWet, line for line, and the
+     * elevation field at a body-fixed point (Weather.elevationAt). */
+    'float elevFixed(vec3 p) {',
+    '  vec3 q = p * 2.6 + uSeed;',
+    '  float e = fbm(q);',
+    '  return mix(e, fbm(q * 0.55 + e * 1.4), 0.45);',
+    '}',
+    'float clBand(float x, float c, float w) { float d = (x - c) / w; return exp(-d * d); }',
+    'vec2 climateWet(float lat, float sub, float sea, float elev, float elevUp, float ocean, float ice, float wetSea) {',
+    '  float a = abs(lat);',
+    '  float itcz = clBand(lat, sub * @CL_ITCZ_FOLLOW@, @CL_ITCZ_W@);',
+    '  float dry = clBand(a, @CL_DRY_LAT@, @CL_DRY_W@);',
+    '  float stT = clBand(a, @CL_STORM_LAT@, @CL_STORM_W@);',
+    '  float w = 1.0 + @CL_ITCZ_A@ * itcz - @CL_DRY_A@ * dry + @CL_STORM_A@ * stT;',
+    '  w -= @CL_POLAR_A@ * smoothstep(1.15, 1.45, a);',
+    '  if (wetSea > 0.5) {',
+    '    w += @CL_SEA_A@ * sea;',
+    '    w -= @CL_LAND_A@ * (1.0 - sea) * smoothstep(0.0, 0.18, elev - ocean);',
+    '  }',
+    '  w += clamp(@CL_ORO_A@ * (elev - elevUp) * (1.0 - sea), -@CL_ORO_MAX@, @CL_ORO_MAX@);',
+    '  w *= 1.0 - 0.4 * ice;',
+    '  w = clamp(w, @CL_MIN@, @CL_MAX@);',
+    '  return vec2(w, itcz + 0.7 * stT - 0.6 * dry);',
     '}',
     /* Near-ground detail, in its own functions: see GD above. */
     GROUND_DETAIL_GLSL,
@@ -1594,6 +1629,10 @@
      * for almost no extra cost. */
     '  elev = mix(elev, fbm(sp * 0.55 + elev * 1.4), 0.45);',
     /* GD: the coast and the cap edge, crinkled at ground scale. */
+    /* The climate reads the field BEFORE the ground detail, as weather.js
+     * does (it has no ground detail): a crinkle a few hundred metres
+     * across has no business moving a rain belt. */
+    '  float elevBase = elev;',
     '  elev += gd.z;',
 
     /* BIOMES: the land colour from temperature and moisture (Weather.
@@ -1673,6 +1712,7 @@
     /* What the storms put into this pixel on their own account, spent
      * after the sun term below. */
     '  float glow = 0.0;',
+    '  float cloudA = 0.0;',
     '  if (uCloud > 0.001) {',
     /* THE DECK TURNS FASTER THAN THE GROUND, AND IT CHANGES WHILE IT DOES.
      *
@@ -1719,7 +1759,8 @@
      * session, and the statistics stay exactly where they were tuned. */
     '    cp += vec3(cos(uWeather * @W1@), sin(uWeather * @W1@), 0.0) * @DRIFT1@;',
     '    cp += vec3(0.0, cos(uWeather * @W2@), sin(uWeather * @W2@)) * @DRIFT2@;',
-    '    float cl = fbm(cp);',
+    '    vec2 clv = fbmSplit(cp);',
+    '    float cl = clv.x;',
     /* COVERAGE-TO-THRESHOLD, AND THIS IS WHERE THE CLOUDS WENT.
      *
      * The mapping ran 0.95 down to 0.52. The field it cuts is four octaves
@@ -1753,7 +1794,30 @@
      *
      * A terran world a quarter clouded still shows every coastline, which
      * is what the old note was protecting and is still true. */
-    '    float thresh = mix(@THRESH_HI@, @THRESH_LO@, clamp(uCloud, 0.0, 1.0));',
+    /* CLIMATE (2026-11-22): the cut moves with where you are - rain belt,
+     * dry belts, storm tracks, poles, sea, slope and rain shadow - by the
+     * same arithmetic as Weather.climateWet, from the same numbers. */
+    '    vec2 clim = vec2(1.0, 0.0);',
+    '    float seaL = 0.0;',
+    '    if (uClimate.x > 0.5) {',
+    '      vec3 nbf = spinAbout(n, uSpinAxis, -uSpinPhase);',
+    '      float slat = clamp(dot(nbf, uSpinAxis), -1.0, 1.0);',
+    '      float clat2 = asin(slat);',
+    '      float seaC = uOcean > 0.001 ? 1.0 - smoothstep(uOcean - 0.035, uOcean + 0.035, elevBase) : 0.0;',
+    '      float iceC = 0.0;',
+    '      if (uIce > 0.001) {',
+    '        float edgeC = uIce * (0.85 + 0.30 * elevBase);',
+    '        iceC = smoothstep(1.0 - edgeC - 0.06, 1.0 - edgeC + 0.06, abs(slat));',
+    '      }',
+    '      vec3 ee = cross(uSpinAxis, nbf);',
+    '      float zs = (abs(clat2) < @CL_DRY_LAT@ || abs(clat2) > @CL_STORM_LAT@ + 0.17) ? -1.0 : 1.0;',
+    '      vec3 upw = normalize(nbf + ee * (-zs * @CL_ORO_STEP@ / max(length(ee), 1e-6)));',
+    '      float sub = asin(clamp(dot(uSunDir, uSpinAxis), -1.0, 1.0));',
+    '      clim = climateWet(clat2, sub, seaC, elevBase, elevFixed(upw), uOcean, iceC, uClimate.z);',
+    '      clim.x /= uClimate.y;',
+    '      seaL = uClimate.z > 0.5 ? seaC : 0.0;',
+    '    }',
+    '    float thresh = mix(@THRESH_HI@, @THRESH_LO@, clamp(uCloud * clim.x, 0.0, 1.0));',
     '    float mask = smoothstep(thresh, thresh + @EDGE@, cl);',
     /* NOT ON THE GROUND UNDER YOU (2026-11-02, sea platform polish). The
      * deck is painted onto the surface - right from orbit, where it is a
@@ -1765,7 +1829,51 @@
      * is taken off the ground below 3 km of eye height and back by 10 km,
      * where you are looking down on it. (The sky pass has no clouds in it,
      * so from under them an overcast day now reads clear; noted.) */
-    '    if (uSkyA.w > 0.0) mask *= smoothstep(3.0, 10.0, sqrt(dot(oc, oc)) - uWorldRadius);',
+    '    float offG = uSkyA.w > 0.0 ? smoothstep(3.0, 10.0, sqrt(dot(oc, oc)) - uWorldRadius) : 1.0;',
+    '    mask *= offG;',
+    /* LIT FROM ABOVE (2026-11-22). Astra: "the sun properly lighting the
+     * tops of them". A deck drawn as one flat colour is a decal; what makes
+     * cloud look like a body is that the side facing the sun is bright and
+     * the side away from it is in its own shadow. The cheap way to know
+     * which side is which is ONE more look at the same field, a short step
+     * toward the sun along the ground: where the field rises toward the
+     * sun this point is on the far flank of a heap, shaded; where it falls
+     * away this point is a top or a sunward face, lit. The step is the sun's
+     * direction projected onto the ground, NOT normalised, so it shrinks to
+     * nothing with the sun overhead - noon lights a deck evenly, a low sun
+     * rakes it - which is what real cloud does and costs nothing extra.
+     *
+     * The same look gives the SHADOW ON THE GROUND for free: if there is
+     * cloud a step sunward of a clear patch, the sun to this patch passes
+     * through it. One fbm buys both. The second added lookup, the low layer
+     * below, is skipped wherever the deck is solid, which is where most of
+     * a cloudy world's cost would be. Measured on the RX 540: see the
+     * changelog. */
+    '    vec3 sb = spinAbout(spinAbout(uSunDir, uSpinAxis, -uDeckPhase), uSpinAxis, shear);',
+    '    vec3 sT = sb - nb * dot(sb, nb);',
+    /* Two octaves sunward, plus the fine detail this point already has:
+     * measured, four full octaves here cost 3.6 ms a frame on the RX 540
+     * with the disc filling the glass (both new lookups together). */
+    '    float clS = fbm2(cp + sT * (@SUN_EPS@ * @CLOUD_SCALE@)) + (cl - clv.y);',
+    '    float maskS = smoothstep(thresh, thresh + @EDGE@, clS) * offG;',
+    /* How deep into the cloud: a ragged edge is thin and lets the ground
+     * show through; the body of it does not. */
+    '    float thick = smoothstep(thresh, thresh + @THICK_SPAN@, cl);',
+    '    float topLit = clamp(1.0 + (cl - clS) * @TOP_SHADE@, 0.55, 1.25);',
+    /* The cloud's shadow, only on what is not itself cloud and only by day
+     * (on the night side the sun term is already zero). */
+    '    base *= 1.0 - 0.38 * maskS * (1.0 - mask) * step(0.0, dot(n, uSunDir));',
+    /* THE LOW LAYER: stratus and sea fog, under the deck, its own finer
+     * lookup cut lower over wet water - Weather.sample\'s `low`, same
+     * numbers. Duller than the deck, because the deck above takes the
+     * light first. */
+    '    if (mask < 0.98) {',
+    '      float wetL = clamp(uCloud * clim.x * (0.35 + 0.65 * seaL), 0.0, 1.0);',
+    '      float cutL = mix(@LOW_CUT_HI@, @LOW_CUT_LO@, wetL);',
+    '      float lowF = fbm2(cp * @LOW_SCALE@ + vec3(@LOW_OFF@)) * 1.25;',
+    '      float lowM = smoothstep(cutL, cutL + @EDGE@, lowF) * offG;',
+    '      base = mix(base, mix(vec3(0.80, 0.83, 0.87), uAtmoColor, 0.25), lowM * 0.72);',
+    '    }',
     '    vec3 cloudCol = mix(vec3(0.90, 0.93, 0.97), uAtmoColor, 0.22);',
 
     /* ---- where the weather is actually happening -------------------- */
@@ -1790,13 +1898,20 @@
      * threshold at all — cells smaller than the noise's own detail are
      * cells that are never strong enough to be cells. */
     '    vec3 sc = cp * @STORM_SCALE@;',
-    '    float storm = smoothstep(@STORM_LO@, @STORM_HI@, fbm(sc)) * mask;',
+    '    float sLo = @STORM_LO@ - clim.y * @CL_STORM_SHIFT@;',
+    '    float storm = smoothstep(sLo, sLo + (@STORM_HI@ - @STORM_LO@), fbm(sc)) * mask;',
     /* Tops catch more light and the base loses it — the same cell read
      * twice, which is what gives a bank depth instead of a flat lid. */
     '    cloudCol = mix(cloudCol, vec3(1.0), storm * 0.35);',
     '    cloudCol = mix(cloudCol, vec3(0.42, 0.45, 0.55),',
     '                   storm * 0.55 * smoothstep(0.62, 0.30, cl));',
-    '    base = mix(base, cloudCol, mask);',
+    /* A storm's towers stand far above the deck, so they are lit harder
+     * on the sunward face and shade deeper behind: the slope term counts
+     * double in a cell. Then the body: thin edges let the ground through. */
+    '    float sunLit = mix(1.0, topLit, 0.8 + 0.6 * storm);',
+    '    cloudCol *= mix(1.0, sunLit, smoothstep(0.0, 0.25, length(sT)));',
+    '    base = mix(base, cloudCol, mask * (0.55 + 0.45 * thick));',
+    '    cloudA = mask * thick;',
 
     /* ---- and the lightning ------------------------------------------- */
     /* Held aside rather than added here. `base` is about to be multiplied
@@ -1882,6 +1997,9 @@
      * does not care which way the ground faces. Only for the world the
      * ground sky is over; uSkyC.z is 1 and .w 0 on a clear day. */
     '  if (uSkyA.w > 0.0) lam = lam * uSkyC.z + uSkyC.w;',
+    /* Cloud tops stand kilometres up, so they keep the sun a little past
+     * the ground\'s terminator - the last light on a darkening world. */
+    '  lam = mix(lam, smoothstep(-0.20, 0.26, ndl), cloudA);',
     '  vec3 col = base * (0.055 + 0.95 * lam);',
     /* SEA: shaded under the swell, with its glint and foam. */
     '  col = seaShade(col, base, n, rd, sea, seaW);',
@@ -1938,7 +2056,16 @@
               STORM_LO: 0.55, STORM_HI: 0.70, W1: 0.9, W2: 0.3703,
               DRIFT1: 0.42, DRIFT2: 0.28,
               FLASH_BUCKET: 0.9, FLASH_DUTY: 0.52, FLASH_QUIET: 0.94,
-              FLASH_JITTER: 0.85 };
+              FLASH_JITTER: 0.85,
+              /* Climate, for gl.js loaded without weather.js (the hull
+               * viewer): uClimate.x is 0 there, so these never run. */
+              CL_ITCZ_A: 0.7, CL_ITCZ_W: 0.15, CL_ITCZ_FOLLOW: 0.65, CL_DRY_LAT: 0.52,
+              CL_DRY_W: 0.14, CL_DRY_A: 0.62, CL_STORM_LAT: 1.0, CL_STORM_W: 0.17,
+              CL_STORM_A: 0.4, CL_POLAR_A: 0.45, CL_SEA_A: 0.22, CL_LAND_A: 0.28,
+              CL_ORO_A: 9.0, CL_ORO_STEP: 0.05, CL_ORO_MAX: 0.45, CL_MIN: 0.12,
+              CL_MAX: 2.2, CL_STORM_SHIFT: 0.06,
+              THICK_SPAN: 0.09, LOW_SCALE: 1.9, LOW_OFF: 5.3, LOW_CUT_HI: 0.72,
+              LOW_CUT_LO: 0.50, SUN_EPS: 0.045, TOP_SHADE: 6.0 };
     return src.replace(/@([A-Z0-9_]+)@/g, function (m, key) {
       var v = (W[key] !== undefined) ? W[key] : D[key];
       if (v === undefined) throw new Error('gl.js: no weather constant ' + key);
@@ -3615,7 +3742,7 @@
                               'uStormPhase', 'uFlashGain',
                               'uWeather', 'uCenterDepth', 'uWorldRadius',
                               'uNear', 'uInvLogRange', 'uBanded', 'uBand',
-                              'uOcean', 'uSeaColor', 'uIce',
+                              'uOcean', 'uSeaColor', 'uIce', 'uClimate',
                               'uCenterRel', 'uScreenPx', 'uFlen',
                               'uHoleRel', 'uHoleR', 'uHoleDepth', 'uHaloPush',
                               'uSeaRel', 'uSeaE', 'uSeaN', 'uSeaK', 'uSeaPost',
@@ -4951,6 +5078,13 @@
       gl.uniform1f(uni.uOcean, (isStar || banded) ? 0 : terr.ocean);
       gl.uniform3f(uni.uSeaColor, sc[0], sc[1], sc[2]);
       gl.uniform1f(uni.uIce, (isStar || banded) ? 0 : terr.ice);
+      /* Climate (2026-11-22): on, the world's own mean (Weather.climateNorm,
+       * so the world keeps its cloud and climate only moves it), and
+       * whether its sea is water that feeds cloud. */
+      var WxC = global.Weather;
+      var climOn = !isStar && !banded && WxC && WxC.climateOn && WxC.climateOn(b);
+      gl.uniform3f(uni.uClimate, climOn ? 1 : 0, climOn ? WxC.climateNorm(b) : 1,
+                   (!terr.lava && b.type !== 'desert') ? 1 : 0);
       var bpar = (!isStar && !banded && global.Weather && global.Weather.biomeParams)
                  ? global.Weather.biomeParams(b) : null;
       gl.uniform4f(uni.uBio, bpar ? bpar.mix : 0, bpar ? bpar.moist : 0, bpar ? bpar.warm : 0, bpar ? bpar.marsh : 0);
@@ -5783,9 +5917,13 @@
   /* The sky over `body` at a place whose local vertical is `up`, with the
    * sun along `sunDir` (both unit, world). */
   /* `wx` (optional) is Weather.overhead there: the sky under its deck. */
-  GL.skyOver = function (body, up, sunDir, wx) {
+  /* `thin` (optional, 2026-11-22): how much of the air is left at the eye,
+   * 0..1, for a sky seen from partway up - sqrt(rho here / rho at the
+   * ground), the same arithmetic airOf does at the surface. 1 or absent is
+   * the ground's sky, as before. */
+  GL.skyOver = function (body, up, sunDir, wx, thin) {
     var sunUp = up.x * sunDir.x + up.y * sunDir.y + up.z * sunDir.z;
-    var tint = atmoTint(body), air = airOf(body);
+    var tint = atmoTint(body), air = airOf(body) * (thin === undefined ? 1 : thin);
     var sk = skyFor(tint, air, sunUp);
     return wx ? overcastSky(sk, overcastFor(wx, sunUp), tint, air) : sk;
   };
@@ -5801,8 +5939,9 @@
    * it hazes that body's ground. */
   /* `wx` (optional, 2026-11-03) is Weather.overhead at that place and hour;
    * without it the sky is clear, as it always was. */
-  GL.setGroundSky = function (body, up, sunDir, wx) {
-    groundSky = body ? { bodyId: body.id, tint: atmoTint(body), air: airOf(body),
+  GL.setGroundSky = function (body, up, sunDir, wx, thin) {
+    groundSky = body ? { bodyId: body.id, tint: atmoTint(body),
+                         air: airOf(body) * (thin === undefined ? 1 : thin),
                          up: up, sun: sunDir } : null;
     /* The sky's light on the shade side of whatever stands under it: the
      * sky half-way up, at about half strength - an overcast-ish fill, not

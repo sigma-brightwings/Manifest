@@ -276,8 +276,125 @@
     return out;
   }
 
+  /* WHAT THE KIT CAN KNOW OF IT (slice 4, 2026-11-22): the cutaway draws
+   * this, never `of` itself. The true layers are grouped into what the
+   * instruments aboard can tell apart, and adjacent layers they cannot
+   * tell apart merge into one band, so an unmeasured boundary leaves no
+   * edge behind to give it away.
+   *   kit = { grav: 0-4, mag: bool, covM: 0-1, dipole: bool }
+   *   GRAVITY reads density steps, each blurred by its grade's resolving
+   *     length: grade 1 the core against everything above it; grade 2
+   *     the crust, or the low-density ice-and-water lid; grade 3 water
+   *     under the ice and the mantle's state (a magma ocean is light);
+   *     grade 4 the inner core inside the outer.
+   *   THE MAGNETOMETER, once a quarter of the world is swept, reads:
+   *     a dipole from a dynamo - so the core is liquid, at least in part;
+   *     an induced field on an icy moon of a magnetised giant - something
+   *     under the ice conducts, and that is an ocean (Europa, in our own
+   *     sky); and the Curie depth, where the highs stop.
+   * Nothing a reading cannot reach is drawn; it says "unmeasured". */
+  var MAG_COV = 0.25;
+  var REL_DEPTH = { 1: 0.25, 2: 0.15, 3: 0.07, 4: 0.03 };
+  function measured(body, sys, kit) {
+    var I = of(body, sys);
+    if (!I) return null;
+    kit = kit || {};
+    var gl = Math.max(0, Math.min(4, kit.grav | 0));
+    var magOK = !!kit.mag && (kit.covM || 0) >= MAG_COV;
+    /* How well a grade places a boundary in DEPTH, as a fraction of the
+     * depth: radial steps are pinned far better than the lateral resolving
+     * length (Gravity.RES blur), because a whole shell of rock pulls
+     * together; a 35 km crust is not lost in a 700 km lateral blur. */
+    var blur = REL_DEPTH[gl] || 0;
+    var R = body.radius || 1;
+    var T = TYPE[I.type] || {};
+    var giant = !!T.giant;
+    /* A dynamo is read off the dipole, and only where the interior has
+     * one to make it (until slice 6 rebuilds the dipole from the core,
+     * a rolled field over a dead core is not claimed as a liquid one). */
+    var dynamoSeen = magOK && !!kit.dipole && I.dynamo;
+    var parent = body.parentBody || (sys && sys.byId && body.orbit && sys.byId[body.orbit.parent]) || null;
+    var induced = magOK && !giant && I.oceanKm > 0 && !!(parent && parent.magnetosphere);
+    var notes = [];
+
+    function groupOf(name) {
+      if (!gl) {
+        return { g: 'unknown', label: 'unmeasured' };
+      }
+      if (giant) {
+        if (name === 'rock and ice core') return { g: 'core', label: 'core' };
+        if (gl < 2) return { g: 'envelope', label: 'gas and fluid' };
+        if (name === 'envelope') return { g: 'envelope', label: 'envelope' };
+        return { g: 'deep', label: dynamoSeen ? name + ', conducting' : 'dense fluid' };
+      }
+      if (name === 'outer core' || name === 'inner core') {
+        if (gl >= 4) return name === 'inner core' ? { g: 'inner', label: 'inner core, solid' }
+                                                   : { g: 'outer', label: dynamoSeen ? 'outer core, liquid' : 'outer core' };
+        return { g: 'core', label: dynamoSeen ? 'core, liquid in part' : 'core' };
+      }
+      var shellWorld = I.shellKm > 0;
+      if (gl < 2) return { g: 'rock', label: shellWorld ? 'ice and rock' : 'rock' };
+      if (name === 'crust') return { g: 'crust', label: 'crust' };
+      if (name === 'ice shell' || name === 'water ocean') {
+        if (gl >= 3 || induced) return name === 'ice shell' ? { g: 'shell', label: 'ice shell' }
+                                                           : { g: 'ocean', label: 'water ocean' };
+        return { g: 'lid', label: 'ice, perhaps water' };
+      }
+      /* the mantle */
+      if (gl >= 3) {
+        var st = I.mantle === 'magma ocean' ? 'magma ocean' : I.mantle === 'convecting' ? 'mantle, convecting'
+               : I.mantle === 'solid' ? 'mantle, solid' : 'rock mantle';
+        return { g: I.mantle === 'magma ocean' ? 'magma' : 'mantle', label: st };
+      }
+      return { g: 'mantle', label: 'mantle' };
+    }
+
+    /* Outside in, merging neighbours the kit cannot separate. */
+    var lay = I.layers.slice().sort(function (a, b) { return b.to - a.to; });
+    var bands = [];
+    lay.forEach(function (L) {
+      var gp = groupOf(L.name), last = bands[bands.length - 1];
+      if (last && last.g === gp.g) { last.from = Math.min(last.from, L.from); return; }
+      bands.push({ g: gp.g, label: gp.label, from: L.from, to: L.to });
+    });
+    /* Depths as the kit quotes them: to its precision, and with it. The
+     * bottom of the last band is the centre, and that is known exactly. */
+    function quote(km) {
+      var e = km * blur;
+      var step = e >= 100 ? 50 : e >= 20 ? 10 : e >= 4 ? 2 : 1;
+      return { km: Math.round(km / step) * step, err: Math.max(step, Math.round(e / step) * step) };
+    }
+    bands.forEach(function (b, i) {
+      var t = quote((1 - b.to) * R), bt = quote((1 - b.from) * R);
+      b.topKm = i === 0 ? 0 : t.km; b.topErr = i === 0 ? 0 : t.err;
+      b.botKm = b.from <= 1e-9 ? Math.round(R) : bt.km; b.botErr = b.from <= 1e-9 ? 0 : bt.err;
+    });
+
+    var lines = [];
+    if (magOK && I.curieKm != null) {
+      lines.push({ name: 'Curie depth', r: Math.max(0, 1 - I.curieKm / R), km: Math.round(I.curieKm),
+                   how: 'where the magnetic highs stop' });
+    }
+    if (dynamoSeen) notes.push(giant ? 'a dipole: the deep fluid conducts and churns'
+                                     : 'a dipole: the core is liquid, at least in part');
+    else if (magOK && kit.dipole && !I.dynamo) notes.push('a dipole, but no dynamo the gravimeter can place');
+    else if (magOK && !giant) notes.push('no dipole: the core is still, or solid');
+    if (induced) notes.push('an induced field: something under the ice conducts');
+    if (!gl) notes.push('no gravimeter: no density step to draw a boundary on');
+    /* What the next instrument up would add. */
+    var next = null;
+    if (!gl) next = 'a grade 1 gravimeter finds the core';
+    else if (gl < 2) next = giant ? 'grade 2 separates the envelope' : 'grade 2 finds the crust';
+    else if (gl < 3 && !giant) next = I.shellKm > 0 && !induced ? 'grade 3 tells water from ice' : 'grade 3 reads the mantle';
+    else if (gl < 4 && !giant) next = 'grade 4 finds an inner core, if there is one';
+    if (!magOK && !giant) next = (next ? next + '; ' : '') + 'a magnetometer sweep reads the core’s motion';
+    return { bands: bands, lines: lines, notes: notes, next: next, blur: blur, giant: giant,
+             grav: gl, magOK: magOK, R: R };
+  }
+
   var Interior = {
-    of: of, TYPE: TYPE, COMP: COMP, RARE_SHARE: RARE_SHARE, IRON_P: IRON_P,
+    of: of, measured: measured, MAG_COV: MAG_COV, REL_DEPTH: REL_DEPTH,
+    TYPE: TYPE, COMP: COMP, RARE_SHARE: RARE_SHARE, IRON_P: IRON_P,
     SHELL_MIN: SHELL_MIN, DYNAMO_AT: DYNAMO_AT, MOLTEN_FLUX: MOLTEN_FLUX
   };
   global.Interior = Interior;

@@ -5034,6 +5034,56 @@
     ctx.restore();
   }
 
+  /* ---- VAPOUR OVER A HULL IN A HARD PULL (2026-11-22) --------------------
+   * Astra: vapour off "leading tips / edges for control surfaces in
+   * atmosphere". The tips lay their own trails (main.js stepContrails);
+   * this is the other half, the one an air-show crowd cheers: a pulling
+   * hull in wet air wears a sheet of cloud over her lifting side, because
+   * that is where the pressure - and so the temperature - has dropped
+   * below the dew point. It lives only while she pulls, and it streams aft
+   * from the leading edge.
+   *
+   * Drawn as soft white blobs strung along her span, raised toward her
+   * lifting side and smeared back along the airflow - five blobs, each a
+   * gradient, about the cost of the re-entry wake. `box` is her true
+   * [span, height, length] in km (Sim.hullBox); `s` is Weather.vapourOf's
+   * `sheet`, 0..1; liftDir and flow are world unit vectors. */
+  function drawVapourSheet(ctx, cam, frame, box, s, liftDir, flow, tSec) {
+    if (!(s > 0.03) || !frame || !frame.right || !liftDir || !flow) return false;
+    var w = box[0], h = box[1], l = box[2];
+    var top = V.addScaled(frame.pos, liftDir, h * 0.45);
+    var a = cam.project(V.addScaled(top, frame.right, -w * 0.48));
+    var b = cam.project(V.addScaled(top, frame.right, w * 0.48));
+    var aft = cam.project(V.addScaled(top, flow, -l * 0.45));
+    var c = cam.project(top);
+    if (!a || !b || !c || !aft) return false;
+    var span = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!(span > 3) || span > 3000) return false;
+    var dx = aft.x - c.x, dy = aft.y - c.y;
+    var flick = 0.85 + 0.15 * Math.sin(tSec * 23.3) * Math.sin(tSec * 7.1);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    var K = 5;
+    for (var k = 0; k < K; k++) {
+      var t = (k + 0.5) / K;
+      /* Heavier inboard, where the wing is deepest; it thins to the tips. */
+      var mid = 1 - Math.abs(t - 0.5) * 1.2;
+      for (var j = 0; j < 2; j++) {
+        var u = j * 0.5;
+        var px = a.x + (b.x - a.x) * t + dx * u, py = a.y + (b.y - a.y) * t + dy * u;
+        var r = span * (0.16 + 0.05 * mid) * (1 + 0.3 * u);
+        var al = Math.min(0.6, s * (0.30 + 0.35 * mid) * (1 - 0.45 * u) * flick);
+        var g = ctx.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, 'rgba(245,248,252,' + al.toFixed(3) + ')');
+        g.addColorStop(1, 'rgba(245,248,252,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+    return true;
+  }
+
   /* ---- FACTION ACCENTS ON A STATION --------------------------------------
    *
    * Astra: "the Syndicate stations should have red accents on them, like the
@@ -20208,7 +20258,7 @@
                faces: CUT_LAST.faces };
     },
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
-    drawContrail: drawContrail,
+    drawContrail: drawContrail, drawVapourSheet: drawVapourSheet,
     portSolidity: portSolidity,
     clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthPad: berthPad, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));

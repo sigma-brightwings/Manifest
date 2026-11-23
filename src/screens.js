@@ -7451,6 +7451,10 @@
   var MAG_STOPS = [[0, 16, 20, 58], [0.25, 42, 79, 168], [0.5, 47, 179, 160],
                    [0.75, 232, 216, 74], [1, 255, 122, 74]];
   var SCAN_STYLES = ['RADAR', 'HUES', 'BANDS'];
+  /* The surface under the readout (2026-11-22): off, the planet's own
+   * colours, or a flat outline - land, sea, ice, lava. */
+  var SURFACE_MODES = ['OFF', 'TRUE COLOUR', 'OUTLINE'];
+  var OUTLINE_INK = [[46, 42, 34], [16, 38, 60], [150, 170, 182], [96, 34, 14]];
   var RADAR_STOPS = [[0, 12, 70, 90], [0.12, 30, 170, 110], [0.28, 90, 220, 60], [0.42, 240, 230, 50],
                      [0.58, 255, 160, 30], [0.74, 240, 50, 40], [0.88, 220, 40, 200], [1, 255, 230, 255]];
   var scanCanvas = null, scanSig = '', scanDepSig = '', scanDepList = [];
@@ -7590,6 +7594,102 @@
   function scanFlip(body) { return !!(body.rotation && body.rotation.period > 0); }
   function scanX(lo, flip, nLon) { return flip ? nLon - 1 - lo : lo; }
 
+  /* ---- THE GLOBE (2026-11-22) ---------------------------------------------
+   * The scanner map wrapped onto a sphere, orthographic, as you would see
+   * the world out of the window. Texture coordinates are the flat map's:
+   * u across the display columns (0..1, so the globe turns the same way the
+   * map scrolls), v down the rows from the north pole. The view is a centre
+   * longitude (yaw) and latitude (pitch); the pixel-to-texel table for a
+   * view is cached, so a still globe costs one table walk a frame. */
+  var GLOBE_TEX_K = 4;                       // texture pixels per map cell
+  var globeTex = null, globeOut = null, globeTab = null;
+  function scanGlobeTex(w, h) {
+    if (w && (!globeTex || globeTex.w !== w || globeTex.h !== h)) {
+      var cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      globeTex = { cv: cv, ctx: cv.getContext('2d', { willReadFrequently: true }), w: w, h: h };
+    }
+    return globeTex;
+  }
+  function scanGlobeView(ui, shipDisp, nLon, nLat, mapX, mapY, mapW, mapH) {
+    var yaw, pitch;
+    if (ui.sweep === 2 && shipDisp) {
+      yaw = (shipDisp.col + 0.5) / nLon * 360;
+      pitch = 90 - (shipDisp.row + 0.5) / nLat * 180;
+    } else {
+      yaw = ui.gYaw === undefined ? 180 : ui.gYaw;
+      pitch = ui.gPitch === undefined ? 20 : ui.gPitch;
+    }
+    /* Half-degree steps: the table is rebuilt only when the view moves
+     * that far, so following the ship does not rebuild it every frame. */
+    pitch = Math.round(Math.max(-85, Math.min(85, pitch)) * 2) / 2;
+    yaw = Math.round((((yaw % 360) + 360) % 360) * 2) / 2;
+    var R = Math.floor(Math.min(mapH, mapW) / 2) - 4;
+    return { cx: Math.round(mapX + mapW / 2), cy: Math.round(mapY + mapH / 2), R: R,
+             yaw: yaw * Math.PI / 180, pitch: pitch * Math.PI / 180, yawDeg: yaw, pitchDeg: pitch };
+  }
+  /* (u, v) on the map to the screen, or null on the far side. */
+  function scanGlobeProject(V, u, v) {
+    var lat = Math.PI / 2 - v * Math.PI, d = u * 2 * Math.PI - V.yaw;
+    var cl = Math.cos(lat), x = cl * Math.sin(d), zp = cl * Math.cos(d), yp = Math.sin(lat);
+    var cp = Math.cos(V.pitch), sp = Math.sin(V.pitch);
+    var y = yp * cp - zp * sp, z = yp * sp + zp * cp;
+    if (z <= 0) return null;
+    return { x: V.cx + x * V.R, y: V.cy - y * V.R, z: z };
+  }
+  /* The screen back to (u, v), or null off the disc. */
+  function scanGlobeUnproject(V, sx, sy) {
+    if (!V) return null;
+    var x = (sx - V.cx) / V.R, y = (V.cy - sy) / V.R, r2 = x * x + y * y;
+    if (r2 >= 1) return null;
+    var z = Math.sqrt(1 - r2), cp = Math.cos(V.pitch), sp = Math.sin(V.pitch);
+    var yp = y * cp + z * sp, zp = -y * sp + z * cp;
+    var lat = Math.asin(Math.max(-1, Math.min(1, yp))), lon = V.yaw + Math.atan2(x, zp);
+    var u = lon / (2 * Math.PI); u = u - Math.floor(u);
+    return { u: u, v: Math.max(0, Math.min(0.999999, 0.5 - lat / Math.PI)) };
+  }
+  function scanGlobeBlit(ctx, tex, V) {
+    var S = V.R * 2;
+    if (!globeOut || globeOut.cv.width !== S) {
+      var cv = document.createElement('canvas');
+      cv.width = S; cv.height = S;
+      globeOut = { cv: cv, ctx: cv.getContext('2d') };
+      globeOut.img = globeOut.ctx.createImageData(S, S);
+    }
+    var key = [S, V.yaw.toFixed(4), V.pitch.toFixed(4), tex.w, tex.h].join('|');
+    if (!globeTab || globeTab.key !== key) {
+      var idx = new Int32Array(S * S), shade = new Float32Array(S * S);
+      for (var py = 0; py < S; py++) {
+        for (var px = 0; px < S; px++) {
+          var k = py * S + px;
+          var q = scanGlobeUnproject(V, V.cx - V.R + px + 0.5, V.cy - V.R + py + 0.5);
+          if (!q) { idx[k] = -1; continue; }
+          var tx = Math.min(tex.w - 1, Math.floor(q.u * tex.w)), ty = Math.min(tex.h - 1, Math.floor(q.v * tex.h));
+          idx[k] = (ty * tex.w + tx) * 4;
+          var x = (px + 0.5 - V.R) / V.R, y = (py + 0.5 - V.R) / V.R;
+          shade[k] = 0.55 + 0.45 * Math.sqrt(Math.max(0, 1 - x * x - y * y));
+        }
+      }
+      globeTab = { key: key, idx: idx, shade: shade };
+    }
+    var src = tex.ctx.getImageData(0, 0, tex.w, tex.h).data, d = globeOut.img.data;
+    var I = globeTab.idx, Sh = globeTab.shade;
+    for (var i = 0, o = 0; i < I.length; i++, o += 4) {
+      var s = I[i];
+      if (s < 0) { d[o + 3] = 0; continue; }
+      var f = Sh[i];
+      d[o] = src[s] * f; d[o + 1] = src[s + 1] * f; d[o + 2] = src[s + 2] * f; d[o + 3] = 255;
+    }
+    globeOut.ctx.putImageData(globeOut.img, 0, 0);
+    ctx.save();
+    ctx.drawImage(globeOut.cv, V.cx - V.R, V.cy - V.R);
+    /* The limb, lit like the cut edge of the cutaways. */
+    ctx.shadowColor = 'rgba(127,214,255,0.8)'; ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(160,230,255,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(V.cx, V.cy, V.R, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
   /* The picture of the world, one pixel a cell, rebuilt only when what it
    * shows has changed. Three ways to colour what the scanner has read:
    * RADAR (a continuous weather-radar ramp on how rich the ground is; the
@@ -7598,7 +7698,7 @@
   function scanPicture(Sv, T, ui, lvl, hasMag) {
     var rec = T.rec, body = T.body, nLon = Sv.LON_BINS, nLat = Sv.LAT_BINS;
     var sig = [T.key, ui.layer, ui.filter, ui.style, rec ? rec.cov : 0, rec ? rec.covM : 0,
-               rec ? rec.t : 0, lvl, hasMag ? 1 : 0].join('|');
+               rec ? rec.t : 0, lvl, hasMag ? 1 : 0, ui.base | 0].join('|');
     if (scanCanvas && sig === scanSig) return scanCanvas;
     scanSig = sig;
     if (!scanCanvas) {
@@ -7611,6 +7711,7 @@
     var cells = rec ? Sv.cellsOf(rec) : null;
     var cellsM = rec ? Sv.cellsOf(rec, 'cellsM') : null;
     var gm = Sv.groundMap(body, G.sys), mm = Sv.magMap(body, G.sys);
+    var baseMode = ui.base | 0, surf = baseMode && Sv.surfaceMap ? Sv.surfaceMap(body, G.sys) : null;
     var Eco = global.Economy, fcid = SCAN_FILTERS[ui.filter];
     var base = {};
     Sv.CIDS.forEach(function (cid) {
@@ -7643,9 +7744,22 @@
         var px = ((nLat - 1 - la) * nLon + scanX(lo, flip, nLon)) * 4;
         var r = 7, g = 14, b = 20;
         if ((la + lo) % 2 === 0) { r = 8; g = 16; b = 22; }       // faint checker: unflown ground
+        /* THE SURFACE UNDER IT (2026-11-22), where you have flown: the
+         * planet's own colours dimmed, or a flat land/sea/ice outline. The
+         * readouts then go over it part-transparent, so both read. */
+        var flown = (cells && cells[ci]) || (cellsM && cellsM[ci]);
+        var onBase = baseMode && surf && flown;
+        if (onBase) {
+          if (baseMode === 1) {
+            r = surf.rgb[ci * 3] * 0.62; g = surf.rgb[ci * 3 + 1] * 0.62; b = surf.rgb[ci * 3 + 2] * 0.62;
+          } else {
+            var oc = OUTLINE_INK[surf.cls[ci]] || OUTLINE_INK[0];
+            r = oc[0]; g = oc[1]; b = oc[2];
+          }
+        }
         if (showMag && cellsM && cellsM[ci] && mm) {
           var m = rampOf(MAG_STOPS, mm.field[ci] / fmax);
-          var k = ui.layer === 'both' ? 0.55 : 1;
+          var k = (ui.layer === 'both' ? 0.55 : 1) * (onBase ? 0.6 : 1);
           r = m[0] * k + r * (1 - k); g = m[1] * k + g * (1 - k); b = m[2] * k + b * (1 - k);
         }
         if (showRes && cells && cells[ci] && gm) {
@@ -7671,10 +7785,21 @@
               col = rampOf(RADAR_STOPS, v);
               al = 0.94;
             }
+            if (onBase) al *= 0.65;
             r = col[0] * al + r * (1 - al); g = col[1] * al + g * (1 - al); b = col[2] * al + b * (1 - al);
-          } else if (!fcid && ui.layer === 'res') {
+          } else if (!fcid && ui.layer === 'res' && !onBase) {
             r = 22; g = 52; b = 66;                                 // flown, nothing worth digging
           }
+        }
+        /* Coastlines over everything, so the shape of the land survives
+         * any readout: a cell whose class differs from a neighbour's. */
+        if (onBase && surf && !surf.giant) {
+          var c0 = surf.cls[ci], nb = 0;
+          if (lo > 0 && surf.cls[ci - 1] !== c0) nb = 1;
+          else if (lo < nLon - 1 && surf.cls[ci + 1] !== c0) nb = 1;
+          else if (la > 0 && surf.cls[ci - nLon] !== c0) nb = 1;
+          else if (la < nLat - 1 && surf.cls[ci + nLon] !== c0) nb = 1;
+          if (nb && (c0 === 0 || c0 === 2)) { r = 225; g = 240; b = 248; }
         }
         d[px] = r; d[px + 1] = g; d[px + 2] = b; d[px + 3] = 255;
       }
@@ -8112,19 +8237,245 @@
     return true;
   }
 
+  /* ---- THE INTERIOR CUTAWAY (planetary interiors slice 4, 2026-11-22) ----
+   * Astra's decision 6: a picture of the ROCK, its own layer, apart from
+   * the gravity slice (which is a picture of the field). It draws
+   * Interior.measured - only what the kit aboard can tell apart - never
+   * the true interior: bands the instruments cannot separate are one
+   * band, and a world nothing has read is "unmeasured", hatched. Edges
+   * are as soft as the grade places them. Contacts from the gravimeter
+   * and the magnetometer sit at the depths they were read at, on the
+   * same XY / YZ / ZX cuts as the gravity slice. Thin layers are drawn at
+   * least INT_MIN_PX thick, or a 35 km crust would be under a pixel. */
+  var INT_INK = {
+    unknown: '#161e25', rock: '#6e5c4a', crust: '#b08f64', mantle: '#8c4c2c', magma: '#d4602c',
+    lid: '#93bdd2', shell: '#d2e8f4', ocean: '#2c6aa8', core: '#c78a3c', outer: '#e99a36',
+    inner: '#f6dc8c', envelope: '#486888', deep: '#6a5c9c'
+  };
+  var INT_MIN_PX = 3;
+  function drawInteriorLayer(ctx, w, top, bottom, T) {
+    var In = global.Interior, Gr = global.Gravity, Sv = global.Survey, Cb = global.Combat;
+    var ui = scanUI();
+    var gl = Cb && Cb.gravLevel ? Cb.gravLevel(G.ship) : 0;
+    var hasMag = Sv && Sv.magLevel ? Sv.magLevel(G.ship) > 0 : false;
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    if (!In || !In.measured) { ctx.restore(); return false; }
+    if (!gl && !hasMag) {
+      ctx.fillText('NO INSTRUMENT THAT READS INSIDE — a gravimeter finds the layers, a magnetometer what moves in them.', 16, top + 36);
+      ctx.fillText('A spectrometer sees only the surface.', 16, top + 56);
+      ctx.restore();
+      return true;
+    }
+    if (!T || !T.body) { ctx.fillText('Lock a world, or orbit one.', 16, top + 36); ctx.restore(); return true; }
+    ctx.restore();
+
+    var body = T.body, sys = G.sys, rec = T.rec;
+    var plane = ui.plane || 'xy';
+    var svl = Sv && Sv.level ? Sv.level(G.ship) : 0;
+    var mm = Sv && Sv.magMap ? Sv.magMap(body, sys) : null;
+    var kit = { grav: gl, mag: hasMag, covM: rec && rec.covM ? rec.covM : 0, dipole: !!(mm && mm.dipole) };
+    var M = In.measured(body, sys, kit);
+    var panelW = 340, pad = 14, discY = top + 62;
+    var disc = Math.max(240, Math.min(w - panelW - pad * 3 - 44, bottom - discY - 78));
+    var discX = 44, cxm = discX + disc / 2, cym = discY + disc / 2, Rpx = disc / 2;
+
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText((body.name || '?').toUpperCase() + '  —  INTERIOR', discX, top + 26);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText((gl ? 'GRAVIMETER GRADE ' + gl + ' · depths to ±' + Math.round((In.REL_DEPTH[gl] || 0) * 100) + '%'
+                     : 'no gravimeter') + '   ·   ' +
+                 (hasMag ? 'MAGNETOMETER ' + Math.round(kit.covM * 100) + '% swept' + (M && !M.magOK ? ' (needs ' + Math.round(In.MAG_COV * 100) + '%)' : '')
+                         : 'no magnetometer'),
+                 discX, top + 44);
+    ctx.restore();
+    if (!M) {
+      ctx.save(); ctx.font = 'bold 13px ui-monospace, monospace'; ctx.fillStyle = '#5d8fa4';
+      ctx.fillText('This body has no interior to cut.', discX, discY + 20);
+      ctx.restore();
+      return true;
+    }
+
+    /* THE ROCK: concentric bands, the cut through the middle of a world of
+     * spherical shells being circles whatever the plane. One radial
+     * gradient, with each known edge spread over the grade's error. */
+    var bands = M.bands.map(function (b) {
+      return { g: b.g, to: b.to, from: b.from, label: b.label, b: b };
+    });
+    /* Thin layers drawn at least INT_MIN_PX thick, pushed inward. */
+    var minF = INT_MIN_PX / Rpx;
+    for (var bi = 0; bi < bands.length; bi++) {
+      var bb = bands[bi];
+      if (bi > 0) bb.to = Math.min(bb.to, bands[bi - 1].from);
+      if (bb.to - bb.from < minF && bb.from > 0) bb.from = Math.max(0, bb.to - minF);
+    }
+    ctx.save();
+    var grd = ctx.createRadialGradient(cxm, cym, 0, cxm, cym, Rpx);
+    var stops = [];
+    for (bi = bands.length - 1; bi >= 0; bi--) {          // centre outward
+      var bd = bands[bi], ink = INT_INK[bd.g] || INT_INK.unknown;
+      var soft = Math.min(0.5 * (bd.to - bd.from), M.blur * (1 - bd.from) * 0.5);
+      stops.push([bd.from + (bi === bands.length - 1 ? 0 : soft), ink]);
+      var softTop = Math.min(0.5 * (bd.to - bd.from), M.blur * (1 - bd.to) * 0.5);
+      stops.push([bd.to - (bi === 0 ? 0 : softTop), ink]);
+    }
+    var lastP = 0;
+    stops.forEach(function (s) { var p = Math.max(lastP, Math.min(1, s[0])); grd.addColorStop(p, s[1]); lastP = p; });
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx, 0, Math.PI * 2); ctx.fill();
+    /* Unmeasured is hatched, so it cannot be mistaken for a dark rock. */
+    bands.forEach(function (b2) {
+      if (b2.g !== 'unknown') return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cxm, cym, Rpx * b2.to, 0, Math.PI * 2);
+      if (b2.from > 0) ctx.arc(cxm, cym, Rpx * b2.from, 0, Math.PI * 2, true);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(120,150,170,0.18)'; ctx.lineWidth = 1;
+      for (var hx = -2 * disc; hx < disc; hx += 9) {        // from far enough left to reach the lower-left limb
+        ctx.beginPath(); ctx.moveTo(cxm + hx, cym - Rpx); ctx.lineTo(cxm + hx + 2 * Rpx, cym + Rpx); ctx.stroke();
+      }
+      ctx.restore();
+    });
+    /* THE CUT EDGE glows, as the other cutaways' do: this is a section. */
+    ctx.shadowColor = 'rgba(127,214,255,0.9)'; ctx.shadowBlur = 14;
+    ctx.strokeStyle = 'rgba(160,230,255,0.85)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    /* The Curie depth, from the magnetometer: dashed. */
+    M.lines.forEach(function (L) {
+      ctx.strokeStyle = 'rgba(120,235,255,0.75)'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.arc(cxm, cym, Rpx * Math.min(L.r, 1 - minF), 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    ctx.restore();
+
+    /* THE AXES, as arrows (Astra prefers pointers). */
+    var AX = { xy: ['X', 'Y'], yz: ['Y', 'Z'], zx: ['Z', 'X'] }[plane] || ['X', 'Y'];
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    ctx.fillText('→ ' + AX[0], discX + disc - 34, discY + disc / 2 - 6);
+    ctx.fillText('↑ ' + AX[1], discX + disc / 2 + 6, discY + 14);
+    ctx.restore();
+
+    /* THE CONTACTS at the depths they were read at; faint where the cut
+     * barely touches them. Gravity rings warm (violet for a low), the
+     * magnetometer's highs as cyan diamonds. */
+    var ax = Gr && Gr.PLANE_AXES ? (Gr.PLANE_AXES[plane] || Gr.PLANE_AXES.xy) : [0, 1, 2];
+    var R = body.radius || 1;
+    function place(lat, lon, depthKm) {
+      var v = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+      var rr = Math.max(0.03, 1 - depthKm / R);
+      return { x: cxm + v[ax[0]] * rr * Rpx, y: cym - v[ax[1]] * rr * Rpx,
+               a: Math.max(0.12, 1 - Math.abs(v[ax[2]]) * 1.35) };
+    }
+    var gcs = gl && Gr && Gr.contacts ? Gr.contacts(body, sys, gl, svl) : [];
+    var mcs = hasMag && Sv.magContacts ? Sv.magContacts(body, sys, rec, svl) : [];
+    ctx.save();
+    gcs.forEach(function (c) {
+      var p = place(c.lat, c.lon, (c.depthKm != null ? c.depthKm : 2) + (c.radKm || 10));
+      ctx.strokeStyle = 'rgba(0,0,0,' + (p.a * 0.7).toFixed(2) + ')'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = (c.low ? 'rgba(176,156,255,' : 'rgba(255,186,110,') + p.a.toFixed(2) + ')'; ctx.lineWidth = 1.8;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke();
+    });
+    mcs.forEach(function (c) {
+      if (c.broad) return;                                  // shallow and spread: the map shows it, not a section
+      var p = place(c.lat, c.lon, c.depthKm || 0);
+      ctx.fillStyle = 'rgba(0,0,0,' + (p.a * 0.6).toFixed(2) + ')';
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - 7); ctx.lineTo(p.x + 7, p.y); ctx.lineTo(p.x, p.y + 7); ctx.lineTo(p.x - 7, p.y); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,235,255,' + p.a.toFixed(2) + ')'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - 5); ctx.lineTo(p.x + 5, p.y); ctx.lineTo(p.x, p.y + 5); ctx.lineTo(p.x - 5, p.y); ctx.closePath(); ctx.stroke();
+    });
+    ctx.restore();
+
+    /* ---- THE PANEL: the plane, what is measured, what is inferred ---- */
+    var pxl = discX + disc + pad * 2, pw2 = Math.max(240, w - pxl - pad), py2 = discY;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('SLICE', pxl, py2);
+    ctx.restore();
+    var bx2 = pxl, by2 = py2 + 8;
+    ['xy', 'yz', 'zx'].forEach(function (p) {
+      btn(ctx, bx2, by2, 52, 22, p.toUpperCase(), function () { scanUI().plane = p; }, { hot: plane === p, bold: true, font: 10 });
+      bx2 += 56;
+    });
+    var y = by2 + 44;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('LAYERS, AS MEASURED', pxl, y);
+    ctx.font = '10px ui-monospace, monospace';
+    M.bands.forEach(function (b) {
+      y += 17;
+      ctx.fillStyle = INT_INK[b.g] || INT_INK.unknown;
+      ctx.fillRect(pxl, y - 9, 12, 10);
+      ctx.strokeStyle = 'rgba(160,200,220,0.4)'; ctx.strokeRect(pxl + 0.5, y - 8.5, 11, 9);
+      ctx.fillStyle = b.g === 'unknown' ? MFD_DIM : '#cfeaf4';
+      ctx.fillText(clipText(b.label, 30), pxl + 20, y);
+      ctx.fillStyle = MFD_DIM;
+      var rng = b.g === 'unknown' ? '' :
+        (b.topKm ? b.topKm.toLocaleString() + (b.topErr ? '±' + b.topErr : '') : 'surface') + ' – ' +
+        (b.from <= 1e-9 ? 'centre' : b.botKm.toLocaleString() + (b.botErr ? '±' + b.botErr : '') + ' km');
+      ctx.fillText(rng, pxl + 236, y);
+    });
+    if (M.lines.length || M.notes.length) {
+      y += 26;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#7fd6c0';
+      ctx.fillText('FROM THE FIELD', pxl, y);
+      ctx.font = '10px ui-monospace, monospace';
+      M.lines.forEach(function (L) {
+        y += 15; ctx.fillStyle = 'rgba(120,235,255,0.9)';
+        ctx.fillText('- - ' + L.name + ' about ' + L.km + ' km: ' + L.how, pxl, y);
+      });
+      M.notes.forEach(function (n) { y += 15; ctx.fillStyle = '#cfeaf4'; ctx.fillText(clipText(n, 52), pxl, y); });
+    }
+    y += 26;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('ON THE CUT', pxl, y);
+    ctx.font = '10px ui-monospace, monospace';
+    y += 15; ctx.fillStyle = 'rgba(255,186,110,0.9)';
+    ctx.fillText('○ ' + gcs.length + ' gravity contact' + (gcs.length === 1 ? '' : 's') + (gl ? '' : ' (no gravimeter)'), pxl, y);
+    var nb = mcs.filter(function (c) { return !c.broad; }).length;
+    y += 15; ctx.fillStyle = 'rgba(120,235,255,0.9)';
+    ctx.fillText('◇ ' + nb + ' buried magnetic high' + (nb === 1 ? '' : 's') + (hasMag ? '' : ' (no magnetometer)'), pxl, y);
+    if (M.next && y < bottom - 80) {
+      y += 26; ctx.font = 'italic 10px ui-monospace, monospace'; ctx.fillStyle = MFD_DIM;
+      ctx.fillText(clipText('better kit: ' + M.next, 60), pxl, y);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('a picture of the rock, as far as your instruments can tell it apart   ·   hatched: unmeasured   ·   thin layers drawn ' +
+                 INT_MIN_PX + ' px at least', discX, discY + disc + 15);
+    ctx.restore();
+    return true;
+  }
+
   /* The layer row, drawn by the map picture and by the slice alike. */
   function drawScanLayerButtons(ctx, w, bottom, ui) {
     var bx = 44, by = bottom - 30;
     btn(ctx, bx, by, 80, 22, 'RESOURCES', function () { ui.layer = 'res'; }, { hot: ui.layer === 'res', bold: true, font: 10 }); bx += 84;
     btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
     btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
-    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 });
+    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 }); bx += 70;
+    btn(ctx, bx, by, 74, 22, 'INTERIOR', function () { ui.layer = 'int'; }, { hot: ui.layer === 'int', bold: true, font: 10 });
   }
 
   function drawScannerScreen(ctx, w, bottom) {
     var Sv = global.Survey, ui = scanUI();
     var top = modeFrame(ctx, w, bottom, 'PLANETARY SCANNER',
-                        'R/M/B/G layer  ·  1/2/3 slice plane  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
+                        'R/M/B/G/I layer  ·  V surface  ·  O globe  ·  1/2/3 slice plane  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
     var lvl = Sv ? Sv.level(G.ship) : 0;
     var hasMag = Sv && Sv.magLevel ? Sv.magLevel(G.ship) > 0 : false;
     /* THE GRAVITY LAYER IS A DIFFERENT PICTURE. The others are a lat/lon map
@@ -8135,6 +8486,12 @@
     if (ui.layer === 'grav') {
       var gT = scannerTarget();
       if (drawGravityLayer(ctx, w, top, bottom, gT)) { drawScanLayerButtons(ctx, w, bottom, ui); return; }
+    }
+    /* The cutaway, likewise its own page: a gravimeter or a magnetometer
+     * alone is enough to open it, each saying what the other would add. */
+    if (ui.layer === 'int') {
+      var iT = scannerTarget();
+      if (drawInteriorLayer(ctx, w, top, bottom, iT)) { drawScanLayerButtons(ctx, w, bottom, ui); return; }
     }
     var T = Sv && (lvl || hasMag) ? scannerTarget() : null;
     ctx.save();
@@ -8201,6 +8558,8 @@
     btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
     btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
     btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 }); bx += 70;
+    btn(ctx, bx, by, 74, 22, 'INTERIOR', function () { ui.layer = 'int'; }, { hot: ui.layer === 'int', bold: true, font: 10 }); bx += 78;
+    btn(ctx, bx, by, 62, 22, ui.globe ? 'GLOBE' : 'FLAT', function () { ui.globe = !ui.globe; }, { hot: !!ui.globe, bold: true, font: 10 }); bx += 66;
     btn(ctx, bx, by, 86, 22, 'STYLE ' + SCAN_STYLES[ui.style | 0], function () { ui.style = ((ui.style | 0) + 1) % SCAN_STYLES.length; }, { bold: true, font: 10 }); bx += 90;
     btn(ctx, bx, by, 94, 22, 'SWEEP ' + SWEEPS[ui.sweep | 0], function () { ui.sweep = ((ui.sweep | 0) + 1) % SWEEPS.length; }, { bold: true, font: 10 }); bx += 98;
     btn(ctx, bx, by, 58, 22, 'ZOOM ' + vw.z + 'x', function () { scanZoom(1); }, { hot: vw.z > 1, bold: true, font: 10 }); bx += 62;
@@ -8211,6 +8570,25 @@
     /* the map: smoothed for RADAR, hard cells otherwise. The source window
      * can straddle the seam, so it goes down in two pieces. */
     var pic = scanPicture(Sv, T, ui, lvl, hasMag);
+    /* THE GLOBE (Astra, 2026-11-22: "wrap the gridmap onto a globe"). The
+     * flat map, with everything drawn on it - readouts, surface, glyphs,
+     * rings, drones, the ground track, the ship - is drawn whole, at 1x,
+     * into an offscreen canvas instead of onto the screen, and then that
+     * canvas is wrapped onto a sphere (scanGlobeBlit). So the globe can
+     * never show something the map does not, or miss something it does.
+     * The screen's own map rectangle is put back afterwards for the strip
+     * and the hover readout, which the globe answers by projecting back. */
+    var glb = !!ui.globe, realCtx = ctx, real = null;
+    if (glb) {
+      real = { mapX: mapX, mapY: mapY, mapW: mapW, mapH: mapH, vw: vw, cw: cw, ch: ch };
+      var GT = scanGlobeTex(nLon * GLOBE_TEX_K, nLat * GLOBE_TEX_K);
+      ctx = GT.ctx;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#070e14'; ctx.fillRect(0, 0, GT.w, GT.h);
+      mapX = 0; mapY = 0; mapW = GT.w; mapH = GT.h;
+      vw = { z: 1, vc: nLon, vr: nLat, col0: 0, row0: 0, nLon: nLon, nLat: nLat };
+      cw = mapW / nLon; ch = mapH / nLat;
+    }
     ctx.save();
     ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
     ctx.imageSmoothingEnabled = (ui.style | 0) === 0;
@@ -8419,6 +8797,24 @@
     }
     ctx.restore();
 
+    /* Back to the screen, and wrap what was just drawn onto the sphere. */
+    var globeV = null;
+    if (glb) {
+      ctx = realCtx;
+      mapX = real.mapX; mapY = real.mapY; mapW = real.mapW; mapH = real.mapH;
+      vw = real.vw; cw = real.cw; ch = real.ch;
+      globeV = scanGlobeView(ui, shipDisp, nLon, nLat, mapX, mapY, mapW, mapH);
+      scanGlobeBlit(ctx, scanGlobeTex(), globeV);
+      ctx.save();
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = '#4f7d90';
+      ctx.fillText('GLOBE  ·  arrows turn it' + (ui.sweep === 2 ? '   ·   following the ship' : '') +
+                   '   ·   centre X ' + Math.round(globeV.yawDeg) + '  Y ' + (globeV.pitchDeg >= 0 ? '+' : '') +
+                   Math.round(globeV.pitchDeg), mapX, mapY + mapH + 26);
+      ctx.restore();
+    }
+
+    if (!glb) {
     ctx.save();
     ctx.strokeStyle = 'rgba(74,151,176,0.8)';
     ctx.lineWidth = 1;
@@ -8440,11 +8836,21 @@
     ctx.fillText('Y  latitude (deg)', -40, 0);
     ctx.restore();
     ctx.restore();
+    }
 
     /* hover readout, click to pin; x is always the true scan column */
     var hov = null;
     var cx = G.cursor.x, cy = G.cursor.y;
-    if (G.cursor.active && cx >= mapX && cx < mapX + mapW && cy >= mapY && cy < mapY + mapH) {
+    if (glb) {
+      /* On the globe: back through the projection to a cell, if the
+       * pointer is on the near face at all. */
+      var gpt = G.cursor.active ? scanGlobeUnproject(globeV, cx, cy) : null;
+      if (gpt) {
+        var gdc = Math.floor(gpt.u * nLon) % nLon, grow = Math.max(0, Math.min(nLat - 1, Math.floor(gpt.v * nLat)));
+        var glo = flip ? nLon - 1 - gdc : gdc, gla = nLat - 1 - grow;
+        hov = { lo: glo, la: gla, x: gdc, cell: gla * nLon + glo };
+      }
+    } else if (G.cursor.active && cx >= mapX && cx < mapX + mapW && cy >= mapY && cy < mapY + mapH) {
       var habs = Math.floor(((vw.col0 + (cx - mapX) / cw) % nLon + nLon) % nLon);
       var hrow = Math.floor(vw.row0 + (cy - mapY) / ch);
       var hlo = flip ? nLon - 1 - habs : habs, hla = nLat - 1 - Math.max(0, Math.min(nLat - 1, hrow));
@@ -8455,7 +8861,21 @@
       if (hov) ui.pin = { key: T.key, cell: hov.cell, x: hov.x };
     }, 'pin a reading');
     var show = hov || (pin ? { cell: pin.cell, x: pin.x, la: Math.floor(pin.cell / nLon), lo: pin.cell % nLon } : null);
-    if (show) {
+    if (show && glb) {
+      /* The selected point on the globe, if it is on the near face. */
+      var gsp = scanGlobeProject(globeV, (scanX(show.lo, flip, nLon) + 0.5) / nLon, (nLat - 1 - show.la + 0.5) / nLat);
+      if (gsp) {
+        ctx.save();
+        scanHalo(ctx, function () { ctx.rect(gsp.x - 7, gsp.y - 7, 14, 14); }, '#fff4c8', 1.5);
+        scanHalo(ctx, function () {
+          ctx.moveTo(gsp.x - 14, gsp.y); ctx.lineTo(gsp.x - 9, gsp.y);
+          ctx.moveTo(gsp.x + 9, gsp.y); ctx.lineTo(gsp.x + 14, gsp.y);
+          ctx.moveTo(gsp.x, gsp.y - 14); ctx.lineTo(gsp.x, gsp.y - 9);
+          ctx.moveTo(gsp.x, gsp.y + 9); ctx.lineTo(gsp.x, gsp.y + 14);
+        }, '#fff4c8', 1.5);
+        ctx.restore();
+      }
+    } else if (show) {
       ctx.save();
       ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
       /* THE SELECTED POINT: a box round the cell, never smaller than a
@@ -8604,7 +9024,13 @@
     ctx.font = 'bold 12px ui-monospace, monospace';
     var y = py2 + 20;
     ctx.fillStyle = '#5d8fa4';
-    ctx.fillText('LEGEND', px2 + 10, y); y += 8;
+    ctx.fillText('LEGEND', px2 + 10, y);
+    /* The surface under the readout (Astra, 2026-11-22: "a button on the
+     * side bar there to switch"). V does the same. */
+    btn(ctx, px2 + panelW - 168, py2 + 6, 158, 20, 'SURFACE: ' + SURFACE_MODES[ui.base | 0],
+        function () { ui.base = ((ui.base | 0) + 1) % SURFACE_MODES.length; },
+        { hot: (ui.base | 0) > 0, bold: true, font: 10 });
+    y += 8;
     ctx.font = 'bold 11px ui-monospace, monospace';
     Sv.CIDS.forEach(function (cid) {
       y += 17;
@@ -8769,6 +9195,14 @@
   }
   function scanPan(dx, dy) {
     var Sv = global.Survey, ui = scanUI();
+    /* On the globe the arrows turn it, 15 degrees a press, pointer-wise:
+     * → brings the east round to face you, ↑ tips the north toward you. */
+    if (ui.globe && ui.layer !== 'grav' && ui.layer !== 'int') {
+      if (ui.sweep === 2) ui.sweep = 1;
+      ui.gYaw = ((ui.gYaw === undefined ? 180 : ui.gYaw) + dx * 15 + 360) % 360;
+      ui.gPitch = Math.max(-85, Math.min(85, (ui.gPitch === undefined ? 20 : ui.gPitch) - dy * 15));
+      return true;
+    }
     var z = ZOOMS[ui.zoom | 0] || 1;
     if (z === 1) return false;
     if (ui.sweep === 2) ui.sweep = 1;
@@ -8793,8 +9227,11 @@
     if (key === 'm') { ui.layer = 'mag'; return true; }
     if (key === 'b') { ui.layer = 'both'; return true; }
     if (key === 'g') { ui.layer = 'grav'; return true; }
-    /* The three principal cuts, while the slice is the layer showing. */
-    if (ui.layer === 'grav' && (key === '1' || key === '2' || key === '3')) {
+    if (key === 'i') { ui.layer = 'int'; return true; }
+    if (key === 'v') { ui.base = ((ui.base | 0) + 1) % SURFACE_MODES.length; return true; }
+    if (key === 'o') { ui.globe = !ui.globe; return true; }
+    /* The three principal cuts, while a slice is the layer showing. */
+    if ((ui.layer === 'grav' || ui.layer === 'int') && (key === '1' || key === '2' || key === '3')) {
       ui.plane = { '1': 'xy', '2': 'yz', '3': 'zx' }[key];
       return true;
     }
@@ -10438,6 +10875,7 @@
     bind: bind,
     draw: draw,
     scannerKey: scannerKey, scanMini: scanMini,
+    globeProject: scanGlobeProject, globeUnproject: scanGlobeUnproject,
     commsContacts: commsContacts, trackInk: trackInk, markAt: markAt, TRACK: TRACK,
     systemManifest: systemManifest, worldFacts: worldFacts,
     btn: btn,
