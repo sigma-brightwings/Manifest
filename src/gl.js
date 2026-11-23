@@ -287,6 +287,7 @@
     'uniform vec4 uWRoomB;',      // room z0, z1 (model z), lift, duct
     'uniform vec4 uWShip;',       // her x, y on the street, metres; pad radius km; seed
     'uniform vec4 uWFold;',       // dip x, dip y, fold phase 1, phase 2
+    'uniform vec3 uWFill, uWRockA, uWRockB;', // the world's own loose fill and two beds (Render.groundRock)
     'uniform float uWPh3;',
     'uniform vec3 uSunDir;',
     'uniform float uNear, uInvLogRange;',
@@ -504,12 +505,12 @@
     '  else if (d < 0.60) { base = vec3(0.553, 0.565, 0.588); bed = 1.0; }',
     '  else if (d < 1.80) { base = vec3(0.651, 0.635, 0.604); bed = 2.0; }',
     '  else if (d < 3.40) { base = vec3(0.247, 0.227, 0.208); bed = 3.0; }',
-    '  else if (d < 6.40) { base = vec3(0.420, 0.325, 0.220); bed = 4.0; }',
+    '  else if (d < 6.40) { base = uWFill; bed = 4.0; }',
     '  else {',
     '    float dd = d - 6.4;',
     '    float B13 = 5.0 * (pow(1.22, 13.0) - 1.0) / 0.22;',
     '    float i = dd < B13 ? floor(log(1.0 + dd * 0.044) / log(1.22)) : 13.0 + floor((dd - B13) / 60.0);',
-    '    base = mod(i, 2.0) < 0.5 ? vec3(0.310, 0.290, 0.267) : vec3(0.357, 0.337, 0.306);',
+    '    base = mod(i, 2.0) < 0.5 ? uWRockA : uWRockB;',
     '    bed = 5.0 + i;',
     '  }',
     '  float light = 0.86 + 0.28 * whash(uWShip.w, bed);',
@@ -3759,7 +3760,7 @@
       wallUni = uniforms(gl, wallProg, ['uWS', 'uWR', 'uRight', 'uUp', 'uFwd', 'uScreenPx',
                                         'uFlen', 'uCenterPx', 'uQuadPx', 'uViewportPx', 'uNear', 'uInvLogRange',
                                         'uWEnt', 'uWE', 'uWN', 'uWU', 'uWRoomA', 'uWRoomB',
-                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim',
+                                        'uWShip', 'uWFold', 'uWPh3', 'uSunDir', 'uWPlanet', 'uWRim', 'uWFill', 'uWRockA', 'uWRockB',
                                         'uWMask', 'uWMaskB']);
     } catch (e) { wallProg = null; if (global.console) console.error(e.message); }
     /* Its footprint pass (THE FOOTPRINT). Its own try: without it the
@@ -5670,6 +5671,11 @@
     gl.uniform4f(u.uWShip, w.shipXY[0], w.shipXY[1], w.r, w.seed);
     gl.uniform4f(u.uWFold, w.dip[0], w.dip[1], w.ph[0], w.ph[1]);
     gl.uniform1f(u.uWPh3, w.ph[2]);
+    /* The world's own ground (Render.groundRock); the old greys without. */
+    var rk = w.rock || { fill: [0.420, 0.325, 0.220], a: [0.310, 0.290, 0.267], b: [0.357, 0.337, 0.306] };
+    gl.uniform3f(u.uWFill, rk.fill[0], rk.fill[1], rk.fill[2]);
+    gl.uniform3f(u.uWRockA, rk.a[0], rk.a[1], rk.a[2]);
+    gl.uniform3f(u.uWRockB, rk.b[0], rk.b[1], rk.b[2]);
     gl.uniform3f(u.uSunDir, w.sun.x, w.sun.y, w.sun.z);
     if (w.planet) gl.uniform4f(u.uWPlanet, w.planet.pos.x - e.x, w.planet.pos.y - e.y,
                                w.planet.pos.z - e.z, w.planet.radius);

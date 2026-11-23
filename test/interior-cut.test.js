@@ -169,5 +169,55 @@ console.log('--- depths and their errors ---');
         core.topKm + '±' + core.topErr + ' (true ' + trueTop + ')');
 })();
 
+/* ---- what a port's pit is cut through (2026-11-22) ---------------------
+ * Astra: planets need "a texture for whatever is under the surface so we
+ * aren't building new ports in a hole that shows China on the bottom".
+ * The pit's walls and bowl take the world's own top layer. */
+console.log('--- the ground a pit is cut through ---');
+(function () {
+  var fs = require('fs'), path = require('path');
+  var rsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'render.js'), 'utf8');
+  var gsrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  var msrc = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  /* The palette, evaluated from the source so this test needs no canvas. */
+  var block = rsrc.slice(rsrc.indexOf('var GROUND_ROCK = {'), rsrc.indexOf('/* The wall\'s uniforms, for GLWorld.queueGroundWall'));
+  var made = new Function('global', block + '\nreturn { GROUND_ROCK: GROUND_ROCK, groundRock: groundRock };')({ Interior: In });
+  var GROUND_ROCK = made.GROUND_ROCK, groundRock = made.groundRock;
+  check('the palette builds', !!groundRock && !!GROUND_ROCK.ice);
+  var bySeen = {}, sys = null;
+  for (var s = 1; s < 40; s++) {
+    sys = Gen.generateSystem(s);
+    sys.bodies.forEach(function (b) {
+      if ((b.kind !== 'planet' && b.kind !== 'moon') || bySeen[b.type + b.kind]) return;
+      var it = In.of(b, sys); if (!it || !it.layers) return;
+      bySeen[b.type + b.kind] = { rock: groundRock(b, sys), top: it.layers[0].name, type: it.type };
+    });
+  }
+  var any = function (f) { return Object.keys(bySeen).some(function (k) { return f(bySeen[k]); }); };
+  var all = function (f) { return Object.keys(bySeen).every(function (k) { return f(bySeen[k]); }); };
+  check('an ice shell is dug as ice', all(function (r) { return r.top !== 'ice shell' || r.rock === GROUND_ROCK.ice; }));
+  check('a desert is dug as red sandstone', any(function (r) { return r.type === 'desert' && r.rock === GROUND_ROCK.desert; }));
+  check('a molten world as ash and basalt', any(function (r) { return r.type === 'molten' && r.rock === GROUND_ROCK.molten; }));
+  check('a crust is never dug as ice', all(function (r) { return r.top !== 'crust' || r.rock !== GROUND_ROCK.ice; }));
+  check('no body, bare rock', groundRock(null) === GROUND_ROCK.rocky);
+  /* Every crust is deeper than any pit, so the top layer is all a dig meets. */
+  var shallowest = 1e9;
+  [1, 2, 3, 4, 5].forEach(function (sd) {
+    var sy = Gen.generateSystem(sd);
+    sy.bodies.forEach(function (b) {
+      var it = In.of(b, sy); if (!it || !it.layers || !it.layers.length) return;
+      var L0 = it.layers[0]; if (L0.name !== 'crust' && L0.name !== 'ice shell') return;
+      shallowest = Math.min(shallowest, (L0.to - L0.from) * b.radius);
+    });
+  });
+  check('every top layer is far deeper than a port pit (under 1 km)', shallowest > 2, shallowest.toFixed(1) + ' km');
+  check('the wall shader paints the world\'s fill and beds',
+        /else if \(d < 6\.40\) \{ base = uWFill; bed = 4\.0; \}/.test(gsrc) &&
+        /base = mod\(i, 2\.0\) < 0\.5 \? uWRockA : uWRockB;/.test(gsrc) &&
+        /'uWFill', 'uWRockA', 'uWRockB'/.test(gsrc));
+  check('the bowl under the pit is the world\'s rock too', /var rk = \(sc\.rock \|\| GROUND_ROCK\.terran\)\.a;/.test(rsrc));
+  check('the street section asks for it', /rock: Render\.groundRock \? Render\.groundRock\(port\.parentBody, G\.sys\) : null/.test(msrc));
+})();
+
 console.log(pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

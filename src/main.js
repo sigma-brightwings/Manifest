@@ -9270,6 +9270,9 @@
                  planetW: port.parentBody ? Sim.bodyPosition(port.parentBody, G.sys, G.t) : null,
                  planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
                  planetKm: port.parentBody ? port.parentBody.radius : 0, rim: CUT_RIM,
+                 /* What the pit is cut through: the world's own top layer
+                 * (Render.groundRock, 2026-11-22). */
+                 rock: Render.groundRock ? Render.groundRock(port.parentBody, G.sys) : null,
                  rShip: rShip / r, rEye: rEye / r, rCap: rCap > 0 ? rCap / r : 0,
                  r: r, lift: g.lift || 0, seed: port.id,
                  room: room, duct: ((g.mouthR || 0.55) + (g.throatR || 0.45)) / 2,

@@ -7504,6 +7504,43 @@
    * a quarter, and so is rebuilt almost never. */
   var SECTION_BOWL_LAST = { key: null, mesh: null };
 
+  /* ---- WHAT THE GROUND IS MADE OF (2026-11-22) ---------------------------
+   * Astra, for when ground ports are player-buildable: planets need "a
+   * texture for whatever is under the surface so we aren't building new
+   * ports in a hole that shows China on the bottom". The hole already has
+   * a bottom (the bowl, below) and walls (FRAG_WALL's beds) - but every
+   * world's beds were the same two greys, so a port cut into an iceball
+   * was lined with the same rock as one cut into a desert.
+   *
+   * So the beds are the world's own top layer. A port's pit is a few
+   * hundred metres deep and every world's crust or ice shell is kilometres
+   * thick (Interior.of: 8 km of crust on a molten world, 30-85 km of ice
+   * on an iceball), so what a dig cuts through is always that top layer
+   * and nothing below it - the deeper layers stay in the scanner's
+   * cutaway, where they belong. What the top layer IS decides the palette:
+   * an ice shell is ice wherever it is; a crust is the rock of its kind
+   * of world. `fill` is the loose stuff under the street (soil, sand,
+   * regolith, ash, firn); `a` and `b` the beds below it, alternating. */
+  var GROUND_ROCK = {
+    terran:  { fill: [0.420, 0.325, 0.220], a: [0.376, 0.333, 0.282], b: [0.459, 0.412, 0.349], name: 'sedimentary rock' },
+    ocean:   { fill: [0.302, 0.282, 0.243], a: [0.282, 0.290, 0.290], b: [0.369, 0.365, 0.349], name: 'marine mudstone and limestone' },
+    desert:  { fill: [0.682, 0.522, 0.341], a: [0.596, 0.380, 0.247], b: [0.706, 0.541, 0.373], name: 'red sandstone' },
+    tundra:  { fill: [0.380, 0.345, 0.302], a: [0.329, 0.329, 0.341], b: [0.420, 0.420, 0.431], name: 'frozen ground and grey rock' },
+    rocky:   { fill: [0.451, 0.439, 0.420], a: [0.298, 0.298, 0.310], b: [0.380, 0.369, 0.357], name: 'regolith and impact breccia' },
+    molten:  { fill: [0.133, 0.122, 0.118], a: [0.098, 0.090, 0.090], b: [0.173, 0.141, 0.129], name: 'ash and basalt' },
+    ice:     { fill: [0.780, 0.820, 0.859], a: [0.620, 0.722, 0.800], b: [0.741, 0.816, 0.878], name: 'ice' }
+  };
+  function groundRock(body, sys) {
+    if (!body) return GROUND_ROCK.rocky;
+    var In = global.Interior, it = null;
+    try { it = In && In.of ? In.of(body, sys) : null; } catch (e) { it = null; }
+    var top = it && it.layers && it.layers.length ? it.layers[0].name : null;
+    if (top === 'ice shell') return GROUND_ROCK.ice;
+    var t = (it && it.type) || body.type;
+    if (t === 'iceball' || t === 'iceMoon') return GROUND_ROCK.ice;
+    return GROUND_ROCK[t] || GROUND_ROCK.rocky;
+  }
+
   /* The wall's uniforms, for GLWorld.queueGroundWall. World km, unit
    * vectors; see the long note over that function for each field. */
   function sectionWall(sc, sunDir) {
@@ -7526,7 +7563,8 @@
       ph: [sectionHash(sc.seed, 2) * 6.283, sectionHash(sc.seed, 3) * 6.283, sectionHash(sc.seed, 4) * 6.283],
       sun: sunDir || { x: 0, y: 0, z: 1 },
       planet: sc.planetW ? { pos: sc.planetW, radius: sc.planetKm } : null,
-      rim: sc.rim || 0
+      rim: sc.rim || 0,
+      rock: sc.rock || GROUND_ROCK.terran
     };
   }
 
@@ -7544,9 +7582,12 @@
     var want = Math.max(SECTION_BOWL_KM, (L * sc.r) * 1.6 + 0.4);
     var Rkm = SECTION_BOWL_KM * Math.pow(1.25, Math.ceil(Math.log(want / SECTION_BOWL_KM) / Math.log(1.25)));
     var key = [S[0], S[1], S[2]].map(function (v) { return Math.round(v / 0.002); }).join('|') +
-              '|' + Rkm.toFixed(3) + '|' + sc.r + '|' + sc.seed;
+              '|' + Rkm.toFixed(3) + '|' + sc.r + '|' + sc.seed + '|' + (sc.rock ? sc.rock.name : '');
     if (SECTION_BOWL_LAST.key === key) return SECTION_BOWL_LAST.mesh;
-    var Rb = Rkm / sc.r, lat = 12, lon = 48, rows = [], col = bedColour('#555048', sc.seed, 99);
+    /* The bowl is the deepest bed's rock, the world's own (groundRock). */
+    var rk = (sc.rock || GROUND_ROCK.terran).a;
+    var hex = '#' + rk.map(function (v) { var s = Math.round(Math.max(0, Math.min(1, v * 0.85)) * 255).toString(16); return s.length < 2 ? '0' + s : s; }).join('');
+    var Rb = Rkm / sc.r, lat = 12, lon = 48, rows = [], col = bedColour(hex, sc.seed, 99);
     var mesh = { v: [], f: [], c: [], vn: [], noAccent: true };
     for (var la = 0; la <= lat; la++) {
       var ph = la / lat * Math.PI / 2, cph = Math.cos(ph), sph = Math.sin(ph), row = [];
@@ -20259,6 +20300,7 @@
     },
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
     drawContrail: drawContrail, drawVapourSheet: drawVapourSheet,
+    groundRock: groundRock, GROUND_ROCK: GROUND_ROCK,
     portSolidity: portSolidity,
     clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthPad: berthPad, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));

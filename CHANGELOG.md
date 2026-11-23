@@ -40,6 +40,26 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-22, a port's pit is cut through the world's own ground)
+
+Astra, for when ground ports are player-buildable: planets need "a texture for whatever is under the surface so we aren't building new ports in a hole that shows China on the bottom". The hole already had a bottom (the rock bowl under the street section) and walls (the beds), but every world's beds were the same two greys, so a pit on an iceball was lined with the same rock as one in a desert.
+
+- **The beds and the bowl are now the world's own top layer** (`Render.groundRock`, read from `Interior.of`):
+
+  | World | Ground |
+  |---|---|
+  | Anything with an ice shell (iceballs, icy moons) | ice |
+  | Desert | red sandstone |
+  | Molten | ash and basalt |
+  | Terran | sedimentary rock |
+  | Ocean | marine mudstone and limestone |
+  | Tundra | frozen ground and grey rock |
+  | Rocky / airless | regolith and impact breccia |
+
+- **Why only the top layer:** a port's pit is under a kilometre deep, and the thinnest crust or ice shell in the seeds is 9.4 km. A dig only ever meets the top layer; the deeper ones stay in the scanner's cutaway.
+- **What stays the same:** the street layers (road, paving, slab, services) and the burnt edge round the cut. The wall shader takes three new colours, the loose fill and two alternating beds.
+- **Checked:** `tools/probe-pitrock.js` docks at ground ports on six kinds of world and opens the cut on each. The checks are in `test/interior-cut.test.js` (18 → 29).
+
 ### Fixed (2026-11-22, a sky when you fly in air)
 
 - **Flying in a world's air there was no sky.** The sky built for the ground ports on 2026-11-02 (gradient, haze, dusk, the overcast ceiling) only came on inside a ground port's cut or within 30 km of a sea platform. Everywhere else, above the horizon was cleared to space: at noon 3 km over Mirven II's sea, a black, starry sky. Found while tuning the cloud dimming. Under a deck, that dimming was going dark against black, which is why every overcast looked like dusk.
