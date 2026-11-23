@@ -39,6 +39,10 @@ async function look(tag, hull) {
   SD.reactorPower = function () { return 0.075; };
   await at(tag + '-3-scram', ctl.deck, ex, ez, Math.PI, -0.05);
   SD.reactorPower = function () { return 1; };
+  /* Reactor control from its far side, looking back at the glass: the
+   * spill on the floor, the walls and the ceiling. */
+  await at(tag + '-7-spill', ctl.deck, ex + 0.6, ctl.z1 - 0.5, 0, -0.35);
+  await at(tag + '-7-spill-b', ctl.deck, ex + 0.6, ctl.z1 - 0.5, Math.PI, -0.35);
   /* The tank from the reactor's own room, by its door. */
   await at(tag + '-4-tank', rr.deck, Math.min(rr.x1 - 0.5, T.x1 + 0.45), rr.z1 - 0.6, Math.PI + 0.7, -0.15);
   /* The reactor tunnel, and its port onto the tank's side (both ways, as

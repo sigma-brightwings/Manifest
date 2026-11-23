@@ -1692,6 +1692,7 @@
   function deckFy(p, dk) { return p.deckY && p.deckY[dk] !== undefined ? p.deckY[dk] : p.floorY; }
   function navalMesh(m, pal, p) {
     var rs = p.rooms.filter(function (r) { return r.kind === 'naval'; });
+    if (p.naval) p.naval.spill = [];
     rs.forEach(function (r) {
       var fy = deckFy(p, r.deck), h = r.y1, cy = fy + h;
       var wall = pal[NAVAL_TINT[r.sub] || 'wall'] || pal.wall;
@@ -1733,6 +1734,36 @@
         wallHoles(m, P, a0, a1, fy, cy, holes, wall);
       }
       ['x0', 'x1', 'z0', 'z1'].forEach(wallRun);
+      /* The reactor's light spilling into this room through the window (or
+       * a tunnel's port) in its wall (spillOnto). */
+      ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+        var viaWin = rx.control === r.id && rx.window, viaPort = rx.tunnel === r.id && rx.port;
+        if (!viaWin && !viaPort) return;
+        var T = reactorTank(p, rx);
+        if (!T) return;
+        var S = [T.core.x, T.core.y, T.core.z], e = 0.004, ap, N, skip;
+        if (viaWin) {
+          var w = rx.window;
+          ap = [[w.x0, w.y0, r.z0], [w.x1, w.y0, r.z0], [w.x1, w.y1, r.z0], [w.x0, w.y1, r.z0]]; N = [0, 0, 1]; skip = 'z0';
+        } else {
+          var q = rx.port;
+          ap = [[r.x0, q.y0, q.z0], [r.x0, q.y0, q.z1], [r.x0, q.y1, q.z1], [r.x0, q.y1, q.z0]]; N = [1, 0, 0]; skip = 'x0';
+        }
+        var surfs = [
+          { poly: [[r.x0, fy + e, r.z0], [r.x1, fy + e, r.z0], [r.x1, fy + e, r.z1], [r.x0, fy + e, r.z1]], base: floor },
+          { poly: [[r.x0, cy - e, r.z0], [r.x1, cy - e, r.z0], [r.x1, cy - e, r.z1], [r.x0, cy - e, r.z1]], base: pal.ceil }
+        ];
+        ['x0', 'x1', 'z0', 'z1'].forEach(function (side) {
+          if (side === skip) return;
+          var alongX = side === 'z0' || side === 'z1', inward = side === 'x0' || side === 'z0' ? e : -e, fixed = r[side] + inward;
+          var holes = cuts[side].map(function (cc) { return { u0: cc - DOOR_HW, u1: cc + DOOR_HW, v0: fy, v1: fy + DOOR_H }; }).concat(windows[side]);
+          holeRects(alongX ? r.x0 : r.z0, alongX ? r.x1 : r.z1, fy, cy, holes).forEach(function (h) {
+            var P = function (u, y) { return alongX ? [u, y, fixed] : [fixed, y, u]; };
+            surfs.push({ poly: [P(h.u0, h.v0), P(h.u1, h.v0), P(h.u1, h.v1), P(h.u0, h.v1)], base: wall });
+          });
+        });
+        p.naval.spill = p.naval.spill.concat(spillOnto(S, ap, N, surfs));
+      });
       /* A light down the middle, along the room's length. */
       var lx = (r.x0 + r.x1) / 2, lz = (r.z0 + r.z1) / 2, alongZ = (r.z1 - r.z0) >= (r.x1 - r.x0);
       var L2 = Math.max(0.3, (alongZ ? r.z1 - r.z0 : r.x1 - r.x0) / 2 - 0.4);
@@ -1827,6 +1858,50 @@
       }
       box(m, T.x0, T.y0, T.z0, T.x1, T.y1, T.z0 + 0.04, pal.bulk);
       box(m, T.x0, T.y1 - 0.04, T.z0, T.x1, T.y1, zb, pal.overhead);
+      /* THE PIT, dressed (Astra: "the reactor room needs texture, the pit
+       * there would have more than flat matte walls around it"). Outside:
+       * the tank's stiffening ribs, a flange round her rim, a kick plate in
+       * hazard stripes at her foot, and her coolant pipes aft to the
+       * bulkhead. Inside, dark against the glow: a ladder down her back
+       * wall, and a spent-fuel rack on her floor behind the core. */
+      var rrm = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
+      var ribs = function (a0, a1, f) { for (var a = a0 + 0.3; a < a1 - 0.15; a += 0.6) f(a); };
+      ribs(T.z0, zb, function (z) { box(m, T.x0 - 0.07, T.y0, z - 0.04, T.x0, T.y1 - 0.06, z + 0.04, pal.rib); });
+      if (!rx.port) ribs(T.z0, zb, function (z) { box(m, T.x1, T.y0, z - 0.04, T.x1 + 0.07, T.y1 - 0.06, z + 0.04, pal.rib); });
+      ribs(T.x0, T.x1, function (x) { box(m, x - 0.04, T.y0, T.z0 - 0.07, x + 0.04, T.y1 - 0.06, T.z0, pal.rib); });
+      /* The rim flange. */
+      box(m, T.x0 - 0.09, T.y1 - 0.1, T.z0 - 0.09, T.x0, T.y1, zb, pal.jamb);
+      if (!rx.port) box(m, T.x1, T.y1 - 0.1, T.z0 - 0.09, T.x1 + 0.09, T.y1, zb, pal.jamb);
+      box(m, T.x0 - 0.09, T.y1 - 0.1, T.z0 - 0.09, T.x1 + (rx.port ? 0 : 0.09), T.y1, T.z0, pal.jamb);
+      /* The kick plate, striped. */
+      var kick = function (a0, a1, P) {
+        for (var a = a0, k = 0; a < a1 - 1e-3; a += 0.25, k++) P(a, Math.min(a1, a + 0.25), k % 2 ? pal.hazardDark : pal.hazard);
+      };
+      kick(T.z0 - 0.08, zb, function (a, b, col) { quad(m, [T.x0 - 0.08, T.y0, a], [T.x0 - 0.08, T.y0, b], [T.x0 - 0.08, T.y0 + 0.14, b], [T.x0 - 0.08, T.y0 + 0.14, a], col); });
+      kick(T.x0 - 0.08, T.x1 + (rx.port ? 0 : 0.08), function (a, b, col) { quad(m, [b, T.y0, T.z0 - 0.08], [a, T.y0, T.z0 - 0.08], [a, T.y0 + 0.14, T.z0 - 0.08], [b, T.y0 + 0.14, T.z0 - 0.08], col); });
+      if (!rx.port) kick(T.z0 - 0.08, zb, function (a, b, col) { quad(m, [T.x1 + 0.08, T.y0, b], [T.x1 + 0.08, T.y0, a], [T.x1 + 0.08, T.y0 + 0.14, a], [T.x1 + 0.08, T.y0 + 0.14, b], col); });
+      /* Her coolant pipes: two, out of her back, aft to the bulkhead. */
+      if (rrm && T.z0 - rrm.z0 > 0.2) {
+        var pmx = (T.x0 + T.x1) / 2;
+        [[pmx - 0.5, fy + 0.7], [pmx + 0.5, fy + 1.3]].forEach(function (pp) {
+          box(m, pp[0] - 0.11, pp[1] - 0.11, rrm.z0, pp[0] + 0.11, pp[1] + 0.11, T.z0 - 0.07, pal.console);
+          box(m, pp[0] - 0.15, pp[1] - 0.15, T.z0 - 0.12, pp[0] + 0.15, pp[1] + 0.15, T.z0 - 0.07, pal.jamb);
+        });
+      }
+      /* Inside: the ladder, in her back wall's corner. */
+      var lx0 = T.x0 + 0.3, lzb = T.z0 + 0.05;
+      box(m, lx0, T.y0, lzb, lx0 + 0.04, T.y1 - 0.04, lzb + 0.12, pal.rib);
+      box(m, lx0 + 0.42, T.y0, lzb, lx0 + 0.46, T.y1 - 0.04, lzb + 0.12, pal.rib);
+      for (var ly = T.y0 + 0.3; ly < T.y1 - 0.1; ly += 0.3) box(m, lx0 + 0.04, ly - 0.015, lzb + 0.08, lx0 + 0.42, ly + 0.015, lzb + 0.11, pal.rib);
+      /* And the rack: a grid of square cells on her floor, behind the core
+       * (so the glass's view of her is clear), in the corner away from the
+       * ladder. */
+      var rkz1 = T.core.z - T.core.hz - 0.25, rkz0 = Math.max(T.z0 + 0.1, rkz1 - 0.75);
+      var rkx1 = T.x1 - 0.15, rkx0 = Math.max(lx0 + 0.7, rkx1 - 1.0), rkh = Math.min(0.9, (T.y1 - T.y0) * 0.35);
+      if (rkz1 - rkz0 > 0.3 && rkx1 - rkx0 > 0.3) {
+        for (var gx = rkx0; gx <= rkx1 + 1e-3; gx += (rkx1 - rkx0) / 4) box(m, gx - 0.015, T.y0, rkz0, gx + 0.015, T.y0 + rkh, rkz1, pal.rib);
+        for (var gz = rkz0; gz <= rkz1 + 1e-3; gz += (rkz1 - rkz0) / 3) box(m, rkx0, T.y0, gz - 0.015, rkx1, T.y0 + rkh, gz + 0.015, pal.rib);
+      }
       /* The window's reveal, through the bulkhead's thickness. */
       if (zc - zb > 1e-4) {
         quad(m, [w.x0, w.y0, zb], [w.x1, w.y0, zb], [w.x1, w.y0, zc], [w.x0, w.y0, zc], pal.jamb);
@@ -1895,6 +1970,15 @@
    * hole's edges along the wall; each strip is walled wherever no hole
    * covers it. */
   function wallHoles(m, P, a0, a1, y0, y1, holes, col) {
+    holeRects(a0, a1, y0, y1, holes).forEach(function (q) {
+      quad(m, P(q.u0, q.v0), P(q.u1, q.v0), P(q.u1, q.v1), P(q.u0, q.v1), col);
+    });
+  }
+  /* The solid rectangles of a wall with holes in it (wallHoles), as
+   * {u0, u1, v0, v1}: the spill of reactor light lands on these and not
+   * in a doorway. */
+  function holeRects(a0, a1, y0, y1, holes) {
+    var out = [];
     var hs = holes.map(function (h) {
       return { u0: Math.max(a0, h.u0), u1: Math.min(a1, h.u1), v0: Math.max(y0, h.v0), v1: Math.min(y1, h.v1) };
     }).filter(function (h) { return h.u1 > h.u0 + 1e-6 && h.v1 > h.v0 + 1e-6; });
@@ -1908,11 +1992,60 @@
         .sort(function (a, b) { return a.v0 - b.v0; });
       var at = y0;
       over.forEach(function (h) {
-        if (h.v0 > at + 1e-6) quad(m, P(ua, at), P(ub, at), P(ub, h.v0), P(ua, h.v0), col);
+        if (h.v0 > at + 1e-6) out.push({ u0: ua, u1: ub, v0: at, v1: h.v0 });
         at = Math.max(at, h.v1);
       });
-      if (y1 > at + 1e-6) quad(m, P(ua, at), P(ub, at), P(ub, y1), P(ua, y1), col);
+      if (y1 > at + 1e-6) out.push({ u0: ua, u1: ub, v0: at, v1: y1 });
     }
+    return out;
+  }
+
+  /* THE SPILL (2026-11-23). Astra: "the glow should spill out into the
+   * hallway in straight lines from where it starts." The core's light goes
+   * out through the window (and a tunnel's port) in straight lines, so what
+   * it lights in the room beyond is the wedge from the core through the
+   * opening's four edges: on the floor, the far and side walls and the
+   * ceiling, a patch with straight edges, cut round the doorways. Each
+   * patch is kept here as a polygon on its surface (navalMesh finds them,
+   * with the surface's own colour); reactorGlowMesh tints it by the
+   * reactor's power. Lit like the surface it lies on, not self-lit, so at
+   * no power it is that surface exactly and never shows an edge. */
+  function clipPoly(poly, n, d) {
+    var out = [];
+    for (var i = 0; i < poly.length; i++) {
+      var a = poly[i], b = poly[(i + 1) % poly.length];
+      var da = n[0] * a[0] + n[1] * a[1] + n[2] * a[2] + d, db = n[0] * b[0] + n[1] * b[1] + n[2] * b[2] + d;
+      if (da >= 0) out.push(a);
+      if ((da >= 0) !== (db >= 0)) {
+        var t = da / (da - db);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+      }
+    }
+    return out;
+  }
+  function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function cross3(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  /* The light from S through the opening `ap` (four corners, in order
+   * round it, and N, its normal into the room) landing on the room's
+   * surfaces: [{ pts, base }]. `surfs`: [{ poly, base }], each a convex
+   * polygon on a surface of the room, already off it by a few millimetres. */
+  function spillOnto(S, ap, N, surfs) {
+    var ac = [0, 1, 2].map(function (k) { return (ap[0][k] + ap[1][k] + ap[2][k] + ap[3][k]) / 4; });
+    var planes = [];
+    for (var i = 0; i < 4; i++) {
+      var n = cross3(sub3(ap[i], S), sub3(ap[(i + 1) % 4], S));
+      if (dot3(n, sub3(ac, S)) < 0) n = [-n[0], -n[1], -n[2]];
+      planes.push([n, -dot3(n, S)]);
+    }
+    planes.push([N, -dot3(N, ac) - 0.01]);           // beyond the opening
+    var out = [];
+    surfs.forEach(function (s) {
+      var poly = s.poly;
+      for (var j = 0; j < planes.length && poly.length >= 3; j++) poly = clipPoly(poly, planes[j][0], planes[j][1]);
+      if (poly.length >= 3) out.push({ pts: poly, base: s.base, ac: ac });
+    });
+    return out;
   }
   /* Where a reactor's tank, core and window are, in the plan's metres. The
    * tank stands on the reactor room's floor against its forward wall (the
@@ -1979,6 +2112,9 @@
    * Self-lit throughout: the water's light is its own. One mesh per level,
    * made when first wanted (render.js queueCockpitRoom). */
   var GLOW_COLD = [0.02, 0.05, 0.08], GLOW_BLUE = [0.16, 0.52, 1.0], GLOW_HOT = [0.80, 0.94, 1.0];
+  /* How strongly the spill tints what it falls on (before the room's own
+   * shading, which darkens it as it does the surface). */
+  var SPILL_K = 1.6;
   /* By the square root of her power, as an eye takes light: an afterglow of
    * a few percent is a faint blue, not black. And spread far enough that a
    * Capital's three-metre window is lit water, not grey. */
@@ -2045,12 +2181,66 @@
       holed('z', T.zb - 0.01, x0, x1, y0, y1, { a0: wn.x0, a1: wn.x1, b0: wn.y0, b1: wn.y1 });
       sheet([x0, y0, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // the floor
       sheet([x0, y1, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // and the water's surface
+      /* Her liner (Astra: "the pit there would have more than flat matte
+       * walls"): stainless plates a metre square, their welds dark lines
+       * on the lit steel, on her back, her sides and her floor; not across
+       * the window or a port. */
+      function seam(a, b, c, d) {
+        var n0 = m.v.length, q = [a, b, c, d];
+        var cols = q.map(function (v) { return glowColour(level, dist(v)).map(function (u) { return u * 0.45; }); });
+        var mid = [0, 1, 2].map(function (k) { return (cols[0][k] + cols[1][k] + cols[2][k] + cols[3][k]) / 4; });
+        q.forEach(function (v, k) { m.v.push(v); m.vcol.push(cols[k]); });
+        m.f.push([n0, n0 + 1, n0 + 2], [n0, n0 + 2, n0 + 3]);
+        m.c.push('!' + hex3(mid), '!' + hex3(mid));
+      }
+      /* Welds on a face: across it (ax 'x': a along z; 'z': a along x;
+       * 'y': a along x, b along z) at whole metres, split round a hole. */
+      function welds(ax, val, a0, a1, b0, b1, hole) {
+        var W = 0.012, P = function (a, b) {
+          return ax === 'x' ? [val, b, a] : ax === 'z' ? [a, b, val] : [a, val, b];
+        };
+        var runs = function (lo, hi, hlo, hhi, cutIt) {
+          return cutIt && hhi > lo && hlo < hi ? [[lo, Math.max(lo, hlo)], [Math.min(hi, hhi), hi]] : [[lo, hi]];
+        };
+        for (var u = Math.ceil(a0 + 0.3); u < a1 - 0.3; u += 1.0) {
+          var inA = hole && u > hole.a0 && u < hole.a1;
+          runs(b0, b1, hole ? hole.b0 : 0, hole ? hole.b1 : 0, inA).forEach(function (r2) {
+            if (r2[1] - r2[0] > 0.05) seam(P(u - W, r2[0]), P(u + W, r2[0]), P(u + W, r2[1]), P(u - W, r2[1]));
+          });
+        }
+        for (var v = Math.ceil(b0 + 0.3); v < b1 - 0.3; v += 1.0) {
+          var inB = hole && v > hole.b0 && v < hole.b1;
+          runs(a0, a1, hole ? hole.a0 : 0, hole ? hole.a1 : 0, inB).forEach(function (r2) {
+            if (r2[1] - r2[0] > 0.05) seam(P(r2[0], v - W), P(r2[1], v - W), P(r2[1], v + W), P(r2[0], v + W));
+          });
+        }
+      }
+      var so = 0.008;
+      welds('z', z0 + so, x0, x1, y0, y1, null);                                   // her back
+      welds('x', x0 + so, z0, z1, y0, y1, null);                                   // her sides
+      welds('x', x1 - so, z0, z1, y0, y1, pt && { a0: pt.z0, a1: pt.z1, b0: pt.y0, b1: pt.y1 });
+      welds('y', y0 + so, x0, x1, z0, z1, null);                                   // her floor
       /* The core: white-blue at power, a dull slate when she is cold. */
       var coreCol = '!' + hex3([0, 1, 2].map(function (k) { return 0.22 + (GLOW_HOT[k] + 0.12 - 0.22) * Math.sqrt(level); }));
       var b0 = m.f.length;
       box(m, c.x - c.hx, c.y - c.hy, c.z - c.hz, c.x + c.hx, c.y + c.hy, c.z + c.hz, coreCol);
       var rgbC = coreCol.slice(2).match(/../g).map(function (h) { return parseInt(h, 16) / 255; });
       while (m.vcol.length < m.v.length) m.vcol.push(rgbC);
+    });
+    /* The spill (spillOnto): each patch its surface's own colour, tinted
+     * blue by the reactor's light, strongest by the opening and falling off
+     * with the distance from it. Lit as the surface is (no '!'), so at no
+     * power it is the surface. */
+    (p.naval && p.naval.spill || []).forEach(function (s) {
+      var bh = String(s.base).replace(/^[^#]*/, ''), base = [1, 3, 5].map(function (i) { return parseInt(bh.substr(i, 2), 16) / 255; });
+      var n0 = m.v.length;
+      s.pts.forEach(function (v) {
+        var dx = v[0] - s.ac[0], dy = v[1] - s.ac[1], dz = v[2] - s.ac[2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        var I = Math.sqrt(level) * SPILL_K / (1 + (d / 2.5) * (d / 2.5));
+        m.v.push(v);
+        m.vcol.push([0, 1, 2].map(function (k) { return Math.min(1, base[k] + GLOW_BLUE[k] * I); }));
+      });
+      for (var i = 1; i + 1 < s.pts.length; i++) { m.f.push([n0, n0 + i, n0 + i + 1]); m.c.push(bh); }
     });
     return m;
   }

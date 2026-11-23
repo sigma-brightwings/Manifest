@@ -40,6 +40,21 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-23, the glow spills out, and the pit dressed)
+
+- **The glow spills out of the window.** Astra: *"the glow should spill out into the hallway in straight lines from where it starts."*
+  - The core's light leaves through the window, and the tunnel's port, in straight lines. What it lights in the room beyond is the wedge traced from the core through the opening's four edges.
+  - On reactor control's far wall and side walls, its floor and ceiling, and the reactor tunnel's far wall, that's a straight-edged patch of blue, cut around the doorways.
+  - The patch follows the reactor's power: strongest near the opening, fading with distance, dimmer after a scram.
+  - It's drawn in the surface's own colour and takes the room's lighting, so a cold reactor leaves no visible edge.
+  - It's traced from the core's centre, which keeps the edges sharp.
+- **The pit has texture.** Astra: *"the reactor room needs texture, the pit there would have more than flat matte walls around it."*
+  - **The liner:** stainless plates a metre square, their welds dark lines on the lit steel, across the tank's back, sides and floor. Not across the window or the port.
+  - **Inside, dark against the glow:** a ladder down the back wall, and a spent-fuel rack on the floor behind the core, where it never blocks the view of the core.
+  - **Outside, in the reactor room:** stiffening ribs on the tank, a flange around its rim, a hazard-striped kick plate at its foot, and two coolant pipes from its back to the aft bulkhead.
+- **Tests:** `reactorglow.test.js` checks that every reactor's spill lies in the room beyond the window, traces back through the window to the core, matches the surface exactly at no power, and brightens at full power.
+- **Saves:** unchanged.
+
 ### Changed (2026-11-23, the control rods, the reactor tunnel, and four layout faults)
 
 - **Control rods across the whole core.** Astra, looking at the Capital through the glass: *"the control rods are only at the top of the core"*. With every rod in a row along one edge, that edge of the core runs cold and the far side hot, so the neutron field is badly tilted.

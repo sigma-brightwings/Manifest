@@ -148,6 +148,46 @@ CASES.forEach(function (cs) {
     });
   });
 });
+/* The spill (Astra: "the glow should spill out into the hallway in
+ * straight lines from where it starts"): every window and port throws a
+ * patch of light into the room beyond, inside that room, on the far side
+ * of the opening, cut by the straight lines from the core through the
+ * opening's edges; at no power it is the surface's own colour exactly. */
+var spillBad = [], spilled = 0;
+CASES.forEach(function (cs) {
+  var d = R.shipInterior(shipOf(cs[0], cs[1])), p = d.plan, sp = p.naval.spill || [];
+  ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+    var T = SD.reactorTank(p, rx), S = [T.core.x, T.core.y, T.core.z], w = rx.window;
+    var ctl = p.rooms.filter(function (q) { return q.id === rx.control; })[0];
+    var mine = sp.filter(function (s) { return Math.abs(s.ac[2] - ctl.z0) < 1e-6 && s.ac[0] > w.x0 && s.ac[0] < w.x1; });
+    if (!mine.length) { spillBad.push(cs.join('') + ' ' + rx.id + ': no spill'); return; }
+    spilled++;
+    mine.forEach(function (s) {
+      s.pts.forEach(function (q) {
+        var inRoom = q[0] > ctl.x0 - 0.01 && q[0] < ctl.x1 + 0.01 && q[2] > ctl.z0 - 0.01 && q[2] < ctl.z1 + 0.01;
+        /* Back along the line to the core, it crosses the window's plane
+         * inside the window. */
+        var t = (ctl.z0 - S[2]) / (q[2] - S[2]), xw = S[0] + (q[0] - S[0]) * t, yw = S[1] + (q[1] - S[1]) * t;
+        var through = xw > w.x0 - 0.02 && xw < w.x1 + 0.02 && yw > w.y0 - 0.02 && yw < w.y1 + 0.02;
+        if (!inRoom || !through) spillBad.push(cs.join('') + ' ' + rx.id + ' point ' + q.map(function (u) { return u.toFixed(2); }).join(','));
+      });
+    });
+  });
+  var g0 = SD.reactorGlowMesh(p, 0), g1 = SD.reactorGlowMesh(p, 1);
+  var nSp = sp.reduce(function (a, s) { return a + s.pts.length; }, 0);
+  var tail0 = g0.vcol.slice(g0.vcol.length - nSp), tail1 = g1.vcol.slice(g1.vcol.length - nSp), k = 0, cold = true, warm = false;
+  sp.forEach(function (s) {
+    var bh = String(s.base).replace(/^[^#]*/, ''), base = [1, 3, 5].map(function (i) { return parseInt(bh.substr(i, 2), 16) / 255; });
+    s.pts.forEach(function () {
+      if (Math.abs(tail0[k][2] - base[2]) > 1e-6) cold = false;
+      if (tail1[k][2] > base[2] + 0.1) warm = true;
+      k++;
+    });
+  });
+  if (!cold || !warm) spillBad.push(cs.join('') + (cold ? '' : ' shows at no power') + (warm ? '' : ' no brighter at full'));
+});
+check('the glow spills through every window in straight lines, unseen at no power, brighter with it', spilled >= 12 && !spillBad.length,
+      spilled + ' reactors; ' + spillBad.slice(0, 4).join(', '));
 check('nobody walks into the water: every tank is fenced, no ladder, trunk or doorway in one', tanks >= 12 && !wet.length,
       tanks + ' tanks; ' + wet.slice(0, 4).join(', '));
 check('the Meridian and Leviathan go aft past the reactor by her tunnel, and its port looks on her core',
