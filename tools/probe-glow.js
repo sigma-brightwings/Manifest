@@ -41,10 +41,20 @@ async function look(tag, hull) {
   SD.reactorPower = function () { return 1; };
   /* The tank from the reactor's own room, by its door. */
   await at(tag + '-4-tank', rr.deck, Math.min(rr.x1 - 0.5, T.x1 + 0.45), rr.z1 - 0.6, Math.PI + 0.7, -0.15);
+  /* The reactor tunnel, and its port onto the tank's side (both ways, as
+   * the yaw's sign is not pinned here). */
+  if (rx.port) {
+    const tr = p.rooms.find(r => r.id === rx.tunnel), pt = rx.port;
+    const tx = (tr.x0 + tr.x1) / 2 + 0.25, tz = (pt.z0 + pt.z1) / 2;
+    await at(tag + '-5-port-a', tr.deck, tx, tz, Math.PI / 2, 0);
+    await at(tag + '-5-port-b', tr.deck, tx, tz, -Math.PI / 2, 0);
+    await at(tag + '-6-tunnel', tr.deck, (tr.x0 + tr.x1) / 2, tr.z0 + 0.5, 0, 0);
+  }
   SD.reactorPower = real;
 }
 try {
   await look('kestrel', 'kestrel');
   await look('capital', 'capital');
+  await look('meridian', 'meridian');
 } catch (e) { notes.push('THREW ' + e.message + ' walk=' + !!G.walk); }
 return notes.join('\n');

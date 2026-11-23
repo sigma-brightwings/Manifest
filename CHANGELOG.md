@@ -40,6 +40,31 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-23, the control rods, the reactor tunnel, and four layout faults)
+
+- **Control rods across the whole core.** Astra, looking at the Capital through the glass: *"the control rods are only at the top of the core"*. With every rod in a row along one edge, that edge of the core runs cold and the far side hot, so the neutron field is badly tilted.
+  - The rods now go in as a square lattice about 45 cm apart across the whole face they enter by: the front of a lying-down core, the top of a standing one. They reach to within an eighth of the core's edges, and there are at least 2 by 2.
+  - The Capital's are 5 by 3, each from its own drive on a frame hung in the water between the core and the glass. The Kestrel's are 2 by 2, from the lid.
+  - Over the window, a rod-position panel shows a lamp for each rod, laid out the same way.
+  - From the window, at least 77% of any core's face is in sight past its rods.
+- **The reactor tunnel** (Meridian, Leviathan). Their deck runs aft through the reactor's zone, and the watertight door from the aft spaces into reactor control was 4.6 m deep: it ran straight through the reactor room and its tank, so anyone going aft walked through the reactor. Asked how to fix it, Astra chose a shielded tunnel (as a submarine has):
+  - a walled **reactor tunnel** down the centreline, from the aft bulkhead to reactor control;
+  - the **reactor** to port of it, the core in its tank, its door from control on the port side;
+  - **reactor auxiliaries** (the coolant pumps) to starboard;
+  - a **port in the tunnel's wall** onto the side of the tank: walking through, you look across the water at the core.
+- **The Crawler's engineering flat** had the same stretched door, from the auxiliary room into reactor control. The flat is too narrow for a centre tunnel, so a shielded passage now runs down her starboard side past the reactor room. The reactor is still entered only from reactor control, or by its escape trunk.
+- **Nobody walks into the water.** On the big ships nothing stopped you walking into a reactor tank; only the L hulls' reactor block fenced it. Every tank now has a footprint you can't walk through.
+- **Escape trunks** from the Meridian's reactor and the flats' reactors came up inside the tank. They now stand in the reactor room's free aft corner.
+- **The core sits on a support plate,** at the window's height, so all of a tall core is in sight over the control panel. Before, the Meridian's sat on the tank floor with its bottom below the sill.
+- **The tank's front glows too,** around the window, so from the tunnel's port the water runs to the glass, not to a dark wall.
+- **Tests:** `reactorglow.test.js` now also checks:
+  - no doorway is deeper than a wall;
+  - the tunnel's port looks on the core;
+  - no ladder, trunk or doorway stands in a tank;
+  - every reactor's rods are spread evenly over the core's face, centred and within the pitch;
+  - from the window, a 9×9 grid of sight-lines finds no wall in the way.
+- **Saves:** unchanged. Layouts come from the seed, so an existing Meridian, Leviathan or Crawler gets her new deck.
+
 ### Added (2026-11-23, the reactor glow: a window into the water)
 
 - **Reactor control looks into the reactor.** The window over the control panel opens onto the reactor's water tank. The core sits in the water, and the control rods come in from above (in from the front on the Cutter and the other lying-down reactors). Every reactor gets this: the reactor block on the L hulls, and the naval reactor rooms on the Capital, Carrier, Meridian, Leviathan and Crawler.

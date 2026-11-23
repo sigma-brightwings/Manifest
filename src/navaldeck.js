@@ -195,14 +195,14 @@
 
   /* What a room is for: the use letter of its compartment number. */
   var USE = {
-    passage: 'L', cross: 'L', lobby: 'L', landing: 'L', berthing: 'L', mess: 'L', sickbay: 'L', wardroom: 'L',
+    passage: 'L', cross: 'L', lobby: 'L', tunnel: 'L', landing: 'L', berthing: 'L', mess: 'L', sickbay: 'L', wardroom: 'L',
     galley: 'L', office: 'L', ready: 'L', cabin: 'L', lounge: 'L', dining: 'L',
     stores: 'A', magazine: 'M', engine: 'E', aux: 'E', reactor: 'E', reactorctl: 'C', repair: 'Q', dccentral: 'C',
     cic: 'C', flagplot: 'C', launcher: 'C', catapult: 'Q', hangar: 'Q', airlock: 'Q', flightdeckhatch: 'Q',
     platform: 'T', trunk: 'T', stub: 'C'
   };
   var LABEL = {
-    passage: 'Passageway', cross: 'Cross-passage', lobby: 'Passageway', landing: 'Lift', berthing: 'Berthing',
+    passage: 'Passageway', cross: 'Cross-passage', lobby: 'Passageway', tunnel: 'Reactor tunnel', landing: 'Lift', berthing: 'Berthing',
     mess: 'Mess deck', sickbay: 'Sick bay', wardroom: 'Wardroom', galley: 'Galley', office: 'Office',
     ready: 'Ready room', cabin: 'Cabins', lounge: 'Lounge', dining: 'Dining saloon', stores: 'Storeroom',
     magazine: 'Missile magazine', engine: 'Engine room', aux: 'Auxiliary machinery', reactor: 'Reactor',
@@ -331,8 +331,12 @@
           if (kind === 'reactor') {
             /* Reactor control forward, the reactor aft of it, the glass in
              * the bulkhead between (reactorRoom). */
-            var rr = reactorRoom(p, dk, zn, (bx0 + cx + hw) / 2, (cx + hw - bx0) / 2, spec.reactors.axis, spec.military);
+            /* A merchant's lower deck has a watertight door aft into it
+             * (below, the links along the deck), so a way through. */
+            var rr = reactorRoom(p, dk, zn, (bx0 + cx + hw) / 2, (cx + hw - bx0) / 2, spec.reactors.axis, spec.military,
+                                 null, zi > 0 && !navy && !!here.zoneRoom[zi - 1]);
             here.zoneRoom[zi] = rr.control;
+            if (rr.tunnel) { here.zoneAft = here.zoneAft || {}; here.zoneAft[zi] = rr.tunnel; }
             here.reactorAt = here.reactorAt || {};
             here.reactorAt[zi] = rr;
           } else {
@@ -377,8 +381,9 @@
             /* A merchant reactor is a zone of its own across the deck: the
              * passage stops at its control room's door. */
             p.rooms.pop(); here.pass.c[zi] = here.pass.s[zi] = here.pass.p[zi] = null;
-            var mr = reactorRoom(p, dk, zn, cx, hw, spec.reactors.axis, spec.military);
+            var mr = reactorRoom(p, dk, zn, cx, hw, spec.reactors.axis, spec.military, null, zi > 0 && !!here.zoneRoom[zi - 1]);
             here.zoneRoom[zi] = mr.control;
+            if (mr.tunnel) { here.zoneAft = here.zoneAft || {}; here.zoneAft[zi] = mr.tunnel; }
             here.reactorAt = here.reactorAt || {};
             here.reactorAt[zi] = mr;
             return;
@@ -419,12 +424,14 @@
                  [curtain ? cx : cx + sd[1] * P, zw], { bulkhead: zw });
           });
         } else if (d.role === 'line') {
-          var a = here.zoneRoom[zi - 1], b = here.zoneRoom[zi];
+          /* Into a reactor's zone from aft, the door opens on her tunnel
+           * (reactorRoom), not on reactor control beyond her. */
+          var a = here.zoneRoom[zi - 1], b = (here.zoneAft && here.zoneAft[zi]) || here.zoneRoom[zi];
           if (!a || !b) continue;
           link(p, 'wtdoor', a, b, d.wt ? 'D' : null, [cx, zw], { bulkhead: zw });
         } else if (d.role === 'below' && !belowDC && !navy) {
           /* A merchant's lower deck: watertight doors that close on damage. */
-          link(p, 'wtdoor', here.zoneRoom[zi - 1], here.zoneRoom[zi], 'D', [cx, zw], { bulkhead: zw });
+          link(p, 'wtdoor', here.zoneRoom[zi - 1], (here.zoneAft && here.zoneAft[zi]) || here.zoneRoom[zi], 'D', [cx, zw], { bulkhead: zw });
         }
         /* Navy, below the damage-control deck: no door at all. */
       }
@@ -463,7 +470,10 @@
           var lz = dn.zoneRoom[zi];
           if (rr || (lz && (lz.kind === 'engine' || lz.kind === 'aux'))) {
             var top = ladderRoom(up, zi, 'p') || ladderRoom(up, zi, 's');
-            if (top) link(p, 'trunk', rr ? rr.reactor : lz, top, null, [cx - Math.min(P, hw - 1), zn[0] + B * 0.7], { climb: true });
+            /* With a tunnel, her tank is to port where the trunk stood: the
+             * trunk goes in the reactor room's free aft corner, outboard. */
+            var tAt = rr && rr.tunnel ? [rr.reactor.x0 + 1.0, rr.reactor.z0 + 0.8] : [cx - Math.min(P, hw - 1), zn[0] + B * 0.7];
+            if (top) link(p, 'trunk', rr ? rr.reactor : lz, top, null, tAt, { climb: true });
           }
         });
       } else {
@@ -484,7 +494,8 @@
             var dcd = byDeck[spec.dc] || up;
             var top = ladderRoom(dcd, zi, side === 's' ? 'p' : 's') || ladderRoom(dcd, zi, side);
             var from = rr ? rr.reactor : lo;
-            if (top) link(p, 'trunk', from, top, null, [cx - sx * Math.min(P, hw - 1), zn[0] + B * 0.65], { climb: true });
+            var tAt2 = rr && rr.tunnel ? [rr.reactor.x0 + 1.0, rr.reactor.z0 + 0.8] : [cx - sx * Math.min(P, hw - 1), zn[0] + B * 0.65];
+            if (top) link(p, 'trunk', from, top, null, tAt2, { climb: true });
           }
         });
         /* Below one 'below' deck, another: compartment to compartment. */
@@ -624,26 +635,68 @@
   /* The reactor zone: control forward, the reactor aft of a bulkhead with
    * the glass in it. A military core lies on her side with the rod drives
    * on its forward face; a civilian one stands, its drives on top. */
-  function reactorRoom(p, dk, zn, cx, hw, axis, military, sizeOpt) {
+  function reactorRoom(p, dk, zn, cx, hw, axis, military, sizeOpt, through) {
     var za = zn[0] + WALL / 2, zb = zn[1] - WALL / 2, L = zb - za;
     var ctlL = Math.max(2.4, Math.min(5, L * 0.4));
     var zw = zb - ctlL;                         // the window's bulkhead
     var ctl = room(p, dk, 'reactorctl', cx - hw, cx + hw, zw + WALL / 2, zb);
-    var rx = room(p, dk, 'reactor', cx - hw, cx + hw, za, zw - WALL / 2);
-    link(p, 'door', ctl, rx, 'X', [cx + hw - 1.0, zw], { reactorDoor: true });
+    /* THE REACTOR TUNNEL (2026-11-23). Where the deck goes on aft of her
+     * (`through`), the way aft is a shielded tunnel down her centreline,
+     * as a submarine's runs over hers: the reactor to port of it, her
+     * auxiliaries (the coolant pumps) to starboard, and a port in the
+     * tunnel's wall onto the tank's side. Before, the deck's watertight
+     * door from aft into reactor control ran straight through the reactor
+     * room and her tank (found 2026-11-23, Meridian and Leviathan). */
+    var tun = null, aux = null, rx, rcx = cx, rhw = hw;
+    if (through && hw >= 5.5) {
+      var tx0 = cx - PASS_W / 2, tx1 = cx + PASS_W / 2;
+      rx = room(p, dk, 'reactor', cx - hw, tx0 - WALL, za, zw - WALL / 2);
+      tun = room(p, dk, 'tunnel', tx0, tx1, za, zw - WALL / 2);
+      aux = room(p, dk, 'aux', tx1 + WALL, cx + hw, za, zw - WALL / 2, { label: 'Reactor auxiliaries' });
+      link(p, 'door', ctl, rx, 'X', [cx - hw + 1.0, zw], { reactorDoor: true });
+      link(p, 'door', ctl, tun, 'X', [cx, zw]);
+      link(p, 'door', ctl, aux, 'X', [cx + hw - 1.0, zw]);
+      /* Her core, between the reactor door's clear way (wide enough that
+       * the door still clears her tank if the hull fit narrows control and
+       * moves it inboard) and the tunnel. */
+      var rx0 = cx - hw + 2.6, rx1 = tx0 - WALL;
+      rcx = (rx0 + rx1) / 2; rhw = (rx1 - rx0) / 2;
+    } else if (through) {
+      /* Too narrow for that (a flat): the tunnel runs down her starboard
+       * side, no port in it, and the reactor door is just inboard of it. */
+      var sx0 = cx + hw - PASS_W, dX = sx0 - WALL - 0.6;
+      rx = room(p, dk, 'reactor', cx - hw, sx0 - WALL, za, zw - WALL / 2);
+      tun = room(p, dk, 'tunnel', sx0, cx + hw, za, zw - WALL / 2);
+      link(p, 'door', ctl, rx, 'X', [dX, zw], { reactorDoor: true });
+      link(p, 'door', ctl, tun, 'X', [sx0 + PASS_W / 2, zw]);
+      var nx0 = cx - hw, nx1 = dX - 0.6;
+      rcx = (nx0 + nx1) / 2; rhw = (nx1 - nx0) / 2;
+      var narrow = true;
+    } else {
+      rx = room(p, dk, 'reactor', cx - hw, cx + hw, za, zw - WALL / 2);
+      link(p, 'door', ctl, rx, 'X', [cx + hw - 1.0, zw], { reactorDoor: true });
+    }
     var rLen = zw - WALL / 2 - za, cr = Math.min(0.4, rLen * 0.08);
+    var wh = Math.min(1.6, hw * 0.6, tun ? rhw - 0.2 : Infinity);
     var r = {
       id: 'reactor-' + p.reactors.length, room: rx.id, control: ctl.id, axis: axis, military: !!military,
       /* The core: about 0.8 m across, in a water jacket 1.5–2 m all round,
        * which is her coolant and her crew's shield both. */
-      core: { x: cx, y: dk.y + Math.min(1.4, dk.h * 0.45), z: (za + zw) / 2, r: cr, len: axis === 'h' ? Math.min(2.4, hw * 1.2) : Math.min(2.0, dk.h * 0.6) },
+      core: { x: rcx, y: dk.y + Math.min(1.4, dk.h * 0.45), z: (za + zw) / 2, r: cr, len: axis === 'h' ? Math.min(2.4, rhw * 1.2) : Math.min(2.0, dk.h * 0.6) },
       jacket: Math.max(1.2, Math.min(2.0, rLen * 0.3)),
       rods: axis === 'h' ? { face: 'fwd', n: 7 } : { face: 'top', n: 7 },
-      window: { z: zw, x0: cx - Math.min(1.6, hw * 0.6), x1: cx + Math.min(1.6, hw * 0.6),
+      window: { z: zw, x0: rcx - wh, x1: rcx + wh,
                 y0: dk.y + 0.7, y1: dk.y + Math.min(dk.h - 0.3, 2.3), faces: 'fwd' }
     };
+    if (tun) r.tunnel = tun.id;
+    if (tun && !narrow) {
+      /* The tunnel's port: at a standing eye, as long as her core's
+       * jacket allows, on her core's middle. */
+      var pz = (za + zw) / 2, phl = Math.min(0.8, (zw - za) / 2 - 0.6);
+      r.port = { x: rx.x1, z0: pz - phl, z1: pz + phl, y0: dk.y + 1.1, y1: dk.y + Math.min(dk.h - 0.4, 1.8) };
+    }
     p.reactors.push(r);
-    return { control: ctl, reactor: rx, spec: r };
+    return { control: ctl, reactor: rx, tunnel: tun, aux: aux, spec: r };
   }
 
   function ladder(p, lo, hi, fit, x, z, side, rule, navy) {
@@ -711,9 +764,12 @@
      * down here, the auxiliary machinery — pumps, the reactor's coolant
      * plant, the turbines' condensers. */
     var eng = room(p, low, 'aux', -f.hw, f.hw, z0 + WALL / 2, zm - WALL / 2, { zone: 0 });
-    var rr = reactorRoom(p, low, [zm, z1], 0, f.hw, military ? 'h' : 'v', military);
-    /* The watertight door between them is on the control room's side. */
-    link(p, 'wtdoor', eng, rr.control, navy ? 'Z' : 'D', [f.hw - 0.8, zm], { bulkhead: zm });
+    var rr = reactorRoom(p, low, [zm, z1], 0, f.hw, military ? 'h' : 'v', military, null, true);
+    /* The watertight door between them, on her starboard side, into the
+     * tunnel past the reactor (reactorRoom). It went into control itself,
+     * so the doorway ran the reactor room's length (found 2026-11-23). */
+    var tw = rr.tunnel;
+    link(p, 'wtdoor', eng, tw || rr.control, navy ? 'Z' : 'D', [tw ? (tw.x0 + tw.x1) / 2 : f.hw - 0.8, zm], { bulkhead: zm });
     /* The ladders' heads and the trunks' tops may be placed (opts.ladderAt:
      * [starboard, port] centres; opts.trunkAt: { aux, reactor }), so they
      * come up into the rooms over them. */
@@ -721,7 +777,9 @@
     ladder(p, rr.control, stub, navy ? 'Z' : null, la[0][0], la[0][1], 1, 'up', navy);
     ladder(p, rr.control, stub, navy ? 'Z' : null, la[1][0], la[1][1], -1, 'down', navy);
     link(p, 'trunk', eng, stub, null, ta.aux || [-f.hw + 0.8, z0 + 1.2], { climb: true });
-    link(p, 'trunk', rr.reactor, stub, null, ta.reactor || [-f.hw + 0.8, zm + 1.0], { climb: true });
+    /* The reactor's trunk in the free corner aft, inboard of the tunnel:
+     * her tank fills the rest. */
+    link(p, 'trunk', rr.reactor, stub, null, ta.reactor || [rr.reactor.x1 - 0.6, rr.reactor.z0 + 0.6], { climb: true });
     p.airlock = stub.id;          // her own airlock is on her own deck
     p.bridge = stub.id;
     labelAll(p, spec);
