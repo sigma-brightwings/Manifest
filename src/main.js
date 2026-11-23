@@ -23919,6 +23919,10 @@
    * assignment still goes through F5 -> PANELS. */
   G.dashPage = function (id) { return DASH_PAGE_BY_ID[id] || null; };
   global.Game = G;
+  /* The developer's panel (devharness.js) gets to stand you up and talk
+   * through the same functions the game does; nothing else of main.js's
+   * insides is lent out. */
+  global.GameDev = { startShipWalk: startShipWalk, say: say, deckLabel: deckLabel };
   if (typeof document !== 'undefined') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);
     else boot();

@@ -202,7 +202,11 @@ function createWindow() {
    * lines put the reason in a file you can read afterwards. */
   watchForCrashes(win);
 
-  win.loadURL('game://psg/index.html#' + encodeURIComponent(START_SEED));
+  /* A developer's run (not packaged, or started with --dev) opens the
+   * page with ?dev, which turns on the developer's panel (devharness.js).
+   * The protocol handler reads only the path, so the query is harmless. */
+  const dev = !app.isPackaged || process.argv.includes('--dev');
+  win.loadURL('game://psg/index.html' + (dev ? '?dev=1' : '') + '#' + encodeURIComponent(START_SEED));
   return win;
 }
 
