@@ -40,6 +40,20 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-23, the title is set in Aldrich)
+
+The wordmark on the title card and the loading screen is now "MANIFEST"
+in Aldrich (Matthew Desmond, SIL OFL), all capitals, tracked 0.10 em: a
+squared, stencilled, hull-lettering face, picked by Astra from a sheet of
+seven sci-fi faces. It replaces Uncial Antiqua, whose t read as a c
+("Manifesc") at a glance. Still outlines in src/logo.js, so no font ships;
+only MARK_W and MARK changed, and the layout follows the new proportions
+(8.49:1 rather than 5.98:1) on its own. **Provisional** - Astra wants the
+title left undecided for now and may change it again. To try another face:
+`node "Claude outputs/wordmark.cjs" <font> <WORD> [tracking-em]` (needs
+opentype.js) and paste its output over MARK_W and MARK. The Aldrich file and
+its licence are in Claude outputs/fonts/. Saves are untouched.
+
 ### Fixed (2026-11-22, the hand on the beacon was still being paid)
 
 1.5.2 made the crew roster mean the right thing: a hand outside or adrift
