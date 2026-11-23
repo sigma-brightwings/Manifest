@@ -40,6 +40,11 @@
  */
 (function (global) {
   'use strict';
+  /* The naval decks' layout (navaldeck.js): in the page a script tag before
+   * this one; headless (the tests, the tools), a file beside it. */
+  if (!global.NavalDeck && typeof require === 'function') {
+    try { require('./navaldeck.js'); } catch (e) { /* without it, the decks are as they were */ }
+  }
 
   /* ---- its own seeded stream, as walk.js has, so nothing else moves ---- */
   function hash(str) {
@@ -306,6 +311,15 @@
    * gallery stands ~41.5 m over a main deck at her waterline, the
    * Carrier's island cab ~35 m over one just under her flight deck. */
   var TOWER = { capital: 41.5, carrier: 35, leviathan: 8, crawler: 5, meridian: 4 };
+  /* THE NAVAL DECKS (claude/naval-decks.md, stage 2, 2026-11-23). On these
+   * four the decks under the bridge are navaldeck.js's: her own airlock deck
+   * (this file's main deck, the rooms at the foot of her tower) becomes the
+   * deck NAVAL_MERGE names, and the old junction and the Carrier's old
+   * hangar give way to her engineering deck and her hangar bays. The
+   * Carrier's airlock deck is her hangar deck, 43.6 m under her island cab
+   * rather than 35 (the deck her island stood on). */
+  var NAVAL_MERGE = { capital: '1', carrier: '1', meridian: 'B', leviathan: 'A' };
+  TOWER.carrier = 43.6;
   var LOBBY_L = 1.8, LOBBY_HW = 1.0;
   /* A LONGER LOBBY WHERE THE SHAFT HAS TO GO FURTHER AFT (2026-11-02).
    * Astra: "fit the lift in the crawler to the hull". The car sits straight
@@ -319,6 +333,10 @@
    * the gap. */
   var LOBBY_EXTRA = { crawler: 2.1 };
   var CAR_HW = 1.0, CAR_D = 1.9, CAR_H = 2.4;
+  /* The buttons down the car's wall, as many as she has stops: 0.4 m apart,
+   * closer when that would run them off the end of the car (a Carrier's
+   * seven stops, 2026-11-23). */
+  function btnStep(n) { return Math.min(0.4, (CAR_D - 0.7) / Math.max(1, n - 1)); }
   var LIFT_SPEED = 3.0;                    // m/s, the car between decks
   /* A fast car in the tall towers, or forty metres is a quarter-minute in
    * a box. */
@@ -975,7 +993,7 @@
         deckOrder.forEach(function (to, ti) {
           if (to === here) return;
           var arrow = ti < hi ? '▲' : '▼';
-          item('liftbtn', CAR_HW - 0.12, carZ[0] + 0.35 + n * 0.4, arrow + '  ' + DECK_NAME[to], { to: to, aim: true });
+          item('liftbtn', CAR_HW - 0.12, carZ[0] + 0.35 + n * btnStep(deckOrder.length - 1), arrow + '  ' + DECK_NAME[to], { to: to, aim: true });
           n++;
         });
       });
@@ -995,7 +1013,7 @@
      * follow when she has them. */
     var ORDER = { cockpit: 0, passage: 1, airlock: 2, bridgedeck: 3, quarters: 4,
                   turret: 5, medbay: 6, engine: 7, cargo: 8, lobby: 9, lift: 10,
-                  platform: 11, tramway: 12, hangar: 13 };
+                  platform: 11, tramway: 12, hangar: 13, naval: 14 };
     rooms.sort(function (a, b) { return ORDER[a.kind] - ORDER[b.kind]; });
 
     /* Every room, door and item knows its deck. */
@@ -1026,12 +1044,20 @@
       turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit,
       ramp: rampSpec
     };
+    var deckAll = deckOrder;
+    if (decked && NAVAL_MERGE[opts.hullId] && global.NavalDeck && opts.naval !== false) {
+      var nv = navalize({ out: out, geom: geom, opts: opts, carZ: carZ, deckY: deckY, rooms: rooms, doors: doors, items: items });
+      if (nv) {
+        deckY = nv.deckY; deckOrder = nv.deckOrder; deckAll = nv.deckAll; tram = nv.tram; hangarPads = nv.hangarPads;
+        out.naval = nv.naval; out.deckName = nv.deckName; out.hangarY = nv.hangarY; out.drive = null;
+      }
+    }
     if (decked) {
       /* A walk.js plan per deck: the same objects, filtered, with that
        * deck's floor. `ship` points back at the whole. */
-      out.deckY = deckY; out.deckOrder = deckOrder; out.tram = tram; out.hangarPads = hangarPads;
+      out.deckY = deckY; out.deckOrder = deckOrder; out.deckAll = deckAll; out.tram = tram; out.hangarPads = hangarPads;
       out.carZ = carZ; out.decks = {};
-      deckOrder.forEach(function (dk) {
+      deckAll.forEach(function (dk) {
         var v = {};
         for (var key in out) v[key] = out[key];
         v.deck = dk; v.floorY = deckY[dk]; v.ship = out; v.decks = null;
@@ -1059,6 +1085,433 @@
    * side, shortened from its aft end, or left out — and the deck is planned
    * again, until every room is inside or nothing more can be done. The
    * cockpit is not asked: its canopy stands proud of her skin by design. */
+  /* ---- THE NAVAL DECKS IN HER (stage 2, 2026-11-23) --------------------
+   * navaldeck.js's layout, made into this file's plan: its rooms (kind
+   * 'naval', `sub` what they are), its doors as sliding doors through their
+   * walls, every ladder, scuttle and trunk an item at each end you climb
+   * from (main.js startRide 'climb'), a lift stop on each of its decks with
+   * the car's own landing door, the tram in her trunk, and the Carrier's
+   * craft on the pads of her middle bay. Her bridge, her lift and her own
+   * airlock deck are this file's, as before; the old junction and the old
+   * hangar are gone. */
+  function navalize(c) {
+    var N = global.NavalDeck, out = c.out, geom = c.geom, opts = c.opts, carZ = c.carZ;
+    var rooms = c.rooms, doors = c.doors, items = c.items;
+    var hullId = opts.hullId, merge = NAVAL_MERGE[hullId];
+    var main = c.deckY.main, cargo = rooms.filter(function (r) { return r.kind === 'cargo' && r.deck === 'main'; })[0];
+    var aftMost = cargo || rooms.filter(function (r) { return r.deck === 'main'; }).sort(function (a, b) { return a.z0 - b.z0; })[0];
+    var naval = N.NAVAL[hullId];
+    if (!naval || !aftMost) return null;
+    var merchant = naval.style === 'merchant';
+    var jo = merchant ? { x: 0, z: aftMost.z0, axis: 'z' }
+                      : { x: naval.cx < 0 ? aftMost.x0 : aftMost.x1, z: (aftMost.z0 + aftMost.z1) / 2, axis: 'x' };
+    var nd = N.layout(hullId, {
+      bridgeY: geom.floorY, mainY: main, mergeDeck: merge, noAirlock: true,
+      lift: { x: 0, z: carZ[0] - WALL_T - N.LANDING / 2 },
+      z1: merchant ? aftMost.z0 - WALL_T - 1.6 : undefined, join: jo, key: opts.key
+    });
+    if (!nd) return null;
+
+    /* Out with the old junction and hangar. */
+    var gone = { junction: 1, hangar: 1 };
+    function keep(o) { return !gone[o.deck]; }
+    [rooms, doors, items].forEach(function (arr) {
+      for (var i = arr.length - 1; i >= 0; i--) if (!keep(arr[i])) arr.splice(i, 1);
+    });
+    for (var i = items.length - 1; i >= 0; i--) if (items[i].kind === 'liftbtn') items.splice(i, 1);
+
+    /* Her decks: the bridge, her own (merged) one, and the rest. */
+    var id = {}, deckY = { bridge: c.deckY.bridge, main: main }, deckName = {};
+    deckName.bridge = DECK_NAME.bridge;
+    nd.decks.forEach(function (d) {
+      var mine = d.id === 'bridge' ? 'bridge' : d.id === merge ? 'main' : 'n' + d.id;
+      id[d.id] = mine;
+      if (mine !== 'bridge' && mine !== 'main') deckY[mine] = d.y;
+      var nm = merchant ? d.name : d.num + '  ' + d.name;
+      if (mine === 'main') nm = (merchant ? d.name : d.num + '  ' + d.name) + ' · airlock';
+      if (mine !== 'bridge') deckName[mine] = nm;
+    });
+    var ndRoom = {}, mineRoom = {};
+    nd.rooms.forEach(function (r) { ndRoom[r.id] = r; });
+    nd.rooms.forEach(function (r) {
+      if (r.kind === 'stub' || r.deck === 'bridge') return;
+      var m = { id: 'nv-' + r.id, kind: 'naval', sub: r.kind, x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1,
+                y0: 0, y1: r.y1 - r.y0, label: r.label + (r.comp && !merchant ? '   ' + r.comp : ''), deck: id[r.deck],
+                comp: r.comp };
+      if (r.walk === false) m.walk = false;
+      rooms.push(m);
+      mineRoom[r.id] = m;
+    });
+    var dName = function (d) { return deckName[d] || DECK_NAME[d] || d; };
+
+    /* FITTED TO HER (Astra, 2026-10-31: shrink, then drop). An outboard
+     * room that leaves her skin is narrowed from its outboard side, down to
+     * 2 m; one that still does not fit, and is a dead end (one door, so
+     * nothing is reached through it), is left out. Passages, landings,
+     * machinery and the reactors are never cut: a misfit there is reported
+     * (out.naval.misfit) for the hull fit to answer. */
+    var misfit = [], narrowed = [], dropped = [], lowered = [];
+    if (opts.fit && opts.fit.inside) {
+      var doorsOf = {};
+      nd.links.forEach(function (l) { if (l.type === 'door' || l.type === 'wtdoor') { doorsOf[l.a] = (doorsOf[l.a] || 0) + 1; doorsOf[l.b] = (doorsOf[l.b] || 0) + 1; } });
+      var frac = function (m) {
+        var fy = deckY[m.deck], n2 = 0, k2 = 0;
+        for (var x = m.x0 + 0.1; x <= m.x1 - 0.1 + 1e-9; x += Math.max(0.1, (m.x1 - m.x0 - 0.2) / 4)) {
+          for (var z = m.z0 + 0.1; z <= m.z1 - 0.1 + 1e-9; z += Math.max(0.1, (m.z1 - m.z0 - 0.2) / 6)) {
+            n2 += 2;
+            if (opts.fit.inside(x, fy + 0.1, z)) k2++;
+            if (opts.fit.inside(x, fy + m.y1 - 0.1, z)) k2++;
+          }
+        }
+        return n2 ? k2 / n2 : 1;
+      };
+      var KEEP = { passage: 1, cross: 1, lobby: 1, landing: 1, engine: 1, aux: 1, reactor: 1, reactorctl: 1, hangar: 1,
+                   platform: 1, tramway: 1, dccentral: 1, cic: 1, flagplot: 1 };
+      /* Where she pinches in (a waist in her hull, 2026-11-23: three metres
+       * of it on the Meridian at z −38, four on the Leviathan at z −34),
+       * a room is cut to fit it: an outboard room from its outboard side,
+       * anything else from both sides, down to a width it still works at;
+       * then a lower deckhead, down to 2.1 m; and only then, for a dead-end
+       * room, left out. */
+      var NARROWEST = { passage: 0, cross: 0, lobby: 0, landing: 0, platform: 0, tramway: 0, hangar: 12, reactor: 3.6, reactorctl: 3.6 };
+      Object.keys(mineRoom).forEach(function (nid) {
+        var m = mineRoom[nid], src = ndRoom[nid];
+        if (frac(m) >= 0.97) return;
+        var w0 = m.x1 - m.x0, h0 = m.y1, min = NARROWEST[m.sub] !== undefined ? NARROWEST[m.sub] : 2.0;
+        if (min > 0 && src.side) {
+          var out0 = src.side > 0 ? 'x1' : 'x0';
+          while ((m.x1 - m.x0) > min + 1e-6 && frac(m) < 0.97) m[out0] += src.side > 0 ? -0.25 : 0.25;
+        } else if (min > 0) {
+          while ((m.x1 - m.x0) > min + 0.5 - 1e-6 && frac(m) < 0.97) { m.x0 += 0.25; m.x1 -= 0.25; }
+        }
+        while (m.y1 > 2.1 + 1e-6 && frac(m) < 0.97) m.y1 = Math.round((m.y1 - 0.1) * 100) / 100;
+        if (frac(m) >= 0.97) {
+          if (m.x1 - m.x0 < w0 - 1e-6) narrowed.push(m.id);
+          if (m.y1 < h0 - 1e-6) lowered.push(m.id);
+          return;
+        }
+        /* A ship drawn bigger than her hull (render.js shipInterior,
+         * `stretch`) keeps the rooms she has at her own size, as her own
+         * deck does: her hold is what grows. */
+        if (!KEEP[m.sub] && (doorsOf[nid] || 0) <= 1 && !(opts.stretch > 0)) {
+          rooms.splice(rooms.indexOf(m), 1); delete mineRoom[nid]; dropped.push(m.id);
+          return;
+        }
+        misfit.push(m.id + ' ' + Math.round(frac(m) * 100) + '%');
+      });
+    }
+
+    /* Doors through her walls. */
+    var nDoor = 0;
+    function door(a, b, l) {
+      var dd = { id: 'nv-' + l.id, a: a.id, b: b.id, w: DOOR_HW * 2, h: DOOR_H, slide: true, open: 0, shut: true,
+                 deck: a.deck, naval: true, fit: l.fit || null };
+      var G = 0.05;
+      if (a.x1 <= b.x0 + 1e-6 || b.x1 <= a.x0 + 1e-6) {
+        var L = a.x1 <= b.x0 + 1e-6 ? a : b, R = L === a ? b : a;
+        var zlo = Math.max(a.z0, b.z0) + DOOR_HW + G, zhi = Math.min(a.z1, b.z1) - DOOR_HW - G;
+        if (zhi < zlo) return null;
+        var zc = Math.max(zlo, Math.min(zhi, l.z));
+        dd.axis = 'x'; dd.wall = [L.x1, R.x0]; dd.at = (L.x1 + R.x0) / 2; dd.zc = zc;
+        dd.x0 = L.x1 - 0.8; dd.x1 = R.x0 + 0.8; dd.z0 = zc - DOOR_HW; dd.z1 = zc + DOOR_HW;
+      } else if (a.z1 <= b.z0 + 1e-6 || b.z1 <= a.z0 + 1e-6) {
+        var A = a.z1 <= b.z0 + 1e-6 ? a : b, F = A === a ? b : a;
+        var xlo = Math.max(a.x0, b.x0) + DOOR_HW + G, xhi = Math.min(a.x1, b.x1) - DOOR_HW - G;
+        if (xhi < xlo) return null;
+        var xc = Math.max(xlo, Math.min(xhi, l.x));
+        dd.axis = 'z'; dd.wall = [A.z1, F.z0]; dd.at = (A.z1 + F.z0) / 2; dd.xc = xc;
+        dd.x0 = xc - DOOR_HW; dd.x1 = xc + DOOR_HW; dd.z0 = A.z1 - 0.8; dd.z1 = F.z0 + 0.8;
+      } else return null;                       // a platform in its compartment: no wall between
+      dd.label = l.type === 'wtdoor' ? (l.fit === 'Z' ? 'Watertight door  (Z)' : l.fit === 'Y' ? 'Watertight door  (Y)' : 'Watertight door')
+               : l.type === 'curtain' ? 'Fire curtain' : '';
+      if (l.type === 'curtain') { dd.arch = true; dd.open = 1; dd.shut = false; }
+      doors.push(dd); nDoor++;
+      return dd;
+    }
+    /* Well inside a room, a body's width and more off its walls (walk.js
+     * stands you only clear of them), and in the middle of a narrow one. */
+    function inside(r, x, z) {
+      var px = Math.min(0.5, (r.x1 - r.x0) / 2 - 0.01), pz = Math.min(0.5, (r.z1 - r.z0) / 2 - 0.01);
+      return [Math.max(r.x0 + px, Math.min(r.x1 - px, x)), Math.max(r.z0 + pz, Math.min(r.z1 - pz, z))];
+    }
+    /* Each reactor's control panel, by the glass. */
+    nd.reactors.forEach(function (rx) {
+      var ctl = mineRoom[rx.control];
+      if (!ctl) return;
+      var cxm = (ctl.x0 + ctl.x1) / 2;
+      items.push({ kind: 'reactorctl', x: cxm, z: ctl.z0 + 0.6, deck: ctl.deck, label: 'Reactor control  —  the glass',
+                   counter: [cxm - 1.0, ctl.z0, cxm + 1.0, ctl.z0 + 0.45] });
+    });
+
+    /* ...and off any counter in it (reactor control's panel by the glass):
+     * a landing you cannot stand on is no landing. */
+    function clear(r, pt) {
+      items.forEach(function (it) {
+        var cn = it.counter;
+        if (!cn || it.deck !== r.deck) return;
+        if (pt[0] > cn[0] - 0.5 && pt[0] < cn[2] + 0.5 && pt[1] > cn[1] - 0.5 && pt[1] < cn[3] + 0.5) {
+          var up = cn[3] + 0.6, dn = cn[1] - 0.6;
+          pt[1] = up < r.z1 - 0.4 ? up : Math.max(r.z0 + 0.4, dn);
+        }
+      });
+      return pt;
+    }
+    var VERB = { ladder: 'Ladder', stair: 'Stairs', scuttle: 'Scuttle', trunk: 'Escape trunk' };
+    nd.links.forEach(function (l) {
+      var a = mineRoom[l.a], b = mineRoom[l.b];
+      if (!a || !b) return;
+      if (l.type === 'door' || l.type === 'wtdoor' || l.type === 'curtain') { door(a, b, l); return; }
+      if (!VERB[l.type]) return;                 // the lift and the tram are built below
+      var lo = ndRoom[l.a].y0 < ndRoom[l.b].y0 ? a : b, hi = lo === a ? b : a;
+      var zLo = l.footZ !== undefined ? l.footZ - 0.35 : l.z, zHi = l.headZ !== undefined ? l.headZ + 0.35 : l.z;
+      var pLo = clear(lo, inside(lo, l.x, zLo)), pHi = clear(hi, inside(hi, l.x, zHi));
+      var dy = deckY[hi.deck] - deckY[lo.deck];
+      /* Drawn where its foot was put (inside its room, off the counters):
+       * the whole ladder moves with it. */
+      var sx = pLo[0] - l.x, sz = pLo[1] - zLo;
+      var base = { link: l.id, via: l.type, fit: l.fit || null, rule: l.rule || null, side: l.side || 0, aim: true,
+                   foot: [l.x + sx, (l.footZ !== undefined ? l.footZ : l.z) + sz], head: [l.x + sx, (l.headZ !== undefined ? l.headZ : l.z) + sz] };
+      function climbItem(at, from, to, toAt, up) {
+        var it = { kind: 'climb', x: at[0], z: at[1], deck: from.deck, to: to.deck, tx: toAt[0], tz: toAt[1], up: up, dy: up ? dy : -dy,
+                   label: (up ? '▲  ' : '▼  ') + VERB[l.type] + (up ? ' up to ' : ' down to ') + dName(to.deck) };
+        for (var k in base) it[k] = base[k];
+        items.push(it);
+      }
+      climbItem(pLo, lo, hi, pHi, true);
+      climbItem(pHi, hi, lo, pLo, false);
+    });
+
+    /* Her lift: a car on every deck it stops at, its landing door aft. */
+    var stops = ['bridge', 'main'];
+    nd.rooms.forEach(function (r) {
+      if (r.kind !== 'landing' || !mineRoom[r.id]) return;
+      var dk = id[r.deck], land = mineRoom[r.id];
+      var car = { id: 'lift-' + dk, kind: 'lift', x0: -CAR_HW, x1: CAR_HW, z0: carZ[0], z1: carZ[1], y0: 0, y1: CAR_H, label: 'Lift', deck: dk };
+      rooms.push(car);
+      var ld = { id: 'lift-' + dk, a: car.id, b: land.id, axis: 'z', at: carZ[0], w: DOOR_HW * 2, h: DOOR_H,
+                 x0: -DOOR_HW, x1: DOOR_HW, z0: land.z1 - 0.8, z1: carZ[0] + 0.8, wall: [land.z1, carZ[0]],
+                 slide: true, open: 0, shut: true, label: 'Lift', deck: dk, lift: true };
+      doors.push(ld);
+      stops.push(dk);
+    });
+    /* Her own airlock deck to the band: through her hold's wall. */
+    if (nd.join && mineRoom[nd.join.room]) door(aftMost, mineRoom[nd.join.room], { id: 'join', x: nd.join.x, z: nd.join.z, type: 'door' });
+
+    var deckAll = ['bridge', 'main'];
+    nd.decks.forEach(function (d) { var m = id[d.id]; if (deckAll.indexOf(m) < 0) deckAll.push(m); });
+    var byY = function (a, b) { return deckY[b] - deckY[a]; };
+    deckAll.sort(byY);
+    var deckOrder = stops.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort(byY);
+    /* The car's buttons, one per other stop: ▲ up, ▼ down. */
+    deckOrder.forEach(function (here, hi) {
+      var n = 0;
+      deckOrder.forEach(function (to, ti) {
+        if (to === here) return;
+        items.push({ kind: 'liftbtn', x: CAR_HW - 0.12, z: carZ[0] + 0.35 + n * btnStep(deckOrder.length - 1), deck: here,
+                     label: (ti < hi ? '▲' : '▼') + '  ' + dName(to), to: to, aim: true });
+        n++;
+      });
+    });
+
+    /* The tram, down her trunk. */
+    var tram = null;
+    if (nd.tram) {
+      var pa = mineRoom[nd.tram.a], pb = mineRoom[nd.tram.b], way = mineRoom[nd.tram.way], tx = nd.tram.x;
+      tram = { a: pa.z0 - TRAM_L / 2, b: way.z0 + TRAM_L / 2, offA: pa.z0 + 0.8, offB: pb.z1 - 0.8,
+               z0: way.z0, z1: way.z1, x: tx, deck: id[nd.tram.deck] };
+      items.push({ kind: 'tram', x: tx, z: pa.z0 + 0.45, deck: tram.deck, label: 'Tram  —  aft to engineering', to: 'b',
+                   counter: [tx - TRAM_HW, pa.z0, tx + TRAM_HW, pa.z0 + 0.12] });
+      items.push({ kind: 'tram', x: tx, z: pb.z1 - 0.45, deck: tram.deck, label: 'Tram  —  forward', to: 'a',
+                   counter: [tx - TRAM_HW, pb.z1 - 0.12, tx + TRAM_HW, pb.z1] });
+    }
+
+    /* Her engine room's console, where the engineers' rounds go. */
+    var eng = rooms.filter(function (r) { return r.kind === 'naval' && r.sub === 'engine'; })
+                   .sort(function (a, b) { return a.z0 - b.z0; })[0];
+    if (eng) {
+      var ex = (eng.x0 + eng.x1) / 2;
+      items.push({ kind: 'engine', x: ex, z: eng.z0 + 0.3, deck: eng.deck, label: 'Drive console', yaw: Math.PI,
+                   counter: [ex - 0.7, eng.z0, ex + 0.7, eng.z0 + 0.55] });
+    }
+    /* The Carrier's craft: three pads across her middle bay. */
+    var hangarPads = null, hangarY;
+    var bays = rooms.filter(function (r) { return r.kind === 'naval' && r.sub === 'hangar'; }).sort(function (a, b) { return a.z0 - b.z0; });
+    if (bays.length) {
+      var mb = bays[Math.floor(bays.length / 2)], mzc = (mb.z0 + mb.z1) / 2, mxc = (mb.x0 + mb.x1) / 2;
+      hangarPads = [-8, 0, 8].map(function (dx) { return { x: mxc + dx, z: mzc, r: 4.2 }; });
+      hangarY = deckY[mb.deck];
+      hangarPads.forEach(function (pd) {
+        items.push({ kind: 'pad', x: pd.x, z: pd.z, deck: mb.deck, label: '', silent: true, counter: [pd.x - 3.0, pd.z - 4.0, pd.x + 3.0, pd.z + 4.0] });
+      });
+    }
+
+    doors.forEach(function (d) { if (d.yOff === undefined || d.naval || d.lift) d.yOff = deckY[d.deck] - geom.floorY; });
+    return {
+      deckY: deckY, deckOrder: deckOrder, deckAll: deckAll, tram: tram, hangarPads: hangarPads, hangarY: hangarY, deckName: deckName,
+      naval: { style: naval.style, cx: nd.cx, hw: nd.hw, reactors: nd.reactors.map(function (r) {
+        var o = {}; for (var k in r) o[k] = r[k]; o.room = 'nv-' + r.room; o.control = 'nv-' + r.control; return o;
+      }), links: nd.links.length, doors: nDoor, layout: nd, misfit: misfit, narrowed: narrowed, dropped: dropped, lowered: lowered }
+    };
+  }
+
+  /* Plain walls round the naval rooms, each cut for its doors, the jambs
+   * through the wall's thickness, a light down the ceiling; ladders,
+   * scuttles and trunk hatches where their items are; and the reactor's
+   * core and its glass lit blue (stage 3 builds the real fittings). */
+  var NAVAL_TINT = { engine: 'lockWall', aux: 'lockWall', reactor: 'lockWall', reactorctl: 'console', magazine: 'lockWall',
+                     hangar: 'lockWall', platform: 'lockWall', tramway: 'lockWall', passage: 'passWall', cross: 'passWall', lobby: 'passWall', landing: 'passWall' };
+  var CHERENKOV = '!#58b8ff', CHERENKOV_DIM = '!#2a6fb8';
+  function navalMesh(m, pal, p) {
+    var rs = p.rooms.filter(function (r) { return r.kind === 'naval'; });
+    rs.forEach(function (r) {
+      var fy = p.deckY[r.deck], h = r.y1, cy = fy + h;
+      var wall = pal[NAVAL_TINT[r.sub] || 'wall'] || pal.wall;
+      var floor = r.sub === 'passage' || r.sub === 'cross' || r.sub === 'lobby' ? pal.passFloor : pal.floor;
+      quad(m, [r.x0, fy, r.z0], [r.x1, fy, r.z0], [r.x1, fy, r.z1], [r.x0, fy, r.z1], floor);
+      quad(m, [r.x0, cy, r.z0], [r.x1, cy, r.z0], [r.x1, cy, r.z1], [r.x0, cy, r.z1], pal.ceil);
+      /* Each wall, round its doorways. */
+      var cuts = { x0: [], x1: [], z0: [], z1: [] };
+      p.doors.forEach(function (d) {
+        if (d.deck !== r.deck || !d.wall) return;
+        if (d.axis === 'x') {
+          if (Math.abs(d.wall[0] - r.x1) < 1e-4 && d.zc > r.z0 && d.zc < r.z1) cuts.x1.push(d.zc);
+          if (Math.abs(d.wall[1] - r.x0) < 1e-4 && d.zc > r.z0 && d.zc < r.z1) cuts.x0.push(d.zc);
+        } else {
+          var xc = d.xc !== undefined ? d.xc : 0;
+          if (Math.abs(d.wall[0] - r.z1) < 1e-4 && xc > r.x0 && xc < r.x1) cuts.z1.push(xc);
+          if (Math.abs(d.wall[1] - r.z0) < 1e-4 && xc > r.x0 && xc < r.x1) cuts.z0.push(xc);
+        }
+      });
+      function wallRun(side) {
+        var alongX = side === 'z0' || side === 'z1', fixed = r[side], a0 = alongX ? r.x0 : r.z0, a1 = alongX ? r.x1 : r.z1;
+        var P = function (u, y) { return alongX ? [u, y, fixed] : [fixed, y, u]; };
+        var at = a0;
+        cuts[side].slice().sort(function (a, b) { return a - b; }).forEach(function (cc) {
+          var g0 = cc - DOOR_HW, g1 = cc + DOOR_HW;
+          if (g0 > at) quad(m, P(at, fy), P(g0, fy), P(g0, cy), P(at, cy), wall);
+          if (cy > fy + DOOR_H) quad(m, P(g0, fy + DOOR_H), P(g1, fy + DOOR_H), P(g1, cy), P(g0, cy), wall);
+          at = Math.max(at, g1);
+        });
+        if (a1 > at) quad(m, P(at, fy), P(a1, fy), P(a1, cy), P(at, cy), wall);
+      }
+      ['x0', 'x1', 'z0', 'z1'].forEach(wallRun);
+      /* A light down the middle, along the room's length. */
+      var lx = (r.x0 + r.x1) / 2, lz = (r.z0 + r.z1) / 2, alongZ = (r.z1 - r.z0) >= (r.x1 - r.x0);
+      var L2 = Math.max(0.3, (alongZ ? r.z1 - r.z0 : r.x1 - r.x0) / 2 - 0.4);
+      if (r.sub !== 'tramway') {
+        if (alongZ) lightRun(m, [lx - 0.06, cy - 0.01, lz - L2], [lx + 0.06, cy - 0.01, lz - L2], [lx + 0.06, cy - 0.01, lz + L2], [lx - 0.06, cy - 0.01, lz + L2], pal.light, pal.ceil);
+        else lightRun(m, [lx - L2, cy - 0.01, lz - 0.06], [lx + L2, cy - 0.01, lz - 0.06], [lx + L2, cy - 0.01, lz + 0.06], [lx - L2, cy - 0.01, lz + 0.06], pal.light, pal.ceil);
+      }
+      if (r.sub === 'tramway') {
+        /* The rail and its lights strung down the trunk. */
+        box(m, lx - 0.08, fy, r.z0, lx + 0.08, fy + 0.12, r.z1, pal.rib);
+        for (var tz = r.z0 + 2; tz < r.z1 - 1; tz += 6) quad(m, [lx - 0.3, cy - 0.01, tz - 0.3], [lx + 0.3, cy - 0.01, tz - 0.3], [lx + 0.3, cy - 0.01, tz + 0.3], [lx - 0.3, cy - 0.01, tz + 0.3], pal.light);
+      }
+    });
+    /* The jambs, through the wall between a door's two rooms. */
+    p.doors.forEach(function (d) {
+      if (!d.naval || !d.wall) return;
+      var fy = p.deckY[d.deck], t0 = d.wall[0], t1 = d.wall[1];
+      if (t1 - t0 < 1e-4) return;
+      if (d.axis === 'x') {
+        [d.zc - DOOR_HW, d.zc + DOOR_HW].forEach(function (z) { quad(m, [t0, fy, z], [t1, fy, z], [t1, fy + DOOR_H, z], [t0, fy + DOOR_H, z], pal.jamb); });
+        quad(m, [t0, fy + DOOR_H, d.zc - DOOR_HW], [t1, fy + DOOR_H, d.zc - DOOR_HW], [t1, fy + DOOR_H, d.zc + DOOR_HW], [t0, fy + DOOR_H, d.zc + DOOR_HW], pal.jamb);
+        quad(m, [t0, fy + 0.002, d.zc - DOOR_HW], [t1, fy + 0.002, d.zc - DOOR_HW], [t1, fy + 0.002, d.zc + DOOR_HW], [t0, fy + 0.002, d.zc + DOOR_HW], d.fit === 'Z' ? pal.hazard : pal.passFloor);
+      } else {
+        [d.xc - DOOR_HW, d.xc + DOOR_HW].forEach(function (x) { quad(m, [x, fy, t0], [x, fy, t1], [x, fy + DOOR_H, t1], [x, fy + DOOR_H, t0], pal.jamb); });
+        quad(m, [d.xc - DOOR_HW, fy + DOOR_H, t0], [d.xc + DOOR_HW, fy + DOOR_H, t0], [d.xc + DOOR_HW, fy + DOOR_H, t1], [d.xc - DOOR_HW, fy + DOOR_H, t1], pal.jamb);
+        quad(m, [d.xc - DOOR_HW, fy + 0.002, t0], [d.xc + DOOR_HW, fy + 0.002, t0], [d.xc + DOOR_HW, fy + 0.002, t1], [d.xc - DOOR_HW, fy + 0.002, t1], d.fit === 'Z' ? pal.hazard : pal.passFloor);
+      }
+    });
+    /* Ladders, scuttles and trunk hatches, from their items' lower ends. */
+    p.items.forEach(function (it) {
+      if (it.kind !== 'climb' || !it.up) return;
+      var fy = p.deckY[it.deck], top = fy + (it.dy || 3);
+      var r = p.rooms.filter(function (q) { return q.id && q.deck === it.deck && it.x >= q.x0 && it.x <= q.x1 && it.z >= q.z0 && it.z <= q.z1; })[0];
+      var ceilY = r ? fy + r.y1 : top;
+      if (it.via === 'ladder' || it.via === 'stair') {
+        /* Two stringers on the incline, foot aft, head forward, and the
+         * treads between them; the hatch's coaming round the head. */
+        var x = it.foot[0], z0 = it.foot[1], z1 = it.head[1], hw = it.via === 'stair' ? 0.5 : 0.36;
+        [-hw, hw].forEach(function (dx) {
+          quad(m, [x + dx - 0.03, fy, z0], [x + dx + 0.03, fy, z0], [x + dx + 0.03, top, z1], [x + dx - 0.03, top, z1], pal.rib);
+        });
+        var nT = Math.max(4, Math.round((top - fy) / 0.24));
+        for (var ti = 1; ti < nT; ti++) {
+          var u = ti / nT, ty = fy + (top - fy) * u, tz2 = z0 + (z1 - z0) * u;
+          quad(m, [x - hw, ty, tz2 - 0.11], [x + hw, ty, tz2 - 0.11], [x + hw, ty, tz2 + 0.11], [x - hw, ty, tz2 + 0.11], it.fit === 'Z' ? pal.hazard : pal.rib);
+        }
+        var hz0 = z1 - 1.0, hz1 = z1 + 0.2;
+        box(m, x - hw - 0.1, ceilY - 0.06, hz0, x + hw + 0.1, ceilY, hz1, it.fit === 'Z' ? pal.hazard : pal.jamb);
+      } else if (it.via === 'scuttle') {
+        var sx = it.x, sz = it.z;
+        [-0.2, 0.2].forEach(function (dx) { box(m, sx + dx - 0.02, fy, sz - 0.02, sx + dx + 0.02, ceilY, sz + 0.02, pal.rib); });
+        for (var ry = fy + 0.3; ry < ceilY - 0.1; ry += 0.3) box(m, sx - 0.2, ry, sz - 0.015, sx + 0.2, ry + 0.03, sz + 0.015, pal.rib);
+        box(m, sx - 0.35, ceilY - 0.05, sz - 0.35, sx + 0.35, ceilY, sz + 0.35, pal.hazardDark);
+      } else {
+        /* An escape trunk's hatch on the wall it is let into, ringed in
+         * hazard yellow. */
+        quad(m, [it.x - 0.4, fy + 0.3, it.z], [it.x + 0.4, fy + 0.3, it.z], [it.x + 0.4, fy + 1.6, it.z], [it.x - 0.4, fy + 1.6, it.z], pal.hazard);
+        quad(m, [it.x - 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 1.52, it.z + 0.003], [it.x - 0.32, fy + 1.52, it.z + 0.003], pal.hatch);
+      }
+    });
+    /* The reactors: the core lit blue in its room, and the glass in the
+     * bulkhead to control glowing with it. */
+    ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+      var rr = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
+      if (!rr) return;
+      var fy = p.deckY[rr.deck], c = rx.core, x = c.x, z = c.z;
+      var half = rx.axis === 'h' ? [c.len / 2, c.r, c.r] : [c.r, c.len / 2, c.r];
+      var yc = fy + Math.min(rr.y1 * 0.45, 1.5);
+      /* The water jacket's tank, steel, with the core somewhere in it; its
+       * face to the glass is where the water shows, lit by the core. */
+      var tx0 = x - half[0] - 0.5, tx1 = x + half[0] + 0.5, ty0 = Math.max(fy, yc - half[1] - 0.5), ty1 = Math.min(fy + rr.y1 - 0.1, yc + half[1] + 0.5);
+      var tz0 = z - half[2] - 0.5, tz1 = z + half[2] + 0.5;
+      box(m, tx0, ty0, tz0, tx1, ty1, tz1, pal.bulk, pal.overhead);
+      quad(m, [tx0 + 0.12, ty0 + 0.12, tz1 + 0.004], [tx1 - 0.12, ty0 + 0.12, tz1 + 0.004], [tx1 - 0.12, ty1 - 0.12, tz1 + 0.004], [tx0 + 0.12, ty1 - 0.12, tz1 + 0.004], CHERENKOV_DIM);
+      /* The core, seen through that face: brighter, smaller, in the middle. */
+      quad(m, [x - half[0], yc - half[1], tz1 + 0.006], [x + half[0], yc - half[1], tz1 + 0.006], [x + half[0], yc + half[1], tz1 + 0.006], [x - half[0], yc + half[1], tz1 + 0.006], CHERENKOV);
+      /* The rod drives: lying down, a row along the top of her face, each
+       * coming in from the front; standing, a cluster on her head. */
+      var n = rx.rods.n;
+      for (var ri = 0; ri < n; ri++) {
+        var u2 = (ri + 0.5) / n - 0.5;
+        if (rx.rods.face === 'fwd') box(m, x + u2 * c.len - 0.05, ty1 - 0.35, tz1, x + u2 * c.len + 0.05, ty1 - 0.2, tz1 + 0.6, pal.rib);
+        else box(m, x + u2 * 0.8 - 0.05, ty1, z - 0.05, x + u2 * 0.8 + 0.05, Math.min(fy + rr.y1 - 0.05, ty1 + 0.6), z + 0.05, pal.rib);
+      }
+      /* The glass, on both faces of the bulkhead, in its bolted frame. */
+      /* Just proud of each face: the reactor's side of the bulkhead is at
+       * its room's forward wall, control's at its aft wall. */
+      var w = rx.window, wz0 = rr.z1 - 0.004, wz1 = w.z + (w.z - rr.z1) + 0.004;
+      [wz0, wz1].forEach(function (wz) {
+        quad(m, [w.x0, w.y0, wz], [w.x1, w.y0, wz], [w.x1, w.y1, wz], [w.x0, w.y1, wz], CHERENKOV);
+        box(m, w.x0 - 0.12, w.y0 - 0.12, wz - 0.02, w.x1 + 0.12, w.y0, wz + 0.02, pal.jamb);
+        box(m, w.x0 - 0.12, w.y1, wz - 0.02, w.x1 + 0.12, w.y1 + 0.12, wz + 0.02, pal.jamb);
+      });
+    });
+  }
+  /* The leaves of the naval doors, each at its own doorway. */
+  function navalLeaves(pal, p, fy0) {
+    var lv = {};
+    p.doors.forEach(function (d) {
+      if (!d.naval || d.arch || !d.wall) return;
+      var mid = (d.wall[0] + d.wall[1]) / 2, out = [];
+      [-1, 1].forEach(function (s) {
+        var m = mesh();
+        if (d.axis === 'x') {
+          var z0 = s < 0 ? d.zc - DOOR_HW : d.zc, z1 = s < 0 ? d.zc : d.zc + DOOR_HW;
+          box(m, mid - LEAF_T / 2, fy0 + 0.005, z0, mid + LEAF_T / 2, fy0 + DOOR_H - 0.01, z1, d.fit === 'Z' ? pal.hazardDark : pal.leaf);
+        } else {
+          var x0 = s < 0 ? d.xc - DOOR_HW : d.xc, x1 = s < 0 ? d.xc : d.xc + DOOR_HW;
+          box(m, x0, fy0 + 0.005, mid - LEAF_T / 2, x1, fy0 + DOOR_H - 0.01, mid + LEAF_T / 2, d.fit === 'Z' ? pal.hazardDark : pal.leaf);
+        }
+        out.push(m);
+      });
+      lv[d.id] = out;
+    });
+    return lv;
+  }
+
   var FIT_MIN_W = { quarters: BUNK_W + 0.9, turret: 1.5, medbay: 2.0, engine: 2.4, airlock: 0 };
   var FIT_MIN_CARGO_HW = 1.4, FIT_MIN_CARGO_L = 2.6, FIT_MIN_SPINE = 4;
   var FIT_DROP = { turret: 1, engine: 1, medbay: 1, quarters: 1, cargo: 1 };
@@ -1076,7 +1529,8 @@
   function fitRooms(p) {
     var out = [];
     (p.decks ? Object.keys(p.decks).map(function (k) { return p.decks[k]; }) : [p]).forEach(function (dp) {
-      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
+      /* The naval decks fit themselves (navalize: shrink, then drop). */
+      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && r.kind !== 'naval' && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
     });
     return out;
   }
@@ -1162,7 +1616,7 @@
       if (!d.slide) continue;
       /* The middle of the doorway: on a fore-and-aft wall, the middle of
        * its thickness at x = 0; on a side wall, the same across x at its zc. */
-      var cx = d.axis === 'x' ? (d.wall[0] + d.wall[1]) / 2 : 0;
+      var cx = d.axis === 'x' ? (d.wall[0] + d.wall[1]) / 2 : (d.xc !== undefined ? d.xc : 0);
       var cz = d.axis === 'x' ? d.zc : (d.wall ? (d.wall[0] + d.wall[1]) / 2 : d.at);
       var near = w ? Math.hypot(w.x - cx, w.z - cz) < DOOR_REACH : false;
       /* A sealing door (the airlock's inner one) held by airlock.js stays
@@ -1564,7 +2018,8 @@
     var ps = p.rooms[1];
     /* Every door through the passage's side walls: the quarters' and the
      * turret's to port, the medbay's and the engine room's to starboard. */
-    var sideDoors = p.doors.filter(function (d) { return d.axis === 'x'; });
+    /* Her own deck's side doors (the naval decks' are navalMesh's). */
+    var sideDoors = p.doors.filter(function (d) { return d.axis === 'x' && !d.naval; });
     var portZ = sideDoors.filter(function (d) { return d.wall[1] <= 0; }).map(function (d) { return d.zc; });
     var stbdZ = sideDoors.filter(function (d) { return d.wall[0] >= 0; }).map(function (d) { return d.zc; });
     var skipP = dC ? ['z0', 'z1'] : ['z1'];
@@ -1700,8 +2155,9 @@
       merge(shipPortals, portals, dyMain);
       [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
       room = shipRoom; portals = shipPortals;
-      junctionMesh(room, pal, p);
+      if (p.deckY.junction !== undefined) junctionMesh(room, pal, p);
       if (p.deckY.hangar !== undefined) hangarMesh(room, pal, p);
+      if (p.naval) navalMesh(room, pal, p);
       car = carMesh(pal, p);
       tramCar = tramMesh(pal);
     } else if (rs) {
@@ -1719,6 +2175,7 @@
         var lv = { bridge: leaves(dB.wall[0], dB.wall[1]) };
         if (dC) lv.cargo = leaves(dC.wall[0], dC.wall[1]);
         sideDoors.forEach(function (d) { lv[d.id] = sideLeaves(d); });
+        if (p.naval) { var nl = navalLeaves(pal, p, fy); for (var nk in nl) lv[nk] = nl[nk]; }
         return lv;
       })()
     };
@@ -2663,10 +3120,10 @@
     lightRun(m, [-0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z1 - 0.4], [-0.4, h - 0.01, z1 - 0.4], pal.light, pal.ceil);
     /* The button panel, and a lit square per button (the buttons are the
      * `liftbtn` items; this is where they are). */
-    var xp = CAR_HW - 0.004, n = (p.deckOrder || []).length - 1;
-    quad(m, [xp, 1.0, z0 + 0.2], [xp, 1.0, z0 + 0.5 + n * 0.4], [xp, 1.5, z0 + 0.5 + n * 0.4], [xp, 1.5, z0 + 0.2], pal.console);
+    var xp = CAR_HW - 0.004, n = (p.deckOrder || []).length - 1, bs = btnStep(n);
+    quad(m, [xp, 1.0, z0 + 0.2], [xp, 1.0, z0 + 0.5 + (n - 1) * bs], [xp, 1.5, z0 + 0.5 + (n - 1) * bs], [xp, 1.5, z0 + 0.2], pal.console);
     for (var i = 0; i < n; i++) {
-      var zb = z0 + 0.35 + i * 0.4;
+      var zb = z0 + 0.35 + i * bs;
       quad(m, [xp - 0.002, 1.18, zb - 0.07], [xp - 0.002, 1.18, zb + 0.07], [xp - 0.002, 1.32, zb + 0.07], [xp - 0.002, 1.32, zb - 0.07], pal.trim);
     }
     box(m, -CAR_HW + 0.02, 0.9, z0 + 0.2, -CAR_HW + 0.06, 0.95, z1 - 0.2, pal.rib);

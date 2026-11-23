@@ -132,28 +132,36 @@
       reactors: { axis: 'h', n: 2 }
     },
     meridian: {
-      style: 'merchant', military: false, cx: 0, hw: 9, z0: -60, z1: -14, B: 11.5, zBow: 6.1,
+      style: 'merchant', military: false, cx: 0, hw: 8, z0: -60, z1: -14, B: 11.5, zBow: 6.1, bandLen: 29.6,
       decks: [
         { id: 'bridge', num: 'Bridge', name: 'Bridge', role: 'stub', y: -1.2, h: 2.4 },
-        { id: 'A', num: 'A', name: 'A deck · promenade', role: 'line', y: -4.2, h: 2.6,
+        /* Her superstructure ends where her hull steps down, a waist at
+         * z −39 (measured, 2026-11-23), 9.2 m aft of where her band starts
+         * behind her own airlock deck: A deck is aft of it, up the stairs
+         * from B. */
+        { id: 'A', num: 'A', name: 'A deck · promenade', role: 'line', y: -4.2, h: 2.4, zEndAft: 9.2,
           centre: ['lounge', 'dining', 'lounge', 'galley'], side: ['cabin', 'cabin', 'cabin', 'cabin'] },
         { id: 'B', num: 'B', name: 'B deck · cabins', role: 'line', y: -7.4, h: 2.6,
           centre: ['cabin', 'cabin', 'sickbay', 'cabin'], side: ['cabin', 'cabin', 'cabin', 'cabin'] },
-        { id: 'C', num: 'C', name: 'C deck · crew and machinery', role: 'line', y: -11.2, h: 3.4, wt: true,
+        /* Floored where the old junction was, so the lift's landing at her
+         * forward end is inside her (measured, 2026-11-23). */
+        { id: 'C', num: 'C', name: 'C deck · crew and machinery', role: 'line', y: -10.6, h: 2.8, wt: true,
           centre: ['mess', 'berthing', 'reactor', 'engine'], side: ['berthing', 'stores', null, null] }
       ],
-      lift: { x: 0, z: -12.5, stops: ['bridge', 'A', 'B', 'C'] },
+      lift: { x: 0, z: -12.5, stops: ['bridge', 'B', 'C'] },
       airlock: { deck: 'B', zone: 2 },
       reactors: { axis: 'v', n: 1 }
     },
     leviathan: {
-      style: 'merchant', military: false, cx: 0, hw: 8, z0: -48, z1: 0, B: 12, zBow: 19.6,
+      style: 'merchant', military: false, cx: 0, hw: 7, z0: -48, z1: 0, B: 12, zBow: 19.6, bandLen: 17.6,
       decks: [
         { id: 'bridge', num: 'Bridge', name: 'Bridge', role: 'stub', y: -1.2, h: 2.4 },
         { id: 'A', num: 'A', name: 'A deck · accommodation', role: 'line', y: -4.2, h: 2.6,
-          centre: ['stores', 'mess', 'galley', 'office'], side: ['stores', 'berthing', 'berthing', 'berthing'] },
-        { id: 'B', num: 'B', name: 'B deck · tunnel and machinery', role: 'below', y: -8.0, h: 3.4, wt: true,
-          zones: ['engine', 'reactor', 'stores', 'stores'], tram: true }
+          centre: ['mess', 'galley', 'office'], side: ['stores', 'berthing', 'berthing'] },
+        /* No tram (2026-11-23): her own airlock deck takes her forward 28 m,
+         * and the 20 m left aft of it is a walk. */
+        { id: 'B', num: 'B', name: 'B deck · machinery', role: 'below', y: -7.2, h: 2.7, wt: true,
+          zones: ['engine', 'reactor', 'stores'] }
       ],
       lift: { x: 0, z: 2.0, stops: ['bridge', 'A', 'B'] },
       airlock: { deck: 'A', zone: 2 },
@@ -202,10 +210,44 @@
   /* ---- THE LAYOUT -------------------------------------------------------- */
   function layout(hullId, opts) {
     opts = opts || {};
-    if (NAVAL[hullId]) return naval(hullId, NAVAL[hullId], opts);
+    if (NAVAL[hullId]) return naval(hullId, fitSpec(NAVAL[hullId], opts), opts);
     if (FLATS[hullId]) return flat(hullId, FLATS[hullId], opts);
     return null;
   }
+
+  /* IN HER AS SHE IS (stage 2, 2026-11-23). shipdeck.js builds the bridge,
+   * the lift car and her airlock deck itself, so the stack is moved to fit
+   * them: `opts.bridgeY` her bridge floor (the tower and island levels go
+   * with it), `opts.mainY` the floor of her own airlock deck, which the
+   * deck named `opts.mergeDeck` becomes (the rest of the stack goes with
+   * it); `opts.lift` where her car's landings are; `opts.z1` a merchant's
+   * forward end, aft of her own airlock deck's rooms. */
+  function fitSpec(base, opts) {
+    var spec = {}, k;
+    for (k in base) spec[k] = base[k];
+    var dyS = opts.bridgeY !== undefined ? opts.bridgeY - base.decks[0].y : 0, dyM = 0;
+    if (opts.mergeDeck && opts.mainY !== undefined) {
+      base.decks.forEach(function (d) { if (d.id === opts.mergeDeck) dyM = opts.mainY - d.y; });
+    }
+    spec.decks = base.decks.map(function (d) {
+      var c = {};
+      for (var j in d) c[j] = d[j];
+      c.y = d.y + (d.role === 'stub' || d.role === 'super' ? dyS : dyM);
+      return c;
+    });
+    if (opts.lift) spec.lift = { x: opts.lift.x, z: opts.lift.z, stops: base.lift.stops };
+    /* A merchant's band starts behind her own airlock deck, wherever that
+     * ends (a ship drawn bigger than her hull runs her hold on aft,
+     * render.js shipInterior), and keeps its own length. */
+    if (opts.z1 !== undefined) {
+      spec.z1 = Math.min(base.z1, opts.z1);
+      if (base.bandLen) spec.z0 = spec.z1 - base.bandLen;
+    }
+    var zFwd = spec.z1;
+    spec.decks.forEach(function (d) { if (d.zEndAft !== undefined) d.zEnd = zFwd - d.zEndAft; });
+    return spec;
+  }
+  var TRUNK_W = 2.6;           // the tram's trunk, down her port side
 
   function newPlan(hullId, spec, opts) {
     return {
@@ -241,7 +283,11 @@
     var rnd = stream(p.key);
     var navy = spec.style === 'navy';
     var cx = spec.cx, hw = spec.hw;
-    var nz = Math.round((spec.z1 - spec.z0) / spec.B);
+    /* As many compartments as the decks' lists say; their length from her
+     * band (which a merchant's own airlock deck may shorten). */
+    var nz = 0;
+    spec.decks.forEach(function (d) { nz = Math.max(nz, (d.zones || d.centre || []).length); });
+    if (!nz) nz = Math.round((spec.z1 - spec.z0) / spec.B);
     var B = (spec.z1 - spec.z0) / nz;
     var zones = [];
     for (var i = 0; i < nz; i++) zones.push([spec.z0 + i * B, spec.z0 + (i + 1) * B]);
@@ -264,17 +310,24 @@
       if (d.role === 'super') return;           // rooms round the lift, below
       zones.forEach(function (zn, zi) {
         var za = zn[0] + WALL / 2, zb = zn[1] - WALL / 2;
+        /* A deck that ends short of her band's forward end (d.zEnd). */
+        if (d.zEnd !== undefined) {
+          if (za + 2.5 >= d.zEnd) return;
+          zb = Math.min(zb, d.zEnd);
+        }
         if (d.role === 'below') {
           var kind = (d.zones && d.zones[zi]) || 'stores';
+          /* A tram deck's compartments stand inboard of the tram's trunk. */
+          var bx0 = d.tram ? cx - hw + TRUNK_W + WALL : cx - hw;
           if (kind === 'reactor') {
             /* Reactor control forward, the reactor aft of it, the glass in
              * the bulkhead between (reactorRoom). */
-            var rr = reactorRoom(p, dk, zn, cx, hw, spec.reactors.axis, spec.military);
+            var rr = reactorRoom(p, dk, zn, (bx0 + cx + hw) / 2, (cx + hw - bx0) / 2, spec.reactors.axis, spec.military);
             here.zoneRoom[zi] = rr.control;
             here.reactorAt = here.reactorAt || {};
             here.reactorAt[zi] = rr;
           } else {
-            here.zoneRoom[zi] = room(p, dk, kind, cx - hw, cx + hw, za, zb, { zone: zi });
+            here.zoneRoom[zi] = room(p, dk, kind, bx0, cx + hw, za, zb, { zone: zi });
           }
           return;
         }
@@ -436,14 +489,15 @@
         var lo = d2.zoneRoom[zi], hi = u2.zoneRoom[zi];
         if (!lo || !hi) return;
         var sx = zi % 2 ? 1 : -1;
-        ladder(p, lo, hi, navy ? 'Z' : null, spec.cx + sx * (spec.hw - 1.5), zn[0] + B * 0.5, sx, sx > 0 ? 'up' : 'down', navy);
+        var reach = Math.min(lo.x1 - spec.cx, spec.cx - lo.x0, hi.x1 - spec.cx, spec.cx - hi.x0) - 1.0;
+        ladder(p, lo, hi, navy ? 'Z' : null, spec.cx + sx * reach, zn[0] + B * 0.5, sx, sx > 0 ? 'up' : 'down', navy);
         /* Machinery down here gets its escape trunk straight up to the
          * damage-control deck, through the deck between. */
         var rr2 = d2.reactorAt && d2.reactorAt[zi];
         var mach2 = lo.kind === 'engine' || lo.kind === 'aux' || lo.kind === 'reactorctl' || lo.kind === 'magazine';
         if (mach2 || rr2) {
           var top2 = ladderRoom(byDeck[spec.dc], zi, sx > 0 ? 'p' : 's');
-          if (top2) link(p, 'trunk', rr2 ? rr2.reactor : lo, top2, null, [spec.cx - sx * (spec.hw - 1.5), zn[0] + B * 0.8], { climb: true });
+          if (top2) link(p, 'trunk', rr2 ? rr2.reactor : lo, top2, null, [spec.cx - sx * reach, zn[0] + B * 0.8], { climb: true });
         }
       });
     }
@@ -452,6 +506,8 @@
     var lf = spec.lift, prevLanding = null;
     lf.stops.forEach(function (id) {
       var here = byDeck[id], dk = here.deck;
+      /* Her own airlock deck has her own landing (shipdeck.js). */
+      if (id === opts.mergeDeck) return;
       var lzi = zoneAt(zones, lf.z);
       var land = room(p, dk, 'landing', lf.x - LANDING / 2, lf.x + LANDING / 2, lf.z - LANDING / 2, lf.z + LANDING / 2);
       if (here.stub) link(p, 'door', here.stub, land, null, [lf.x, lf.z + LANDING / 2]);
@@ -498,31 +554,57 @@
       prevLanding = land;
     });
 
-    /* ---- THE TRAM: a sealed trunk down the shaft alley, end to end ------- */
+    /* ---- THE TRAM: a sealed trunk down her port side, end to end -------
+     * A platform in the trunk at each end, a door from each into its
+     * compartment, and the tramway between them, ridden and never walked. */
     spec.decks.forEach(function (d) {
       if (!d.tram) return;
-      var here = byDeck[d.id], ends = [];
-      for (var zi = nz - 1; zi >= 0; zi--) if (here.zoneRoom[zi]) { ends.push(zi); break; }
-      for (zi = 0; zi < nz; zi++) if (here.zoneRoom[zi]) { ends.push(zi); break; }
-      if (ends.length < 2 || ends[0] === ends[1]) return;
-      var fa = here.zoneRoom[ends[0]], ab = here.zoneRoom[ends[1]];
-      var pa = room(p, here.deck, 'platform', cx - 1.8, cx + 1.8, fa.z0 + 0.4, fa.z0 + 3.6, { zone: ends[0] });
-      var pb = room(p, here.deck, 'platform', cx - 1.8, cx + 1.8, ab.z1 - 3.6, ab.z1 - 0.4, { zone: ends[1] });
-      /* The platforms stand in their compartments; the tram is one link. */
-      pa.within = fa.id; pb.within = ab.id;
-      link(p, 'door', fa, pa, null, [cx, pa.z1]);
-      link(p, 'door', ab, pb, null, [cx, pb.z0]);
-      link(p, 'tram', pa, pb, null, [cx, (pa.z0 + pb.z1) / 2], { battery: TRAM_BATTERY });
-      p.tram = { deck: d.id, a: pa.id, b: pb.id };
+      var here = byDeck[d.id], fz = -1, az = -1;
+      for (var zi = nz - 1; zi >= 0; zi--) if (here.zoneRoom[zi]) { fz = zi; break; }
+      for (zi = 0; zi < nz; zi++) if (here.zoneRoom[zi]) { az = zi; break; }
+      if (fz < 0 || az < 0 || fz === az) return;
+      var tx0 = cx - hw, tx1 = cx - hw + TRUNK_W, PL = 3.2;
+      var fa = here.zoneRoom[fz], ab = here.zoneRoom[az];
+      var pa = room(p, here.deck, 'platform', tx0, tx1, zones[fz][1] - WALL / 2 - PL, zones[fz][1] - WALL / 2, { zone: fz });
+      var pb = room(p, here.deck, 'platform', tx0, tx1, zones[az][0] + WALL / 2, zones[az][0] + WALL / 2 + PL, { zone: az });
+      var way = room(p, here.deck, 'tramway', tx0, tx1, pb.z1 + WALL, pa.z0 - WALL, { walk: false });
+      link(p, 'door', pa, fa, null, [tx1, (pa.z0 + pa.z1) / 2]);
+      link(p, 'door', pb, ab, null, [tx1, (pb.z0 + pb.z1) / 2]);
+      link(p, 'tram', pa, pb, null, [(tx0 + tx1) / 2, (pa.z0 + pb.z1) / 2], { battery: TRAM_BATTERY });
+      p.tram = { deck: d.id, a: pa.id, b: pb.id, way: way.id, x: (tx0 + tx1) / 2 };
     });
 
     /* ---- THE AIRLOCK ----------------------------------------------------- */
-    var al = spec.airlock, ah = byDeck[al.deck], azr = ah.zoneRoom[al.zone];
-    var anchor = (ah.side.s[al.zone]) || azr;
-    var ax0 = cx + hw + WALL, z0a = (azr.z0 + azr.z1) / 2 - 1.6;
-    var lock = room(p, ah.deck, 'airlock', ax0, ax0 + 2.6, z0a, z0a + 3.2, { zone: al.zone, side: 1 });
-    link(p, 'door', anchor, lock, null, [cx + hw, z0a + 1.6]);
-    p.airlock = lock.id;
+    if (!opts.noAirlock) {
+      var al = spec.airlock, ah = byDeck[al.deck], azr = ah.zoneRoom[al.zone];
+      var anchor = (ah.side.s[al.zone]) || azr;
+      var ax0 = cx + hw + WALL, z0a = (azr.z0 + azr.z1) / 2 - 1.6;
+      var lock = room(p, ah.deck, 'airlock', ax0, ax0 + 2.6, z0a, z0a + 3.2, { zone: al.zone, side: 1 });
+      link(p, 'door', anchor, lock, null, [cx + hw, z0a + 1.6]);
+      p.airlock = lock.id;
+    }
+    /* ---- HER OWN AIRLOCK DECK (opts.join) ----------------------------------
+     * shipdeck.js's rooms at the foot of her tower, standing in for the
+     * Navy's quarterdeck: a passage from the point on its wall `join` names
+     * to the nearest room of the band, on the deck it becomes. */
+    if (opts.join && opts.mergeDeck && byDeck[opts.mergeDeck]) {
+      var jh = byDeck[opts.mergeDeck], jd = jh.deck, J = opts.join, jz = zoneAt(zones, J.z);
+      var jt = jh.deck.role === 'line' ? (jh.pass.c[nz - 1] || jh.zoneRoom[nz - 1]) : landingTarget(jh, jz, J.x > cx ? 's' : 'p');
+      if (J.axis === 'z') {
+        jt = jh.pass.c[nz - 1] || jh.zoneRoom[nz - 1];
+        var gz0 = jt.z1 + WALL, gz1 = J.z - WALL;
+        var jl = gz1 - gz0 > 0.3 ? room(p, jd, 'lobby', J.x - PASS_W / 2, J.x + PASS_W / 2, gz0, gz1) : null;
+        if (jl) link(p, 'door', jl, jt, null, [J.x, jt.z1]);
+        p.join = { room: jl ? jl.id : jt.id, x: J.x, z: J.z, axis: 'z', deck: opts.mergeDeck };
+      } else {
+        var e2 = J.x > cx ? jt.x1 : jt.x0;
+        var gx0 = J.x > cx ? e2 + WALL : J.x + WALL, gx1 = J.x > cx ? J.x - WALL : e2 - WALL;
+        var jl2 = room(p, jd, 'lobby', gx0, gx1, J.z - PASS_W / 2, J.z + PASS_W / 2);
+        link(p, 'door', jl2, jt, null, [e2, J.z]);
+        p.join = { room: jl2.id, x: J.x, z: J.z, axis: 'x', deck: opts.mergeDeck };
+      }
+      if (!p.airlock) p.airlock = p.join.room;
+    }
     p.bridge = byDeck.bridge.stub.id;
 
     labelAll(p, spec);
@@ -721,7 +803,7 @@
   }
 
   global.NavalDeck = {
-    NAVAL: NAVAL, FLATS: FLATS, USE: USE, TRAM_BATTERY: TRAM_BATTERY, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
+    NAVAL: NAVAL, FLATS: FLATS, USE: USE, TRAM_BATTERY: TRAM_BATTERY, LANDING: LANDING, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
     layout: layout, reachable: reachable, route: route, passable: passable, frameAt: frameAt,
     hulls: function () { return Object.keys(NAVAL).concat(Object.keys(FLATS)); }
   };

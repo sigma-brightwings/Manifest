@@ -18512,7 +18512,7 @@
                         f: lib.f, c: lib.c };
       }
       var pd = plan.hangarPads[i];
-      out.push({ mesh: lib._hangar, off: [pd.x, plan.deckY.hangar, pd.z] });
+      out.push({ mesh: lib._hangar, off: [pd.x, plan.hangarY !== undefined ? plan.hangarY : plan.deckY.hangar, pd.z] });
     });
     return out;
   }
@@ -18563,8 +18563,11 @@
       var carY = live.carY !== undefined ? live.carY : d.plan.deckY.bridge;
       parts.push({ mesh: d.meshes.car.body, off: [0, carY, 0] });
       if (live.moving) parts.push({ mesh: d.meshes.car.doors, off: [0, carY, 0] });
-      var tz = live.tramZ !== undefined ? live.tramZ : d.plan.tram.a;
-      parts.push({ mesh: d.meshes.tram, off: [0, d.plan.deckY.junction, tz] });
+      var tz = live.tramZ !== undefined ? live.tramZ : (d.plan.tram ? d.plan.tram.a : 0);
+      /* The naval decks' tram runs down her trunk, off the centreline, on
+       * her engineering deck (shipdeck.js navalize). */
+      var tp = d.plan.tram;
+      if (tp) parts.push({ mesh: d.meshes.tram, off: [tp.x || 0, d.plan.deckY[tp.deck || 'junction'], tz] });
       if (d.plan.hangarPads) hangarCraft(ship, d.plan).forEach(function (pc) { parts.push(pc); });
     }
     if (opts.seat) parts.push({ mesh: d.meshes.seat });

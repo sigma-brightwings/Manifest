@@ -21,7 +21,9 @@ fs.mkdirSync(outdir, { recursive: true });
 
 /* PROBE_EXE=<packaged exe> drives a built artifact instead of the dev shell. */
 const packaged = process.env.PROBE_EXE;
-const exe = packaged || path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
+/* ELECTRON_EXE=<electron.exe> runs this tree's game with another tree's
+ * Electron: a git worktree has no node_modules of its own (2026-11-23). */
+const exe = packaged || process.env.ELECTRON_EXE || path.join(ROOT, 'node_modules', 'electron', 'dist', 'electron.exe');
 /* A scratch userData, fresh each run, so a probe never reads or autosaves
  * over the career Astra is actually playing (electron/main.js honours it).
  * PROBE_PROFILE=<dir> names the folder instead, to keep it between runs.

@@ -88,6 +88,9 @@ check('the damage-control deck has DC central and a sick bay', NAVY.every(functi
   return plans[h].rooms.some(function (r) { return r.deck === '2' && r.kind === 'dccentral'; }) &&
          plans[h].rooms.some(function (r) { return r.deck === '2' && r.kind === 'sickbay'; });
 }));
+check('the Meridian\'s A deck ends aft of the waist in her hull, up the stairs from B',
+      plans.meridian.rooms.filter(function (r) { return r.deck === 'A'; }).every(function (r) { return r.z1 <= N.NAVAL.meridian.z1 - 9.2 + 1e-6; }) &&
+      plans.meridian.links.some(function (l) { return l.type === 'stair' && plans.meridian.rooms.some(function (r) { return r.id === l.b && r.deck === 'A'; }); }));
 check('the Meridian has passenger decks: cabins, a lounge, a dining saloon',
       ['cabin', 'lounge', 'dining'].every(function (k) { return plans.meridian.rooms.some(function (r) { return r.kind === k; }); }));
 check('the Carrier\'s airlock is in her starboard sponson, off a hangar bay', (function () {
@@ -104,7 +107,7 @@ HULLS.forEach(function (h) {
   ['normal', 'zebra'].forEach(function (cond) {
     [p.airlock, p.bridge].forEach(function (from) {
       var seen = N.reachable(p, from, cond);
-      var miss = p.rooms.filter(function (r) { return !seen[r.id]; });
+      var miss = p.rooms.filter(function (r) { return r.walk !== false && !seen[r.id]; });
       if (miss.length) unreach.push(h + ' ' + cond + ' from ' + byId(p, from).kind + ': ' + miss.slice(0, 3).map(function (r) { return r.id; }).join(','));
     });
   });
@@ -184,7 +187,7 @@ check('a merchant\'s watertight doors close on damage', (function () {
   var miss = [];
   NAVY.concat(['leviathan']).forEach(function (h) {
     var q = plans[h], seen = N.reachable(q, q.airlock, 'zebra', null, 0.3);
-    q.rooms.forEach(function (r) { if (!seen[r.id]) miss.push(h + ' ' + r.id); });
+    q.rooms.forEach(function (r) { if (r.walk !== false && !seen[r.id]) miss.push(h + ' ' + r.id); });
   });
   check('with the tram out at GQ, every room is still reachable', !miss.length, miss.slice(0, 3).join(' '));
   var ro = N.route(p, tr.a, tr.b, { cond: 'zebra', hull: 0.3 });
@@ -302,6 +305,33 @@ check('a large ship\'s reactor room is bigger than a small one\'s', (function ()
   var area = function (h) { var r = byId(plans[h], plans[h].reactors[0].room); return (r.x1 - r.x0) * (r.z1 - r.z0); };
   return area('capital') > area('kestrel') * 2 && area('carrier') > area('cutter') * 2;
 })());
+
+console.log('--- fitted to her (stage 2) ---');
+(function () {
+  var opts = { bridgeY: -0.9, mainY: -43.0, mergeDeck: '1', lift: { x: 0, z: -9 }, noAirlock: true,
+               join: { x: -2.5, z: -30, axis: 'x' } };
+  var f = N.layout('capital', opts), d = {};
+  f.decks.forEach(function (k) { d[k.id] = k; });
+  check('fitted: her airlock deck lands on her own main deck, the stack with it', Math.abs(d['1'].y + 43.0) < 1e-6 &&
+        Math.abs((d['2'].y - d['1'].y) - (-45.6 + 42.5)) < 1e-6 && Math.abs(d['03'].y - (-6.0 + 0.3)) < 1e-6);
+  check('fitted: no landing of its own on her airlock deck', !f.rooms.some(function (r) { return r.kind === 'landing' && r.deck === '1'; }));
+  check('fitted: landings line up with her lift car', f.rooms.filter(function (r) { return r.kind === 'landing'; })
+        .every(function (r) { return Math.abs((r.z0 + r.z1) / 2 + 9) < 1e-6 && Math.abs((r.x0 + r.x1) / 2) < 1e-6; }));
+  var j = f.join, jr = f.rooms.filter(function (r) { return r.id === j.room; })[0];
+  check('fitted: a passage from her own deck\'s wall to the band', jr && jr.deck === '1' && jr.x1 <= -2.5 && jr.x0 >= f.cx + f.hw,
+        jr ? jr.x0.toFixed(1) + '..' + jr.x1.toFixed(1) : 'none');
+  var seen = N.reachable(f, j.room, 'zebra');
+  check('fitted: from that passage, every room at general quarters', f.rooms.every(function (r) { return r.walk === false || seen[r.id] || r.kind === 'landing' || r.kind === 'stub'; }));
+  var m = N.layout('meridian', { mergeDeck: 'B', mainY: -5.2, z1: -24, lift: { x: 0, z: -9 }, noAirlock: true, join: { x: 0, z: -23.6, axis: 'z' } });
+  var mz = m.rooms.filter(function (r) { return r.kind !== 'landing' && r.kind !== 'lobby' && r.kind !== 'stub'; });
+  check('fitted: a merchant\'s band stays aft of her own airlock deck', mz.every(function (r) { return r.z1 <= -24 + 1e-6; }));
+  check('fitted: the tram runs in her trunk, not through her bulkheads', ['capital', 'carrier'].every(function (h) {
+    var p = plans[h], way = p.rooms.filter(function (r) { return r.kind === 'tramway'; })[0];
+    return way && way.walk === false && p.rooms.every(function (r) {
+      return r === way || r.deck !== way.deck || !(r.x0 < way.x1 && way.x0 < r.x1 && r.z0 < way.z1 && way.z0 < r.z1);
+    });
+  }));
+})();
 
 console.log('--- the same ship ---');
 check('the same hull is laid out the same every time', HULLS.every(function (h) {

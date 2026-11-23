@@ -40,6 +40,54 @@ before they update.
 
 ## Unreleased
 
+### Added (2026-11-23, decks for the large ships — stage 2, walk them)
+
+Astra: *"okay. let's build it."* The Capital, the Carrier, the Meridian and
+the Leviathan now have the stage 1 layout aboard, and you can walk all of it.
+
+- **Her own airlock deck is unchanged:** the rooms at the foot of her tower,
+  her airlock, ramp and hatch are as they were. A passage through the wall
+  of her hold joins it to the new decks. The old engineering junction and
+  the Carrier's old hangar are gone; her engineering deck and **three hangar
+  bays** replace them, and your parked craft stand on pads in the middle bay.
+  - **The Carrier's airlock deck is her hangar deck now,** 43.6 m under her
+    island cab (was 35). Only her entry in `src/hullfit.js` changed: her
+    ramp drops 25.6 m instead of 34.2. (A full `tools/fit-hulls.js` run
+    would also move most other hulls, from a month of other changes since
+    the table was made; that was not taken.)
+- **The lift stops at every deck the layout gives it:** Capital bridge, 03
+  CIC, 1, 2, 4; Carrier bridge, 08 flag bridge, 04 island base, 03 gallery,
+  1 hangar, 2, 4; Meridian bridge, B, C; Leviathan bridge, A, B. The buttons
+  close up to fit a car with seven stops.
+- **Ladders, stairs, scuttles and escape trunks** are climbed: look at one,
+  E, and you go up (or down) its incline or its rungs to where it lands you
+  on the other deck. The prompt says which and where:
+  *▲ Ladder up to 1 Main deck · airlock*.
+- **The tram** runs down her port-side trunk on the engineering deck.
+- **Rooms carry their compartment numbers** on the room banner
+  (`Passageway 2-92-1-L`, `Reactor control 4-111-1-C`).
+- **The reactor**: a steel tank with a glowing face in the reactor room,
+  and the glass in the bulkhead to reactor control lit blue. This is a
+  stand-in: the real glass (a window into the water, with depth) is stage 3.
+- **Fitted to her hull** (Astra's rule: shrink, then drop). Where her hull
+  pinches in, a room is narrowed, then given a lower deckhead, and only a
+  dead end is left out. Today nothing is left out: the Capital and Carrier
+  fit as laid out; the Meridian has 6 rooms narrowed and the Leviathan 3.
+  - **The Meridian's A deck ends aft of the waist in her hull** (z −39), up
+    the stairs from B; the lift does not stop there.
+  - **The Leviathan has no tram**: her own deck takes her forward 28 m and
+    the 20 m aft of it is a walk. Three compartments, not four.
+- `tools/probe-naval.js` and `tools/probe-reactor.js` walk it in the real
+  game; `tools/naval-fit.js` lists any naval room outside her skin;
+  `tools/electron-probe.cjs` takes `ELECTRON_EXE` so a worktree can run it.
+- Tests: `shipdeck.test.js` walks every deck from the lift, the tram and
+  every ladder; the naval decks flood at 20 cm.
+
+**Not yet:** the Kestrel, Cutter, Longhaul, Tanker and Crawler's engineering
+flats (laid out in stage 1, not aboard); general quarters as a game state;
+the crew using ladders (they still ride the lift between decks); the real
+reactor glass and fittings.
+
 ### Added (2026-11-23, decks for the large ships — stage 1, the layout)
 
 Astra: *"for the capital and carrier, use the precedent of US naval ships of

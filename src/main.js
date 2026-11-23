@@ -13316,6 +13316,11 @@
     for (var k in o) ship.live[k] = o[k];
   }
   var RIDE_DOORS = 0.8;           // s for the doors to close, and to open
+  /* A deck's name: the naval decks carry their own (shipdeck.js navalize). */
+  function deckLabel(ship, id) {
+    var SD = global.ShipDeck;
+    return (ship && ship.deckName && ship.deckName[id]) || (SD && SD.DECK_NAME[id]) || id;
+  }
   function startRide(kind, it) {
     var w = G.walk, p = w.plan, ship = p.ship, SD = global.ShipDeck;
     if (!ship) return;
@@ -13326,13 +13331,25 @@
       w.ride = { kind: 'lift', from: p, to: to, t: 0, dur: RIDE_DOORS + secs + RIDE_DOORS, travel: secs, dy: dy };
       /* Into the middle of the car, facing the way you will step out. */
       w.x = 0; w.z = (ship.carZ[0] + ship.carZ[1]) / 2;
-      say((dy > 0 ? '▲  ' : '▼  ') + SD.DECK_NAME[it.to], 3);
+      say((dy > 0 ? '▲  ' : '▼  ') + deckLabel(ship, it.to), 3);
+    } else if (kind === 'climb') {
+      /* A LADDER, A SCUTTLE OR A TRUNK (naval decks, 2026-11-23): you climb
+       * from where you stand to where it lands you on the other deck — up a
+       * ladder's incline, straight up a scuttle or a trunk's rungs. The
+       * eye goes with you; the keys do nothing while you climb. */
+      var dest = ship.decks[it.to];
+      if (!dest) return;
+      var dyc = dest.floorY - p.floorY, steep = it.via === 'scuttle' || it.via === 'trunk';
+      var secs2 = Math.max(1.2, Math.abs(dyc) * (steep ? 0.7 : 0.5));
+      w.ride = { kind: 'climb', from: p, to: dest, t: 0, dur: secs2, dy: dyc, x0: w.x, z0: w.z, x1: it.tx, z1: it.tz, steep: steep };
+      if (!steep) w.yaw = it.up ? 0 : Math.PI;
+      say((dyc > 0 ? '▲  ' : '▼  ') + deckLabel(ship, it.to), 3);
     } else {
       var t = ship.tram, toB = it.to === 'b';
       var za = t.a, zb = t.b, dist = Math.abs(zb - za);
       w.ride = { kind: 'tram', toB: toB, t: 0, z0: toB ? za : zb, z1: toB ? zb : za, dur: dist / SD.TRAM_SPEED + 2,
                  off: toB ? t.offB : t.offA };
-      w.x = 0; w.z = w.ride.z0;
+      w.x = t.x || 0; w.z = w.ride.z0;
       w.yaw = toB ? Math.PI : 0;
       say(toB ? 'The tram runs aft to engineering' : 'The tram runs forward to the lift', 3);
     }
@@ -13357,7 +13374,18 @@
         setLive(ship, { carY: r.to.floorY, moving: false });
         w.ride = null;
         w.yaw = r.to.deck === 'bridge' ? 0 : Math.PI;
-        say(SD.DECK_NAME[r.to.deck], 2);
+        say(deckLabel(ship, r.to.deck), 2);
+      }
+    } else if (r.kind === 'climb') {
+      var uc = ease(r.t / r.dur);
+      w.rideDy = r.dy * uc;
+      /* Up a ladder the eye moves along it; up a scuttle, only up. */
+      var ux = r.steep ? Math.min(1, uc * 4) : uc;
+      w.x = r.x0 + (r.x1 - r.x0) * ux; w.z = r.z0 + (r.z1 - r.z0) * ux;
+      if (r.t >= r.dur) {
+        w.plan = r.to; w.rideDy = 0; w.deck = r.to.deck;
+        w.x = r.x1; w.z = r.z1; w.ride = null;
+        say(deckLabel(r.to.ship || r.from.ship, r.to.deck), 2);
       }
     } else {
       var v = ease(r.t / (r.dur - 0.5));
@@ -14917,6 +14945,7 @@
       if (it.kind === 'hatch' || it.kind === 'ramp' || it.kind === 'rampctl') { lockUse(it); return; }
       if (it.kind === 'liftbtn') { startRide('lift', it); return; }
       if (it.kind === 'tram') { startRide('tram', it); return; }
+      if (it.kind === 'climb') { startRide('climb', it); return; }
       var her = G.aboard.ship.shipName;
       if (it.kind === 'cargo') { say(visitHoldLine(), 7); return; }
       /* Boarded by force and yielded: point, and her crew shift it. */
@@ -14989,6 +15018,7 @@
       }
       if (it.kind === 'liftbtn') { startRide('lift', it); return; }
       if (it.kind === 'tram') { startRide('tram', it); return; }
+      if (it.kind === 'climb') { startRide('climb', it); return; }
       if (it.kind === 'hangardoor') { say('The hangar doors  —  they open for craft, not for people on foot', 4); return; }
       if (it.kind === 'galley') { say('The galley  —  coffee, ration packs, and a kettle bolted to the counter', 4); return; }
       /* The airlock's controls, the ramp in its floor, and the post at the
