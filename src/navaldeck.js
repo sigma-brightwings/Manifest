@@ -59,6 +59,12 @@
   var PASS_W = 1.3;            // a passageway, as shipdeck's passage
   var SLAB = 0.3;              // a deck's own thickness, floor to the ceiling below
   var LANDING = 2.4;           // a lift landing, square
+  /* THE TRAM AT GENERAL QUARTERS (Astra, 2026-11-23): "the tram can run on
+   * a battery system during GQ - half speed - it goes out if the ship's
+   * hull reaches below 40%". Under Zebra her main power is not the tram's
+   * to use; on battery she runs at half speed, and with the hull under
+   * 40 % the battery's feed is gone and she stands where she is. */
+  var TRAM_BATTERY = { speed: 0.5, outBelow: 0.4 };
 
   /* ---- THE HULLS ----------------------------------------------------------
    * Measured with tools/hull-envelope.js (2026-11-23), in the plan frame.
@@ -506,7 +512,7 @@
       pa.within = fa.id; pb.within = ab.id;
       link(p, 'door', fa, pa, null, [cx, pa.z1]);
       link(p, 'door', ab, pb, null, [cx, pb.z0]);
-      link(p, 'tram', pa, pb, null, [cx, (pa.z0 + pb.z1) / 2]);
+      link(p, 'tram', pa, pb, null, [cx, (pa.z0 + pb.z1) / 2], { battery: TRAM_BATTERY });
       p.tram = { deck: d.id, a: pa.id, b: pb.id };
     });
 
@@ -641,8 +647,9 @@
    * cond: 'normal' (at sea) or 'zebra' (general quarters). Under zebra every
    * Z fitting is dogged; X and Y you open as you pass; a D door closes only
    * on damage (opts.damaged, a list of link ids). */
-  function passable(l, cond, damaged) {
+  function passable(l, cond, damaged, hull) {
     if (cond === 'zebra' && l.fit === 'Z') return false;
+    if (cond === 'zebra' && l.battery && hull !== undefined && hull < l.battery.outBelow) return false;
     if (damaged && l.fit === 'D' && damaged.indexOf(l.id) >= 0) return false;
     return true;
   }
@@ -651,18 +658,18 @@
     return p._ix[id];
   }
   function centre(r) { return [(r.x0 + r.x1) / 2, r.y0, (r.z0 + r.z1) / 2]; }
-  function adjacency(p, cond, damaged) {
+  function adjacency(p, cond, damaged, hull) {
     var adj = {};
     p.rooms.forEach(function (r) { adj[r.id] = []; });
     p.links.forEach(function (l) {
-      if (!passable(l, cond, damaged)) return;
+      if (!passable(l, cond, damaged, hull)) return;
       adj[l.a].push({ to: l.b, l: l, up: roomById(p, l.b).y0 > roomById(p, l.a).y0 });
       adj[l.b].push({ to: l.a, l: l, up: roomById(p, l.a).y0 > roomById(p, l.b).y0 });
     });
     return adj;
   }
-  function reachable(p, from, cond, damaged) {
-    var adj = adjacency(p, cond, damaged), seen = {}, q = [from];
+  function reachable(p, from, cond, damaged, hull) {
+    var adj = adjacency(p, cond, damaged, hull), seen = {}, q = [from];
     seen[from] = true;
     while (q.length) {
       var id = q.shift();
@@ -675,12 +682,15 @@
    * tram at their speeds; and a ladder taken against the traffic rule a
    * crewman's reluctance (RULE_COST) on top. */
   var RULE_COST = 25;
-  function stepCost(p, from, e) {
+  function stepCost(p, from, e, cond) {
     var a = centre(roomById(p, from)), b = centre(roomById(p, e.to)), l = e.l;
     var walk = Math.hypot(l.x - a[0], l.z - a[2]) + Math.hypot(b[0] - l.x, b[2] - l.z);
     var dy = Math.abs(b[1] - a[1]);
     if (l.type === 'lift') return walk * 0.2 + dy / 8 * 1.4 + 6;   // 8 m/s, and the wait for the car
-    if (l.type === 'tram') return Math.abs(b[2] - a[2]) / 8 * 1.4 + 4;
+    if (l.type === 'tram') {
+      var v = 8 * (cond === 'zebra' && l.battery ? l.battery.speed : 1);
+      return Math.abs(b[2] - a[2]) / v * 1.4 + 4;
+    }
     if (l.type === 'scuttle' || l.type === 'trunk') return walk + dy * 2.2 + 2;
     if (l.type === 'ladder' || l.type === 'stair') {
       var against = (e.up && l.rule === 'down') || (!e.up && l.rule === 'up');
@@ -690,7 +700,8 @@
   }
   function route(p, from, to, opts) {
     opts = opts || {};
-    var adj = adjacency(p, opts.cond || 'normal', opts.damaged);
+    var cond = opts.cond || 'normal';
+    var adj = adjacency(p, cond, opts.damaged, opts.hull);
     var dist = {}, prev = {}, done = {};
     dist[from] = 0;
     for (;;) {
@@ -700,7 +711,7 @@
       if (u === to) break;
       done[u] = true;
       adj[u].forEach(function (e) {
-        var c = best + stepCost(p, u, e);
+        var c = best + stepCost(p, u, e, cond);
         if (dist[e.to] === undefined || c < dist[e.to]) { dist[e.to] = c; prev[e.to] = { from: u, l: e.l, up: e.up }; }
       });
     }
@@ -710,7 +721,7 @@
   }
 
   global.NavalDeck = {
-    NAVAL: NAVAL, FLATS: FLATS, USE: USE, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
+    NAVAL: NAVAL, FLATS: FLATS, USE: USE, TRAM_BATTERY: TRAM_BATTERY, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
     layout: layout, reachable: reachable, route: route, passable: passable, frameAt: frameAt,
     hulls: function () { return Object.keys(NAVAL).concat(Object.keys(FLATS)); }
   };

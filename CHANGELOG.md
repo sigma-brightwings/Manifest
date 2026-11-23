@@ -80,6 +80,12 @@ changed inside; stages 2-3 put walls round it and let you walk it.
   ladders. The scuttles in those hatches, the trunks, the lift and the tram
   stay open, so every room is still reachable. Bow to stern on the
   Capital's 2nd deck goes up over the main deck instead.
+- **The tram at general quarters runs on battery, at half speed, and goes
+  out if the hull falls below 40 %** (Astra: *"the tram can run on a battery
+  system during GQ - half speed - it goes out if the ship's hull reaches
+  below 40%"*). Bow to stern on the 2nd deck: Capital 110 m at sea, 140 m
+  at GQ; Carrier 97 m and 138 m. With the tram out every room is still
+  reachable, by the ladders, scuttles and trunks.
 - **Reactor rooms:** a compact core in a water jacket that is both coolant
   and shield; military cores (Capital, Carrier, Cutter, Navy and Syndicate
   Crawlers) lie down with rod drives on the forward face, civilian ones
@@ -88,7 +94,7 @@ changed inside; stages 2-3 put walls round it and let you walk it.
   its escape trunk.
 - `tools/hull-envelope.js` measures each large hull's inside slice by slice;
   the band the decks are laid in comes from it.
-- `test/navaldeck.test.js` (ships group, 47 checks).
+- `test/navaldeck.test.js` (ships group, 51 checks).
 
 ### Fixed (2026-11-22, the hand on the beacon was still being paid)
 

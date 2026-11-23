@@ -173,6 +173,24 @@ check('a merchant\'s watertight doors close on damage', (function () {
   var seen = N.reachable(p, p.airlock, 'normal', shut);
   return p.rooms.every(function (r) { return seen[r.id]; });
 })());
+(function () {
+  /* The tram at GQ: battery, half speed; out under 40 % hull. */
+  var p = plans.capital, tr = p.links.filter(function (l) { return l.type === 'tram'; })[0];
+  var rn = N.route(p, tr.a, tr.b, { cond: 'normal' }), rz = N.route(p, tr.a, tr.b, { cond: 'zebra', hull: 1 });
+  var tn = rn.steps.some(function (s) { return s.link.type === 'tram'; }), tz = rz.steps.some(function (s) { return s.link.type === 'tram'; });
+  check('at GQ the tram runs on battery at half speed', tn && tz && rz.cost > rn.cost * 1.5, Math.round(rn.cost) + ' m vs ' + Math.round(rz.cost) + ' m');
+  check('with the hull under 40 % at GQ the tram is out', N.passable(tr, 'zebra', null, 0.39) === false &&
+        N.passable(tr, 'zebra', null, 0.4) === true && N.passable(tr, 'normal', null, 0.2) === true);
+  var miss = [];
+  NAVY.concat(['leviathan']).forEach(function (h) {
+    var q = plans[h], seen = N.reachable(q, q.airlock, 'zebra', null, 0.3);
+    q.rooms.forEach(function (r) { if (!seen[r.id]) miss.push(h + ' ' + r.id); });
+  });
+  check('with the tram out at GQ, every room is still reachable', !miss.length, miss.slice(0, 3).join(' '));
+  var ro = N.route(p, tr.a, tr.b, { cond: 'zebra', hull: 0.3 });
+  check('...and the way aft goes over the top instead', ro && !ro.steps.some(function (s) { return s.link.type === 'tram'; }),
+        ro ? Math.round(ro.cost) + ' m' : 'none');
+})();
 check('the lift and the tram run at general quarters',
       NAVY.every(function (h) { return plans[h].links.filter(function (l) { return l.type === 'lift' || l.type === 'tram'; }).every(function (l) { return N.passable(l, 'zebra'); }); }));
 
