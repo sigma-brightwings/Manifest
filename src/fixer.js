@@ -141,6 +141,13 @@
         else if (n >= (H.HUNT_AT || 60) / 2) bits.push('the ' + facName(G, emp) + ' navy knows your name, but not well enough to send anyone yet');
       });
     }
+    /* The mob's own grudge (hunters.js, slice 5), in the fixer's words. */
+    if (H && H.grudge && H.grudge(G) > 0) {
+      var gv = H.grudge(G), gd = G.grudge && G.grudge.dueAt;
+      if (gv < (H.GRUDGE_AT || 40)) bits.push('people upstairs have heard your name, and did not like it');
+      else if (gd && t < gd) bits.push('somebody upstairs is deciding who to send for you');
+      else bits.push('the people I work for have sent ' + (gv >= (H.GRUDGE_THREE || 120) ? 'three' : 'two') + ' of their own to find you');
+    }
     if (!bits.length) return 'Nobody. You are not worth the trouble yet.';
     var s = bits.join('; ') + '.';
     return s.charAt(0).toUpperCase() + s.slice(1);

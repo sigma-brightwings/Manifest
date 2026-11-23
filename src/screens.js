@@ -507,7 +507,10 @@
           : body.habitable ? 'HZ' : '',
       air: body.composition || (body.atmosphere ? 'thin atmosphere' : 'no atmosphere'),
       moons: body.kind === 'planet' && row ? row.moons : 0,
-      ports: row ? (body.kind === 'planet' ? row.ports : null) : null,
+      /* A moon's own docks, counted off her children: the manifest row is
+       * her planet's, and every moon card used to say 0 whatever was there. */
+      ports: body.kind === 'planet' ? (row ? row.ports : null)
+           : (body.children || []).filter(function (c) { return c.docking || c.surface; }).length,
       gravity: gSurf,
       dayHours: per ? per / 3600 : null,
       retrograde: !!(per && per < 0),
@@ -515,8 +518,18 @@
        * is not the interesting fact; that it never ends is. */
       day: body.kind === 'planet' && body.tidallyLocked ? 'tidally locked' : null,
       tiltDeg: body.rotation ? body.rotation.tilt * 180 / Math.PI : null,
-      notes: [BAND_NOTES[body.habitableBand], body.lifeNote, body.cultureNote].filter(function (s) { return !!s; })
+      /* Would anyone come here for the pleasure of it (appeal.js)? First,
+       * because it is the line a passenger agent would read first. */
+      appeal: global.Appeal ? global.Appeal.of(sys, body) : null,
+      notes: [appealNote(sys, body), BAND_NOTES[body.habitableBand], body.lifeNote, body.cultureNote]
+        .filter(function (s) { return !!s; })
     };
+  }
+  function appealNote(sys, body) {
+    var A = global.Appeal, a = A ? A.of(sys, body) : null;
+    if (!a) return null;
+    var tier = a.tier.charAt(0).toUpperCase() + a.tier.slice(1);
+    return 'For visitors: ' + tier + (a.why.length ? ' - ' + a.why.slice(0, 4).join(', ') : '') + '.';
   }
 
   /* --- F3: local navigation ---------------------------------------------
@@ -545,7 +558,24 @@
     ctx.restore();
 
     var list = navList();
-    var rowH = 16, avail = Math.floor((colH - 40) / rowH);
+    /* THE KEY (icons.js): every shape and what it means, under the list -
+     * five to a row, room taken from the bottom of the list. */
+    var Ick = global.Icons, keyRows = Ick ? Math.ceil(Ick.LEGEND.length / 5) : 0, keyH = keyRows * 16 + 10;
+    var rowH = 16, avail = Math.floor((colH - 40 - keyH) / rowH);
+    if (Ick) {
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      var kx0 = pad + 12, ky0 = top + pad + colH - keyH + 4, kw = (listW - 24) / 5;
+      ctx.strokeStyle = 'rgba(74,151,176,0.35)';
+      ctx.beginPath(); ctx.moveTo(pad + 8, ky0 - 4); ctx.lineTo(pad + listW - 8, ky0 - 4); ctx.stroke();
+      Ick.LEGEND.forEach(function (lg, li) {
+        var kx = kx0 + (li % 5) * kw, ky = ky0 + 10 + Math.floor(li / 5) * 16;
+        Ick.draw(ctx, lg[0], kx + 4, ky - 4, 4.4, '#b4f0ff');
+        ctx.fillStyle = MFD_DIM;
+        ctx.fillText(lg[1], kx + 13, ky);
+      });
+      ctx.restore();
+    }
     var sel = -1, i;
     if (G.navTarget) {
       for (i = 0; i < list.length; i++) {
@@ -732,6 +762,11 @@
    * the row's. `ink` is the row's colour so the mark and the name agree. */
   function markAt(ctx, x, y, e, ink) {
     var cx = x + 4, cy = y - 4;
+    /* WHAT IT IS, by shape (icons.js, 2026-11-20): a port by who runs it
+     * and what it does, a hull by her flag and trade. Anything icons.js
+     * does not know keeps the mark below. */
+    var Ic = global.Icons, ik = Ic ? Ic.kindOf(e, G.sys) : null;
+    if (ik) { Ic.draw(ctx, ik, cx, cy, 4.8, ink); return; }
     ctx.save();
     ctx.fillStyle = ink;
     ctx.strokeStyle = ink;
@@ -767,7 +802,7 @@
       /* A ring with nothing in it - a bearing, not a thing. */
       ctx.beginPath(); ctx.arc(cx, cy, 3.6, 0, Math.PI * 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(cx, cy, 0.9, 0, Math.PI * 2); ctx.fill();
-    } else if (kind === 'authority' || kind === 'comsat') {
+    } else if (kind === 'authority' || kind === 'comsat' || kind === 'mysat') {
       /* A mast with two arcs coming off it: a frequency, not a place. */
       ctx.beginPath(); ctx.moveTo(cx, cy + 4); ctx.lineTo(cx, cy - 2); ctx.stroke();
       ctx.beginPath(); ctx.arc(cx, cy - 2, 2.4, Math.PI * 1.15, Math.PI * 1.85); ctx.stroke();
@@ -887,6 +922,20 @@
                  color: '#ffd36b' });
     }
 
+    /* YOUR COM-SATS (comsats.js): the cradle aboard and the ones in orbit,
+     * as a channel of your own. Range 0, with the other frequencies. */
+    var CsC = global.Comsats;
+    if (CsC && ((G.ship.comsats || 0) > 0 || CsC.sats(G).length)) {
+      var rch = CsC.reachHere(G, G.galaxy, G.here);
+      /* This system's uplink dark: the chain is broken here. */
+      var upD = G.here && G.here.factionId && CsC.uplinkDark(G, G.here.id, G.t);
+      out.push({ kind: 'mysat', obj: null, name: 'Your com-sats', range: 0,
+                 who: (G.ship.comsats || 0) + ' aboard, ' + CsC.sats(G).length + ' in orbit' +
+                      (rch ? (rch.on ? '  ·  LIVE, ' + rch.n + ' stars' : rch.dark ? '  ·  DARK - out of fuel' : '  ·  off your network here') : '') +
+                      (upD ? '  ·  uplink here DARK - chain broken' : ''),
+                 color: '#7dffb0' });
+    }
+
     /* Police channels, one per faction flying a flag here.
      *
      * Range 0 on purpose, so they sort to the top of a list that is
@@ -928,8 +977,19 @@
       if (!shown(b)) continue;
       var range = V.dist(Sim.bodyPosition(b, G.sys, G.t), G.ship.pos);
       var fac = G.sys.factionById && G.sys.factionById[b.faction];
+      /* An island (comsats.js): no relay can see it, so its news comes by
+       * courier. Said on its row, where you would look for it. */
+      var CsI = global.Comsats;
+      var starI = (G.here && G.here.id) || G.sys.starId;
+      var island = CsI && b.market && CsI.isIsland(G, G.sys, starI, b, G.t);
+      /* Why: its world's relays are dark (an RTG tender late), or simply
+       * none can see it from where they are. */
+      var darkI = island && b.parentBody ? CsI.darkSpan(G, starI, b.parentBody.id, G.t) : null;
       out.push({ kind: 'station', obj: b, name: b.name, range: range,
-                 who: b.market ? b.market.roleName : 'Station',
+                 who: (b.market ? b.market.roleName : 'Station') +
+                      (b.isotopeRefinery ? '  ·  isotope refinery' : '') +
+                      (darkI ? '  ·  ISLAND - relays dark, tender due day ' + Math.ceil(darkI.to / 86400)
+                       : island ? '  ·  ISLAND - no relay sees it' : ''),
                  color: fac ? fac.color : '#7dffb0' });
     }
     /* A quiet transfer you are close enough to be part of
@@ -1823,6 +1883,46 @@
       return opts;
     }
 
+    /* YOUR COM-SATS: launch one into the orbit you are flying, at your
+     * height; and where the ones you have are. */
+    if (c.kind === 'mysat') {
+      var CsO = global.Comsats, here0 = (G.here && G.here.id) || 'sys';
+      var lw = CsO.launchRefusal(G, G.sys, G.t);
+      var dom0 = Sim.dominantBody(G.ship.pos, G.sys, G.t);
+      opts.push({
+        label: 'Launch a com-sat here',
+        enabled: !lw,
+        note: lw || 'round ' + dom0.name + ', at your height - your terminal into the relay network',
+        fn: function () {
+          var rl = CsO.launch(G, G.sys, here0, G.t, G.here && G.here.name);
+          say(rl.ok ? rl.text : 'Com-sat: ' + rl.why, rl.ok ? 8 : 5);
+          if (rl.ok && global.Save) global.Save.store(G);
+        }
+      });
+      /* Refuelling one: a tonne of RTG fuel, in orbit round its world. */
+      if (CsO.sats(G).length) {
+        var rf = CsO.refuelRefusal(G, G.sys, here0, G.t);
+        opts.push({
+          label: 'Refuel a com-sat',
+          enabled: !rf.why,
+          note: rf.why || 'the one over ' + rf.sat.bodyName + ' - ' + CsO.SAT_FUEL_T + ' t of RTG fuel, ' + CsO.SAT_LIFE + ' days',
+          fn: function () {
+            var rr = CsO.refuel(G, G.sys, here0, G.t);
+            say(rr.ok ? rr.text : 'Com-sat: ' + rr.why, rr.ok ? 7 : 5);
+            if (rr.ok && global.Save) global.Save.store(G);
+          }
+        });
+      }
+      CsO.sats(G).forEach(function (s) {
+        var live = CsO.satLive(s, G.t), left = Math.ceil((CsO.satFuelTo(s) - G.t) / 86400);
+        opts.push({ label: 'Com-sat over ' + s.bodyName, enabled: false,
+                    note: (s.star === here0 ? 'in this system' : 'at ' + (s.starName || s.star)) +
+                          ', ' + Math.round(s.a).toLocaleString('en-US') + ' km out  ·  ' +
+                          (live ? 'fuel for ' + left + ' days' : 'DARK - out of fuel'), fn: function () {} });
+      });
+      return opts;
+    }
+
     if (c.kind === 'crew') {
       var Sx = global.Stations, Cx = global.Construction;
       if (Cx.isCrawler(G.ship)) {
@@ -2275,6 +2375,21 @@
               : Cl.DRONE_PRICE + ' cr - ' + nd + ' aboard, ' + Cl.HOPPER + ' t hopper',
           fn: function () { if (Cl.buyDrone(G).ok) say('Drone racked. ' + G.ship.drones + ' aboard.', 4); }
         });
+      }
+      /* A COM-SAT (comsats.js): your terminal into the relay network, sold
+       * where ships are built. Launched from the planetary scanner. */
+      var CsB = global.Comsats;
+      if (CsB && CsB.yardAt(c.obj)) {
+        var csWhy = CsB.buyRefusal(G, c.obj), ncs = G.ship.comsats || 0;
+        opts.push({
+          label: 'Buy com-sat',
+          enabled: !csWhy,
+          note: csWhy && !/^[\d,]+ cr$/.test(csWhy) ? csWhy
+              : CsB.SAT_PRICE.toLocaleString('en-US') + ' cr - ' + ncs + ' aboard; launch it from orbit on the planetary scanner',
+          fn: function () { var got = CsB.buy(G, c.obj); say(got.ok ? got.text : 'Com-sat: ' + got.why, 5); }
+        });
+      }
+      if (Cl && Sv) {
         /* A stolen drone, to the back room - only where there is one. */
         if ((G.ship.hotDrones || 0) > 0 && Cl.isFence && Cl.isFence(c.obj)) {
           var fdp = Cl.fenceDronePrice(G.sys);
@@ -3867,7 +3982,7 @@
     }
 
     var cardH = 0;
-    if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s);
+    if (G.yardTab === 'fit') drawYardFit(ctx, x, w, row, s, port);
     else if (G.yardTab === 'buy') drawYardBuy(ctx, x, w, row, s, port);
     else if (G.yardTab === 'crew') drawYardCrew(ctx, x, w, row, s, port);
     else if (G.yardTab === 'fleet') drawYardFleet(ctx, x, w, row, s, port);
@@ -4030,6 +4145,7 @@
             function () {
               if (p.out) {
                 say('Not while ' + p.name + (p.out === 'hull' ? ' is out on the hull' :
+                    p.out === 'outpost' ? ' is down at the outpost - fetch them back first' :
                     ' is adrift - go and get them first'), 5);
                 return;
               }
@@ -4521,6 +4637,22 @@
             }, !!why);
       });
     }
+    /* REFIT THE COCKPIT (2026-11-21): the other two of this hull's three
+     * cockpit fits, at a shipyard, for a small fee (Combat.refitCockpit). */
+    if (Combat.refitCockpit && Render.HULL_LOOKS && Render.HULL_LOOKS[s.hullId]) {
+      var nowLook = s.cockpitLook | 0;
+      Render.HULL_LOOKS[s.hullId].forEach(function (lk, li) {
+        if (li === nowLook) return;
+        var why = !Combat.isShipyard(port) ? 'only a shipyard refits a cockpit' : null;
+        row('  ▶ REFIT COCKPIT TO ' + 'ABC'[li] + '  ·  ' + Combat.cockpitRefitCost(s.hullId) + ' cr',
+            why || Render.lookSummary(lk, s.hullId, li),
+            function () {
+              var r = Combat.refitCockpit(G, li);
+              if (!r.ok) { say('Not here: ' + r.why, 6); return; }
+              say('The fitters are done: cockpit ' + 'ABC'[li] + ' — ' + r.cost + ' cr', 6);
+            }, !!why);
+      });
+    }
 
     /* ON THE SLIPS, wherever they are: a hull you have paid for is part of
      * the fleet you are planning, even while she is still being built. */
@@ -4845,7 +4977,7 @@
   }
 
   /* --- FITTING: what is bolted on, and what it costs you ------------------ */
-  function drawYardFit(ctx, x, w, row, s) {
+  function drawYardFit(ctx, x, w, row, s, port) {
     var keys = Combat.slotKeys(s);
     var map = s.fit || {};
     var shown = 0;
@@ -4859,6 +4991,13 @@
       var type = Combat.slotType(key);
       var label = (Combat.SLOT_LABEL[type] || type).toUpperCase() + ' ' +
                   (parseInt(key.replace(/\D+/g, ''), 10) + 1);
+      /* One cut out of her hold says so, and a concealed one says whether
+       * its panel has opened yet (HOLD INTO A HARDPOINT). */
+      var convAt = convIndexOfKey(s, key);
+      if (convAt >= 0) {
+        label += Combat.convList(s)[convAt] === 'hidden'
+          ? (Combat.isHiddenKey(s, key) ? ' (CONCEALED)' : ' (CONCEALED, SEEN)') : ' (CONVERTED)';
+      }
       var id = map[key], item = id && Combat.EQUIPMENT[id];
       /* The slipspace drive is replaced, never sold off - without one she
        * cannot leave the system (combat.js THE SLIPSPACE BAY). Its row
@@ -4913,6 +5052,56 @@
       shown++;
     }
     if (!shown) row('THIS HULL HAS NO SLOTS', null, function () {}, true);
+    drawYardConversions(row, s, port);
+  }
+
+  function convIndexOfKey(s, key) {
+    if (!Combat.convList) return -1;
+    var l = Combat.convList(s);
+    for (var i = 0; i < l.length; i++) if (Combat.convKey(s, i) === key) return i;
+    return -1;
+  }
+
+  /* --- HOLD INTO A HARDPOINT (combat.js, 2026-11-20) -----------------------
+   * Under the slots, because what it changes is the slot list: one row to
+   * cut each kind of new hardpoint, one to cut each existing one back out.
+   * The registered row is drawn everywhere with its reason when a yard
+   * cannot do it, so the option is findable; the concealed one appears
+   * only where a crew can be paid to forget, the way the grey shelf does. */
+  function drawYardConversions(row, s, port) {
+    if (!Combat.convert || !port) return;
+    var list = Combat.convList(s);
+    for (var i = 0; i < list.length; i++) {
+      (function (idx, kind) {
+        var n = parseInt(Combat.convKey(s, idx).replace(/\D+/g, ''), 10) + 1;
+        var cost = Math.round(Combat.convPrice(s, kind) * Combat.CONV_REMOVE);
+        var why = Combat.unconvertRefusal(G, port, idx);
+        row('- CUT OUT ' + (kind === 'hidden' ? 'CONCEALED ' : '') + 'HARDPOINT ' + n + ' — ' + cost + ' cr',
+            why || 'gives her ' + Combat.convHold(s, kind) + ' t of hold back',
+            function () {
+              var r = Combat.unconvert(G, port, idx);
+              say(r.ok ? 'Hardpoint cut out — ' + r.hold + ' t of hold back, ' + r.price + ' cr'
+                       : 'No: ' + r.why, 5);
+            }, !!why);
+      })(i, list[i]);
+    }
+    if (list.length >= Combat.CONV_MAX) return;
+    var kinds = ['open'];
+    if (G.sys && Combat.systemCorruption(G, G.sys) >= Combat.CONV_HIDDEN_CORRUPT) kinds.push('hidden');
+    kinds.forEach(function (kind) {
+      var price = Combat.convPrice(s, kind), hold = Combat.convHold(s, kind);
+      var why = Combat.convRefusal(G, port, kind);
+      row(kind === 'hidden' ? '+ CUT A CONCEALED HARDPOINT — ' + price + ' cr  ·  grey market'
+                            : '+ CUT A NEW HARDPOINT — ' + price + ' cr',
+          why || (hold + ' t of hold  ·  ' + (kind === 'hidden'
+            ? 'no papers: pirates sizing her up do not see it until it fires; if the law sees it fire, that is a charge'
+            : 'registered: on her papers, and any pirate sizing her up sees the gun')),
+          function () {
+            var r = Combat.convert(G, port, kind);
+            say(r.ok ? 'A new hardpoint is cut — ' + r.hold + ' t of hold gone, ' + r.price + ' cr. Fit a gun to it from BUY.'
+                     : 'No: ' + r.why, 6);
+          }, !!why);
+    });
   }
 
   /* --- BUY: what this port will sell you, and why it will not -------------
@@ -5986,7 +6175,7 @@
   function buyTheSelectedHull(keep) {
     var hull = Combat.HULLS[G.yardHull];
     if (!hull) return;
-    var r = Combat.buyHull(G, hull.id, keep, null);
+    var r = Combat.buyHull(G, hull.id, keep, { look: G.yardLook | 0 });
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
     if (r.mode === 'stock') {
       say('She is yours as she sits — only a shipyard will change her fittings.', 7);
@@ -6025,7 +6214,7 @@
     if (!hull || !G.yardOrder || G.yardOrder.hullId !== hull.id) return;
     var o = G.yardOrder;
     var r = Combat.commission(G, hull.id, { fit: o.fit, name: o.name || null, paint: paintOf(o),
-                                                  livery: o.livery || null });
+                                                  livery: o.livery || null, look: G.yardLook | 0 });
     if (!r.ok) { say('No deal: ' + r.why, 5); return; }
     G.yardOrder = null;
     say('Signed. The ' + (r.order.name || hull.name) + ' goes on the slip — ready here in ' +
@@ -6091,7 +6280,7 @@
      * A sentence with a button sitting on its last line reads as a rendering
      * fault, and this is the one panel where the player is about to spend
      * everything they have. */
-    for (var li = 0; li < lines.length && y + 57 + li * 12 < y + h - 32; li++) {
+    for (var li = 0; li < lines.length && y + 57 + li * 12 < y + h - 76; li++) {
       ctx.fillText(lines[li], tx, y + 57 + li * 12);
     }
     ctx.restore();
@@ -6119,6 +6308,24 @@
     var bw = Math.min(176, (tw - 10) / 2), by = y + h - 28;
     var docked = !!(G.ship && G.ship.docked);
     var shortKeep = creds < full || !dealK.ok;
+    /* WHICH COCKPIT (2026-11-21): each hull has three fits, the HUD's
+     * colour and layout and the window frame round it (Render.HULL_LOOKS).
+     * Chosen here, free; a shipyard can refit it later. */
+    var looks = Render.HULL_LOOKS && Render.HULL_LOOKS[hull.id];
+    if (looks) {
+      if (G.yardLookHull !== hull.id) { G.yardLookHull = hull.id; G.yardLook = 0; }
+      var cw = Math.floor((Math.min(tw, bw * 2 + 10) - 2 * 6) / 3), cy = by - 44;
+      looks.forEach(function (lk, li) {
+        btn(ctx, tx + li * (cw + 6), cy, cw, 18, 'COCKPIT ' + 'ABC'[li],
+            function () { G.yardLook = li; },
+            { font: 10, hot: (G.yardLook | 0) === li });
+      });
+      ctx.save();
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(190,215,235,0.75)';
+      ctx.fillText(clipText(Render.lookSummary(looks[G.yardLook | 0], hull.id, G.yardLook | 0), Math.floor(tw / 6.2)), tx, cy - 5);
+      ctx.restore();
+    }
     if (built) {
       /* BUILT TO ORDER IS ONE BUTTON: you pay, she goes on the slip, and
        * you fly on in the ship you are in. Trading that one in, or keeping
@@ -6653,11 +6860,21 @@
       return;
     }
 
-    var oy = top + pad + 40;
+    /* THE BOARD SCROLLS (2026-11-20). It used to stop drawing at the panel's
+     * foot without a word, and the kinds of work appended last (digs,
+     * relays, mail, the holiday trade) were the first to vanish from a
+     * long board, which reads as "there is none". Same machinery as the
+     * notes log: the wheel over the board, a bar only when something is
+     * out of view, and a count at the end that is hiding rows. */
+    var boardKey = (G.here ? G.here.id : '') + '|' + docked.id;   // port ids repeat between systems
+    if (boardView.port !== boardKey) { boardView.port = boardKey; boardView.top = 0; }
+    boardView.top = Math.max(0, Math.min(offers.length - 1, boardView.top));
+    var oy = top + pad + 40, boardY0 = oy - 14, boardBottom = top + pad + colH - 6, shownB = 0;
     var sawCampaignBoardHdr = false, sawContractBoardHdr = false;
-    for (var o = 0; o < offers.length; o++) {
+    for (var o = boardView.top; o < offers.length; o++) {
       var off = offers[o];
-      if (oy + 58 > top + pad + colH - 6) break;
+      if (oy + 58 > boardBottom) break;
+      shownB++;
       if (off.campaign && !sawCampaignBoardHdr) {
         sawCampaignBoardHdr = true;
         ctx.save();
@@ -6770,7 +6987,28 @@
         oy += lines.length * 13 + 18;
       }
     }
+    var hiddenAbove = boardView.top, hiddenBelow = offers.length - boardView.top - shownB;
+    boardView.below = hiddenBelow;     // the wheel stops once the last row is showing
+    if (hiddenAbove > 0 || hiddenBelow > 0) {
+      drawScrollbar(ctx, rx + rw - 12, boardY0, 6, boardBottom - boardY0, offers.length,
+                    Math.max(1, shownB), boardView.top,
+                    function (p) { boardView.top = Math.max(0, Math.min(offers.length - 1, p)); });
+      ctx.save();
+      ctx.font = 'bold 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(160,185,220,0.75)';
+      ctx.textAlign = 'right';
+      if (hiddenAbove > 0) ctx.fillText('▲ ' + hiddenAbove + ' more', rx + rw - 22, boardY0 + 4);
+      if (hiddenBelow > 0) ctx.fillText('▼ ' + hiddenBelow + ' more  ·  wheel to scroll', rx + rw - 22, boardBottom - 6);
+      ctx.restore();
+    }
+    if (overRect(rx, boardY0, rw, boardBottom - boardY0)) {
+      setScrollRegion(rx, boardY0, rw, boardBottom - boardY0, function (d) {
+        if (d > 0 && !(boardView.below > 0)) return;
+        boardView.top = Math.max(0, Math.min(Math.max(0, offers.length - 1), boardView.top + d));
+      });
+    }
   }
+  var boardView = { top: 0, port: null, below: 0 };
 
   /* Greedy word wrap. The panel is monospaced, so a character budget is an
    * honest measure of width and there is no need to measure text. */
@@ -7213,6 +7451,10 @@
   var MAG_STOPS = [[0, 16, 20, 58], [0.25, 42, 79, 168], [0.5, 47, 179, 160],
                    [0.75, 232, 216, 74], [1, 255, 122, 74]];
   var SCAN_STYLES = ['RADAR', 'HUES', 'BANDS'];
+  /* The surface under the readout (2026-11-22): off, the planet's own
+   * colours, or a flat outline - land, sea, ice, lava. */
+  var SURFACE_MODES = ['OFF', 'TRUE COLOUR', 'OUTLINE'];
+  var OUTLINE_INK = [[46, 42, 34], [16, 38, 60], [150, 170, 182], [96, 34, 14]];
   var RADAR_STOPS = [[0, 12, 70, 90], [0.12, 30, 170, 110], [0.28, 90, 220, 60], [0.42, 240, 230, 50],
                      [0.58, 255, 160, 30], [0.74, 240, 50, 40], [0.88, 220, 40, 200], [1, 255, 230, 255]];
   var scanCanvas = null, scanSig = '', scanDepSig = '', scanDepList = [];
@@ -7227,6 +7469,40 @@
     var z = stops[stops.length - 1];
     return [z[1], z[2], z[3]];
   }
+  /* LEGIBLE OVER ANY COLOUR THE MAP USES (Astra, 2026-11-19: the selected
+   * point, the grid lines and the font "need to be dynamically chosen to be
+   * visible on the scanner display in any of the colors it uses").
+   *
+   * The map runs from near-black teal through green, yellow and red to a
+   * white-hot magenta, so no single ink reads on all of it: yellow vanishes
+   * on yellow, white on the hot end, the dim blue grid on everything. So
+   * every mark over the map is drawn twice, the way map labels are - a dark
+   * halo first, then its own colour on top. Over a dark cell the light line
+   * carries it; over a bright one the dark halo does. That is "chosen for
+   * the colour under it" without reading a pixel back, and it cannot pick
+   * wrong, because both answers are always there. */
+  function scanHalo(ctx, path, col, w, haloA) {
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(2,8,12,' + (haloA == null ? 0.85 : haloA) + ')';
+    ctx.lineWidth = w + 2.5;
+    ctx.beginPath(); path(); ctx.stroke();
+    ctx.strokeStyle = col;
+    ctx.lineWidth = w;
+    ctx.beginPath(); path(); ctx.stroke();
+    ctx.restore();
+  }
+  function scanText(ctx, s, x, y, col) {
+    ctx.save();
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = 'rgba(2,8,12,0.9)';
+    ctx.lineWidth = 3.5;
+    ctx.strokeText(s, x, y);
+    ctx.fillStyle = col;
+    ctx.fillText(s, x, y);
+    ctx.restore();
+  }
+
   /* The five pictographs: what a cell holds, drawn small enough to sit on
    * the map and legible when it does. Each is a path, not a font glyph, so
    * it draws the same everywhere. */
@@ -7318,6 +7594,102 @@
   function scanFlip(body) { return !!(body.rotation && body.rotation.period > 0); }
   function scanX(lo, flip, nLon) { return flip ? nLon - 1 - lo : lo; }
 
+  /* ---- THE GLOBE (2026-11-22) ---------------------------------------------
+   * The scanner map wrapped onto a sphere, orthographic, as you would see
+   * the world out of the window. Texture coordinates are the flat map's:
+   * u across the display columns (0..1, so the globe turns the same way the
+   * map scrolls), v down the rows from the north pole. The view is a centre
+   * longitude (yaw) and latitude (pitch); the pixel-to-texel table for a
+   * view is cached, so a still globe costs one table walk a frame. */
+  var GLOBE_TEX_K = 4;                       // texture pixels per map cell
+  var globeTex = null, globeOut = null, globeTab = null;
+  function scanGlobeTex(w, h) {
+    if (w && (!globeTex || globeTex.w !== w || globeTex.h !== h)) {
+      var cv = document.createElement('canvas');
+      cv.width = w; cv.height = h;
+      globeTex = { cv: cv, ctx: cv.getContext('2d', { willReadFrequently: true }), w: w, h: h };
+    }
+    return globeTex;
+  }
+  function scanGlobeView(ui, shipDisp, nLon, nLat, mapX, mapY, mapW, mapH) {
+    var yaw, pitch;
+    if (ui.sweep === 2 && shipDisp) {
+      yaw = (shipDisp.col + 0.5) / nLon * 360;
+      pitch = 90 - (shipDisp.row + 0.5) / nLat * 180;
+    } else {
+      yaw = ui.gYaw === undefined ? 180 : ui.gYaw;
+      pitch = ui.gPitch === undefined ? 20 : ui.gPitch;
+    }
+    /* Half-degree steps: the table is rebuilt only when the view moves
+     * that far, so following the ship does not rebuild it every frame. */
+    pitch = Math.round(Math.max(-85, Math.min(85, pitch)) * 2) / 2;
+    yaw = Math.round((((yaw % 360) + 360) % 360) * 2) / 2;
+    var R = Math.floor(Math.min(mapH, mapW) / 2) - 4;
+    return { cx: Math.round(mapX + mapW / 2), cy: Math.round(mapY + mapH / 2), R: R,
+             yaw: yaw * Math.PI / 180, pitch: pitch * Math.PI / 180, yawDeg: yaw, pitchDeg: pitch };
+  }
+  /* (u, v) on the map to the screen, or null on the far side. */
+  function scanGlobeProject(V, u, v) {
+    var lat = Math.PI / 2 - v * Math.PI, d = u * 2 * Math.PI - V.yaw;
+    var cl = Math.cos(lat), x = cl * Math.sin(d), zp = cl * Math.cos(d), yp = Math.sin(lat);
+    var cp = Math.cos(V.pitch), sp = Math.sin(V.pitch);
+    var y = yp * cp - zp * sp, z = yp * sp + zp * cp;
+    if (z <= 0) return null;
+    return { x: V.cx + x * V.R, y: V.cy - y * V.R, z: z };
+  }
+  /* The screen back to (u, v), or null off the disc. */
+  function scanGlobeUnproject(V, sx, sy) {
+    if (!V) return null;
+    var x = (sx - V.cx) / V.R, y = (V.cy - sy) / V.R, r2 = x * x + y * y;
+    if (r2 >= 1) return null;
+    var z = Math.sqrt(1 - r2), cp = Math.cos(V.pitch), sp = Math.sin(V.pitch);
+    var yp = y * cp + z * sp, zp = -y * sp + z * cp;
+    var lat = Math.asin(Math.max(-1, Math.min(1, yp))), lon = V.yaw + Math.atan2(x, zp);
+    var u = lon / (2 * Math.PI); u = u - Math.floor(u);
+    return { u: u, v: Math.max(0, Math.min(0.999999, 0.5 - lat / Math.PI)) };
+  }
+  function scanGlobeBlit(ctx, tex, V) {
+    var S = V.R * 2;
+    if (!globeOut || globeOut.cv.width !== S) {
+      var cv = document.createElement('canvas');
+      cv.width = S; cv.height = S;
+      globeOut = { cv: cv, ctx: cv.getContext('2d') };
+      globeOut.img = globeOut.ctx.createImageData(S, S);
+    }
+    var key = [S, V.yaw.toFixed(4), V.pitch.toFixed(4), tex.w, tex.h].join('|');
+    if (!globeTab || globeTab.key !== key) {
+      var idx = new Int32Array(S * S), shade = new Float32Array(S * S);
+      for (var py = 0; py < S; py++) {
+        for (var px = 0; px < S; px++) {
+          var k = py * S + px;
+          var q = scanGlobeUnproject(V, V.cx - V.R + px + 0.5, V.cy - V.R + py + 0.5);
+          if (!q) { idx[k] = -1; continue; }
+          var tx = Math.min(tex.w - 1, Math.floor(q.u * tex.w)), ty = Math.min(tex.h - 1, Math.floor(q.v * tex.h));
+          idx[k] = (ty * tex.w + tx) * 4;
+          var x = (px + 0.5 - V.R) / V.R, y = (py + 0.5 - V.R) / V.R;
+          shade[k] = 0.55 + 0.45 * Math.sqrt(Math.max(0, 1 - x * x - y * y));
+        }
+      }
+      globeTab = { key: key, idx: idx, shade: shade };
+    }
+    var src = tex.ctx.getImageData(0, 0, tex.w, tex.h).data, d = globeOut.img.data;
+    var I = globeTab.idx, Sh = globeTab.shade;
+    for (var i = 0, o = 0; i < I.length; i++, o += 4) {
+      var s = I[i];
+      if (s < 0) { d[o + 3] = 0; continue; }
+      var f = Sh[i];
+      d[o] = src[s] * f; d[o + 1] = src[s + 1] * f; d[o + 2] = src[s + 2] * f; d[o + 3] = 255;
+    }
+    globeOut.ctx.putImageData(globeOut.img, 0, 0);
+    ctx.save();
+    ctx.drawImage(globeOut.cv, V.cx - V.R, V.cy - V.R);
+    /* The limb, lit like the cut edge of the cutaways. */
+    ctx.shadowColor = 'rgba(127,214,255,0.8)'; ctx.shadowBlur = 12;
+    ctx.strokeStyle = 'rgba(160,230,255,0.7)'; ctx.lineWidth = 1.5;
+    ctx.beginPath(); ctx.arc(V.cx, V.cy, V.R, 0, Math.PI * 2); ctx.stroke();
+    ctx.restore();
+  }
+
   /* The picture of the world, one pixel a cell, rebuilt only when what it
    * shows has changed. Three ways to colour what the scanner has read:
    * RADAR (a continuous weather-radar ramp on how rich the ground is; the
@@ -7326,7 +7698,7 @@
   function scanPicture(Sv, T, ui, lvl, hasMag) {
     var rec = T.rec, body = T.body, nLon = Sv.LON_BINS, nLat = Sv.LAT_BINS;
     var sig = [T.key, ui.layer, ui.filter, ui.style, rec ? rec.cov : 0, rec ? rec.covM : 0,
-               rec ? rec.t : 0, lvl, hasMag ? 1 : 0].join('|');
+               rec ? rec.t : 0, lvl, hasMag ? 1 : 0, ui.base | 0].join('|');
     if (scanCanvas && sig === scanSig) return scanCanvas;
     scanSig = sig;
     if (!scanCanvas) {
@@ -7339,6 +7711,7 @@
     var cells = rec ? Sv.cellsOf(rec) : null;
     var cellsM = rec ? Sv.cellsOf(rec, 'cellsM') : null;
     var gm = Sv.groundMap(body, G.sys), mm = Sv.magMap(body, G.sys);
+    var baseMode = ui.base | 0, surf = baseMode && Sv.surfaceMap ? Sv.surfaceMap(body, G.sys) : null;
     var Eco = global.Economy, fcid = SCAN_FILTERS[ui.filter];
     var base = {};
     Sv.CIDS.forEach(function (cid) {
@@ -7371,9 +7744,22 @@
         var px = ((nLat - 1 - la) * nLon + scanX(lo, flip, nLon)) * 4;
         var r = 7, g = 14, b = 20;
         if ((la + lo) % 2 === 0) { r = 8; g = 16; b = 22; }       // faint checker: unflown ground
+        /* THE SURFACE UNDER IT (2026-11-22), where you have flown: the
+         * planet's own colours dimmed, or a flat land/sea/ice outline. The
+         * readouts then go over it part-transparent, so both read. */
+        var flown = (cells && cells[ci]) || (cellsM && cellsM[ci]);
+        var onBase = baseMode && surf && flown;
+        if (onBase) {
+          if (baseMode === 1) {
+            r = surf.rgb[ci * 3] * 0.62; g = surf.rgb[ci * 3 + 1] * 0.62; b = surf.rgb[ci * 3 + 2] * 0.62;
+          } else {
+            var oc = OUTLINE_INK[surf.cls[ci]] || OUTLINE_INK[0];
+            r = oc[0]; g = oc[1]; b = oc[2];
+          }
+        }
         if (showMag && cellsM && cellsM[ci] && mm) {
           var m = rampOf(MAG_STOPS, mm.field[ci] / fmax);
-          var k = ui.layer === 'both' ? 0.55 : 1;
+          var k = (ui.layer === 'both' ? 0.55 : 1) * (onBase ? 0.6 : 1);
           r = m[0] * k + r * (1 - k); g = m[1] * k + g * (1 - k); b = m[2] * k + b * (1 - k);
         }
         if (showRes && cells && cells[ci] && gm) {
@@ -7399,10 +7785,21 @@
               col = rampOf(RADAR_STOPS, v);
               al = 0.94;
             }
+            if (onBase) al *= 0.65;
             r = col[0] * al + r * (1 - al); g = col[1] * al + g * (1 - al); b = col[2] * al + b * (1 - al);
-          } else if (!fcid && ui.layer === 'res') {
+          } else if (!fcid && ui.layer === 'res' && !onBase) {
             r = 22; g = 52; b = 66;                                 // flown, nothing worth digging
           }
+        }
+        /* Coastlines over everything, so the shape of the land survives
+         * any readout: a cell whose class differs from a neighbour's. */
+        if (onBase && surf && !surf.giant) {
+          var c0 = surf.cls[ci], nb = 0;
+          if (lo > 0 && surf.cls[ci - 1] !== c0) nb = 1;
+          else if (lo < nLon - 1 && surf.cls[ci + 1] !== c0) nb = 1;
+          else if (la > 0 && surf.cls[ci - nLon] !== c0) nb = 1;
+          else if (la < nLat - 1 && surf.cls[ci + nLon] !== c0) nb = 1;
+          if (nb && (c0 === 0 || c0 === 2)) { r = 225; g = 240; b = 248; }
         }
         d[px] = r; d[px + 1] = g; d[px + 2] = b; d[px + 3] = 255;
       }
@@ -7498,7 +7895,12 @@
   /* Where a display column lands on screen, taking the short way round. */
   function scanSX(vw, mapX, mapW, dc) {
     var dx = ((dc - vw.col0) % vw.nLon + vw.nLon) % vw.nLon;
-    if (dx > vw.nLon - vw.vc) dx -= vw.nLon;          // just off the left edge
+    /* Past the right edge by more than half the hidden part: it is nearer
+     * to (just off) the left. The old test, dx > nLon - vc, was dx > 0 at
+     * 1x, which threw every column but the first off the map: no deposit
+     * glyphs, no meridians, no field lines at 1x (found 2026-11-22 when the
+     * magnetic highs would not draw). */
+    if (dx > vw.vc + (vw.nLon - vw.vc) / 2) dx -= vw.nLon;
     return mapX + dx * (mapW / vw.vc);
   }
   function scanSY(vw, mapY, mapH, dr) { return mapY + (dr - vw.row0) * (mapH / vw.vr); }
@@ -7587,8 +7989,11 @@
         ru = (rx + 0.5) / n * 2 - 1; rv = (ry + 0.5) / n * 2 - 1;
         rb = Math.min(RB - 1, Math.floor(Math.sqrt(ru * ru + rv * rv) * RB));
         var ref = rN[rb] > 0 ? rSum[rb] / rN[rb] : 0;
-        lat[ri] = Math.max(0, sl.anom[ri] - ref);
-        if (lat[ri] > aHi) aHi = lat[ri];
+        /* SIGNED (planetary interiors slice 2): a low - buried ice, salt,
+         * mass that is not there - is kept, not clipped to nothing, and
+         * drawn cold below. Both scaled to the larger of the two. */
+        lat[ri] = sl.anom[ri] - ref;
+        if (Math.abs(lat[ri]) > aHi) aHi = Math.abs(lat[ri]);
       }
     }
 
@@ -7600,11 +8005,14 @@
         if (isNaN(sl.g[k])) { d[o + 3] = 0; continue; }
         var ink = gravWellInk((sl.g[k] - gLo) / (gHi - gLo));
         /* The anomaly, on its own scale, added as heat. */
-        var a = aHi > 0 ? lat[k] / aHi : 0;
-        a = Math.pow(Math.max(0, a), 0.6);
-        d[o]     = Math.min(255, ink[0] + Math.round(230 * a));
-        d[o + 1] = Math.min(255, ink[1] + Math.round(150 * a * a));
-        d[o + 2] = Math.min(255, ink[2] - Math.round(60 * a));
+        var sa = aHi > 0 ? lat[k] / aHi : 0;
+        var a = Math.pow(Math.max(0, sa), 0.6);
+        /* A low goes cold: violet into the blue, the well darkened under
+         * it - the opposite of the warm heat a dense body raises. */
+        var lo = Math.pow(Math.max(0, -sa), 0.6);
+        d[o]     = Math.max(0, Math.min(255, ink[0] + Math.round(230 * a) + Math.round(70 * lo)));
+        d[o + 1] = Math.max(0, Math.min(255, ink[1] + Math.round(150 * a * a) - Math.round(90 * lo)));
+        d[o + 2] = Math.max(0, Math.min(255, ink[2] - Math.round(60 * a) + Math.round(110 * lo)));
         d[o + 3] = 255;
       }
     }
@@ -7725,7 +8133,9 @@
       ctx.strokeStyle = 'rgba(0,0,0,' + (a2 * 0.75).toFixed(2) + ')';
       ctx.lineWidth = hot2 ? 4.5 : 3.5;
       ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
-      ctx.strokeStyle = hot2 ? 'rgba(255,186,110,' + a2.toFixed(2) + ')'
+      /* A low (slice 2) rings cold, as it is drawn cold on the disc. */
+      ctx.strokeStyle = c.low ? 'rgba(176,156,255,' + a2.toFixed(2) + ')'
+                      : hot2 ? 'rgba(255,186,110,' + a2.toFixed(2) + ')'
                              : 'rgba(190,225,245,' + (a2 * 0.85).toFixed(2) + ')';
       ctx.lineWidth = hot2 ? 2.2 : 1.5;
       ctx.beginPath(); ctx.arc(mx, my, hot2 ? 7 : 5, 0, Math.PI * 2); ctx.stroke();
@@ -7779,7 +8189,11 @@
       cy2 += 15;
       ctx.fillStyle = cc.explained ? MFD_DIM : '#ffb978';
       var head = (cc.explained ? '  ' : '! ') +
-                 (cc.kind === 'buried' ? 'buried' : cc.kind === 'fissile' ? 'hotspot' : 'province');
+                 /* Ice and salt are "buried" like any body no spectrometer
+                  * sees: the reading says low, the name is the player's
+                  * to put on it (Astra's decision 2). */
+                 (cc.kind === 'buried' || cc.kind === 'ice' || cc.kind === 'salt' ? 'buried'
+                  : cc.kind === 'fissile' ? 'hotspot' : 'province');
       ctx.fillText(head, pxl, cy2);
       ctx.fillStyle = cc.explained ? 'rgba(140,170,195,0.8)' : '#e8d8b8';
       var line = Gr.describe(cc);
@@ -7798,8 +8212,18 @@
     }
     if (!contacts.length) {
       ctx.fillStyle = MFD_DIM;
-      ctx.fillText('Nothing over ' + res.mgal + ' mGal. A finer instrument would', pxl, cy2 + 16);
-      ctx.fillText('read deeper into the same rock.', pxl, cy2 + 30);
+      /* A giant (slice 2) has no rock to hold a lump, and the top grade has
+       * nothing finer to recommend: say what is true for each. */
+      if (Gr.isGiant && Gr.isGiant(body)) {
+        ctx.fillText('No rock here to hold a lump: a giant is gas and', pxl, cy2 + 16);
+        ctx.fillText('ice over a core. Only the well itself reads.', pxl, cy2 + 30);
+      } else if (lvl >= 4) {
+        ctx.fillText('Nothing over ' + res.mgal + ' mGal. This rock is quiet,', pxl, cy2 + 16);
+        ctx.fillText('as far down as any instrument can read.', pxl, cy2 + 30);
+      } else {
+        ctx.fillText('Nothing over ' + res.mgal + ' mGal. A finer instrument would', pxl, cy2 + 16);
+        ctx.fillText('read deeper into the same rock.', pxl, cy2 + 30);
+      }
     }
     ctx.restore();
 
@@ -7807,7 +8231,233 @@
     ctx.save();
     ctx.font = 'italic 10px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(255,185,120,0.75)';
-    ctx.fillText('! something heavy your survey kit cannot name', pxl, bottom - 34);
+    /* Not "heavy" any more (slice 2): a low is mass that is missing. */
+    ctx.fillText('! something your survey kit cannot name - a high is mass, a low is mass missing', pxl, bottom - 34);
+    ctx.restore();
+    return true;
+  }
+
+  /* ---- THE INTERIOR CUTAWAY (planetary interiors slice 4, 2026-11-22) ----
+   * Astra's decision 6: a picture of the ROCK, its own layer, apart from
+   * the gravity slice (which is a picture of the field). It draws
+   * Interior.measured - only what the kit aboard can tell apart - never
+   * the true interior: bands the instruments cannot separate are one
+   * band, and a world nothing has read is "unmeasured", hatched. Edges
+   * are as soft as the grade places them. Contacts from the gravimeter
+   * and the magnetometer sit at the depths they were read at, on the
+   * same XY / YZ / ZX cuts as the gravity slice. Thin layers are drawn at
+   * least INT_MIN_PX thick, or a 35 km crust would be under a pixel. */
+  var INT_INK = {
+    unknown: '#161e25', rock: '#6e5c4a', crust: '#b08f64', mantle: '#8c4c2c', magma: '#d4602c',
+    lid: '#93bdd2', shell: '#d2e8f4', ocean: '#2c6aa8', core: '#c78a3c', outer: '#e99a36',
+    inner: '#f6dc8c', envelope: '#486888', deep: '#6a5c9c'
+  };
+  var INT_MIN_PX = 3;
+  function drawInteriorLayer(ctx, w, top, bottom, T) {
+    var In = global.Interior, Gr = global.Gravity, Sv = global.Survey, Cb = global.Combat;
+    var ui = scanUI();
+    var gl = Cb && Cb.gravLevel ? Cb.gravLevel(G.ship) : 0;
+    var hasMag = Sv && Sv.magLevel ? Sv.magLevel(G.ship) > 0 : false;
+    ctx.save();
+    ctx.font = 'bold 13px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    if (!In || !In.measured) { ctx.restore(); return false; }
+    if (!gl && !hasMag) {
+      ctx.fillText('NO INSTRUMENT THAT READS INSIDE — a gravimeter finds the layers, a magnetometer what moves in them.', 16, top + 36);
+      ctx.fillText('A spectrometer sees only the surface.', 16, top + 56);
+      ctx.restore();
+      return true;
+    }
+    if (!T || !T.body) { ctx.fillText('Lock a world, or orbit one.', 16, top + 36); ctx.restore(); return true; }
+    ctx.restore();
+
+    var body = T.body, sys = G.sys, rec = T.rec;
+    var plane = ui.plane || 'xy';
+    var svl = Sv && Sv.level ? Sv.level(G.ship) : 0;
+    var mm = Sv && Sv.magMap ? Sv.magMap(body, sys) : null;
+    var kit = { grav: gl, mag: hasMag, covM: rec && rec.covM ? rec.covM : 0, dipole: !!(mm && mm.dipole) };
+    var M = In.measured(body, sys, kit);
+    var panelW = 340, pad = 14, discY = top + 62;
+    var disc = Math.max(240, Math.min(w - panelW - pad * 3 - 44, bottom - discY - 78));
+    var discX = 44, cxm = discX + disc / 2, cym = discY + disc / 2, Rpx = disc / 2;
+
+    ctx.save();
+    ctx.font = 'bold 15px ui-monospace, monospace';
+    ctx.fillStyle = '#b4f0ff';
+    ctx.fillText((body.name || '?').toUpperCase() + '  —  INTERIOR', discX, top + 26);
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText((gl ? 'GRAVIMETER GRADE ' + gl + ' · depths to ±' + Math.round((In.REL_DEPTH[gl] || 0) * 100) + '%'
+                     : 'no gravimeter') + '   ·   ' +
+                 (hasMag ? 'MAGNETOMETER ' + Math.round(kit.covM * 100) + '% swept' + (M && !M.magOK ? ' (needs ' + Math.round(In.MAG_COV * 100) + '%)' : '')
+                         : 'no magnetometer'),
+                 discX, top + 44);
+    ctx.restore();
+    if (!M) {
+      ctx.save(); ctx.font = 'bold 13px ui-monospace, monospace'; ctx.fillStyle = '#5d8fa4';
+      ctx.fillText('This body has no interior to cut.', discX, discY + 20);
+      ctx.restore();
+      return true;
+    }
+
+    /* THE ROCK: concentric bands, the cut through the middle of a world of
+     * spherical shells being circles whatever the plane. One radial
+     * gradient, with each known edge spread over the grade's error. */
+    var bands = M.bands.map(function (b) {
+      return { g: b.g, to: b.to, from: b.from, label: b.label, b: b };
+    });
+    /* Thin layers drawn at least INT_MIN_PX thick, pushed inward. */
+    var minF = INT_MIN_PX / Rpx;
+    for (var bi = 0; bi < bands.length; bi++) {
+      var bb = bands[bi];
+      if (bi > 0) bb.to = Math.min(bb.to, bands[bi - 1].from);
+      if (bb.to - bb.from < minF && bb.from > 0) bb.from = Math.max(0, bb.to - minF);
+    }
+    ctx.save();
+    var grd = ctx.createRadialGradient(cxm, cym, 0, cxm, cym, Rpx);
+    var stops = [];
+    for (bi = bands.length - 1; bi >= 0; bi--) {          // centre outward
+      var bd = bands[bi], ink = INT_INK[bd.g] || INT_INK.unknown;
+      var soft = Math.min(0.5 * (bd.to - bd.from), M.blur * (1 - bd.from) * 0.5);
+      stops.push([bd.from + (bi === bands.length - 1 ? 0 : soft), ink]);
+      var softTop = Math.min(0.5 * (bd.to - bd.from), M.blur * (1 - bd.to) * 0.5);
+      stops.push([bd.to - (bi === 0 ? 0 : softTop), ink]);
+    }
+    var lastP = 0;
+    stops.forEach(function (s) { var p = Math.max(lastP, Math.min(1, s[0])); grd.addColorStop(p, s[1]); lastP = p; });
+    ctx.fillStyle = grd;
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx, 0, Math.PI * 2); ctx.fill();
+    /* Unmeasured is hatched, so it cannot be mistaken for a dark rock. */
+    bands.forEach(function (b2) {
+      if (b2.g !== 'unknown') return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.arc(cxm, cym, Rpx * b2.to, 0, Math.PI * 2);
+      if (b2.from > 0) ctx.arc(cxm, cym, Rpx * b2.from, 0, Math.PI * 2, true);
+      ctx.clip();
+      ctx.strokeStyle = 'rgba(120,150,170,0.18)'; ctx.lineWidth = 1;
+      for (var hx = -2 * disc; hx < disc; hx += 9) {        // from far enough left to reach the lower-left limb
+        ctx.beginPath(); ctx.moveTo(cxm + hx, cym - Rpx); ctx.lineTo(cxm + hx + 2 * Rpx, cym + Rpx); ctx.stroke();
+      }
+      ctx.restore();
+    });
+    /* THE CUT EDGE glows, as the other cutaways' do: this is a section. */
+    ctx.shadowColor = 'rgba(127,214,255,0.9)'; ctx.shadowBlur = 14;
+    ctx.strokeStyle = 'rgba(160,230,255,0.85)'; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.arc(cxm, cym, Rpx, 0, Math.PI * 2); ctx.stroke();
+    ctx.shadowBlur = 0;
+    /* The Curie depth, from the magnetometer: dashed. */
+    M.lines.forEach(function (L) {
+      ctx.strokeStyle = 'rgba(120,235,255,0.75)'; ctx.lineWidth = 1.2; ctx.setLineDash([5, 4]);
+      ctx.beginPath(); ctx.arc(cxm, cym, Rpx * Math.min(L.r, 1 - minF), 0, Math.PI * 2); ctx.stroke();
+      ctx.setLineDash([]);
+    });
+    ctx.restore();
+
+    /* THE AXES, as arrows (Astra prefers pointers). */
+    var AX = { xy: ['X', 'Y'], yz: ['Y', 'Z'], zx: ['Z', 'X'] }[plane] || ['X', 'Y'];
+    ctx.save();
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = '#5d8fa4';
+    ctx.fillText('→ ' + AX[0], discX + disc - 34, discY + disc / 2 - 6);
+    ctx.fillText('↑ ' + AX[1], discX + disc / 2 + 6, discY + 14);
+    ctx.restore();
+
+    /* THE CONTACTS at the depths they were read at; faint where the cut
+     * barely touches them. Gravity rings warm (violet for a low), the
+     * magnetometer's highs as cyan diamonds. */
+    var ax = Gr && Gr.PLANE_AXES ? (Gr.PLANE_AXES[plane] || Gr.PLANE_AXES.xy) : [0, 1, 2];
+    var R = body.radius || 1;
+    function place(lat, lon, depthKm) {
+      var v = [Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)];
+      var rr = Math.max(0.03, 1 - depthKm / R);
+      return { x: cxm + v[ax[0]] * rr * Rpx, y: cym - v[ax[1]] * rr * Rpx,
+               a: Math.max(0.12, 1 - Math.abs(v[ax[2]]) * 1.35) };
+    }
+    var gcs = gl && Gr && Gr.contacts ? Gr.contacts(body, sys, gl, svl) : [];
+    var mcs = hasMag && Sv.magContacts ? Sv.magContacts(body, sys, rec, svl) : [];
+    ctx.save();
+    gcs.forEach(function (c) {
+      var p = place(c.lat, c.lon, (c.depthKm != null ? c.depthKm : 2) + (c.radKm || 10));
+      ctx.strokeStyle = 'rgba(0,0,0,' + (p.a * 0.7).toFixed(2) + ')'; ctx.lineWidth = 4;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.strokeStyle = (c.low ? 'rgba(176,156,255,' : 'rgba(255,186,110,') + p.a.toFixed(2) + ')'; ctx.lineWidth = 1.8;
+      ctx.beginPath(); ctx.arc(p.x, p.y, 6, 0, Math.PI * 2); ctx.stroke();
+    });
+    mcs.forEach(function (c) {
+      if (c.broad) return;                                  // shallow and spread: the map shows it, not a section
+      var p = place(c.lat, c.lon, c.depthKm || 0);
+      ctx.fillStyle = 'rgba(0,0,0,' + (p.a * 0.6).toFixed(2) + ')';
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - 7); ctx.lineTo(p.x + 7, p.y); ctx.lineTo(p.x, p.y + 7); ctx.lineTo(p.x - 7, p.y); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle = 'rgba(120,235,255,' + p.a.toFixed(2) + ')'; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y - 5); ctx.lineTo(p.x + 5, p.y); ctx.lineTo(p.x, p.y + 5); ctx.lineTo(p.x - 5, p.y); ctx.closePath(); ctx.stroke();
+    });
+    ctx.restore();
+
+    /* ---- THE PANEL: the plane, what is measured, what is inferred ---- */
+    var pxl = discX + disc + pad * 2, pw2 = Math.max(240, w - pxl - pad), py2 = discY;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('SLICE', pxl, py2);
+    ctx.restore();
+    var bx2 = pxl, by2 = py2 + 8;
+    ['xy', 'yz', 'zx'].forEach(function (p) {
+      btn(ctx, bx2, by2, 52, 22, p.toUpperCase(), function () { scanUI().plane = p; }, { hot: plane === p, bold: true, font: 10 });
+      bx2 += 56;
+    });
+    var y = by2 + 44;
+    ctx.save();
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('LAYERS, AS MEASURED', pxl, y);
+    ctx.font = '10px ui-monospace, monospace';
+    M.bands.forEach(function (b) {
+      y += 17;
+      ctx.fillStyle = INT_INK[b.g] || INT_INK.unknown;
+      ctx.fillRect(pxl, y - 9, 12, 10);
+      ctx.strokeStyle = 'rgba(160,200,220,0.4)'; ctx.strokeRect(pxl + 0.5, y - 8.5, 11, 9);
+      ctx.fillStyle = b.g === 'unknown' ? MFD_DIM : '#cfeaf4';
+      ctx.fillText(clipText(b.label, 30), pxl + 20, y);
+      ctx.fillStyle = MFD_DIM;
+      var rng = b.g === 'unknown' ? '' :
+        (b.topKm ? b.topKm.toLocaleString() + (b.topErr ? '±' + b.topErr : '') : 'surface') + ' – ' +
+        (b.from <= 1e-9 ? 'centre' : b.botKm.toLocaleString() + (b.botErr ? '±' + b.botErr : '') + ' km');
+      ctx.fillText(rng, pxl + 236, y);
+    });
+    if (M.lines.length || M.notes.length) {
+      y += 26;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      ctx.fillStyle = '#7fd6c0';
+      ctx.fillText('FROM THE FIELD', pxl, y);
+      ctx.font = '10px ui-monospace, monospace';
+      M.lines.forEach(function (L) {
+        y += 15; ctx.fillStyle = 'rgba(120,235,255,0.9)';
+        ctx.fillText('- - ' + L.name + ' about ' + L.km + ' km: ' + L.how, pxl, y);
+      });
+      M.notes.forEach(function (n) { y += 15; ctx.fillStyle = '#cfeaf4'; ctx.fillText(clipText(n, 52), pxl, y); });
+    }
+    y += 26;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    ctx.fillStyle = '#7fd6c0';
+    ctx.fillText('ON THE CUT', pxl, y);
+    ctx.font = '10px ui-monospace, monospace';
+    y += 15; ctx.fillStyle = 'rgba(255,186,110,0.9)';
+    ctx.fillText('○ ' + gcs.length + ' gravity contact' + (gcs.length === 1 ? '' : 's') + (gl ? '' : ' (no gravimeter)'), pxl, y);
+    var nb = mcs.filter(function (c) { return !c.broad; }).length;
+    y += 15; ctx.fillStyle = 'rgba(120,235,255,0.9)';
+    ctx.fillText('◇ ' + nb + ' buried magnetic high' + (nb === 1 ? '' : 's') + (hasMag ? '' : ' (no magnetometer)'), pxl, y);
+    if (M.next && y < bottom - 80) {
+      y += 26; ctx.font = 'italic 10px ui-monospace, monospace'; ctx.fillStyle = MFD_DIM;
+      ctx.fillText(clipText('better kit: ' + M.next, 60), pxl, y);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    ctx.fillStyle = MFD_DIM;
+    ctx.fillText('a picture of the rock, as far as your instruments can tell it apart   ·   hatched: unmeasured   ·   thin layers drawn ' +
+                 INT_MIN_PX + ' px at least', discX, discY + disc + 15);
     ctx.restore();
     return true;
   }
@@ -7818,13 +8468,14 @@
     btn(ctx, bx, by, 80, 22, 'RESOURCES', function () { ui.layer = 'res'; }, { hot: ui.layer === 'res', bold: true, font: 10 }); bx += 84;
     btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
     btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
-    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 });
+    btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 }); bx += 70;
+    btn(ctx, bx, by, 74, 22, 'INTERIOR', function () { ui.layer = 'int'; }, { hot: ui.layer === 'int', bold: true, font: 10 });
   }
 
   function drawScannerScreen(ctx, w, bottom) {
     var Sv = global.Survey, ui = scanUI();
     var top = modeFrame(ctx, w, bottom, 'PLANETARY SCANNER',
-                        'R/M/B/G layer  ·  1/2/3 slice plane  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
+                        'R/M/B/G/I layer  ·  V surface  ·  O globe  ·  1/2/3 slice plane  ·  S style  ·  T sweep  ·  wheel or +/- zoom  ·  arrows pan  ·  D drone  ·  F1 back');
     var lvl = Sv ? Sv.level(G.ship) : 0;
     var hasMag = Sv && Sv.magLevel ? Sv.magLevel(G.ship) > 0 : false;
     /* THE GRAVITY LAYER IS A DIFFERENT PICTURE. The others are a lat/lon map
@@ -7835,6 +8486,12 @@
     if (ui.layer === 'grav') {
       var gT = scannerTarget();
       if (drawGravityLayer(ctx, w, top, bottom, gT)) { drawScanLayerButtons(ctx, w, bottom, ui); return; }
+    }
+    /* The cutaway, likewise its own page: a gravimeter or a magnetometer
+     * alone is enough to open it, each saying what the other would add. */
+    if (ui.layer === 'int') {
+      var iT = scannerTarget();
+      if (drawInteriorLayer(ctx, w, top, bottom, iT)) { drawScanLayerButtons(ctx, w, bottom, ui); return; }
     }
     var T = Sv && (lvl || hasMag) ? scannerTarget() : null;
     ctx.save();
@@ -7901,6 +8558,8 @@
     btn(ctx, bx, by, 74, 22, 'MAGNETIC', function () { ui.layer = 'mag'; }, { hot: ui.layer === 'mag', bold: true, font: 10 }); bx += 78;
     btn(ctx, bx, by, 48, 22, 'BOTH', function () { ui.layer = 'both'; }, { hot: ui.layer === 'both', bold: true, font: 10 }); bx += 54;
     btn(ctx, bx, by, 66, 22, 'GRAVITY', function () { ui.layer = 'grav'; }, { hot: ui.layer === 'grav', bold: true, font: 10 }); bx += 70;
+    btn(ctx, bx, by, 74, 22, 'INTERIOR', function () { ui.layer = 'int'; }, { hot: ui.layer === 'int', bold: true, font: 10 }); bx += 78;
+    btn(ctx, bx, by, 62, 22, ui.globe ? 'GLOBE' : 'FLAT', function () { ui.globe = !ui.globe; }, { hot: !!ui.globe, bold: true, font: 10 }); bx += 66;
     btn(ctx, bx, by, 86, 22, 'STYLE ' + SCAN_STYLES[ui.style | 0], function () { ui.style = ((ui.style | 0) + 1) % SCAN_STYLES.length; }, { bold: true, font: 10 }); bx += 90;
     btn(ctx, bx, by, 94, 22, 'SWEEP ' + SWEEPS[ui.sweep | 0], function () { ui.sweep = ((ui.sweep | 0) + 1) % SWEEPS.length; }, { bold: true, font: 10 }); bx += 98;
     btn(ctx, bx, by, 58, 22, 'ZOOM ' + vw.z + 'x', function () { scanZoom(1); }, { hot: vw.z > 1, bold: true, font: 10 }); bx += 62;
@@ -7911,6 +8570,25 @@
     /* the map: smoothed for RADAR, hard cells otherwise. The source window
      * can straddle the seam, so it goes down in two pieces. */
     var pic = scanPicture(Sv, T, ui, lvl, hasMag);
+    /* THE GLOBE (Astra, 2026-11-22: "wrap the gridmap onto a globe"). The
+     * flat map, with everything drawn on it - readouts, surface, glyphs,
+     * rings, drones, the ground track, the ship - is drawn whole, at 1x,
+     * into an offscreen canvas instead of onto the screen, and then that
+     * canvas is wrapped onto a sphere (scanGlobeBlit). So the globe can
+     * never show something the map does not, or miss something it does.
+     * The screen's own map rectangle is put back afterwards for the strip
+     * and the hover readout, which the globe answers by projecting back. */
+    var glb = !!ui.globe, realCtx = ctx, real = null;
+    if (glb) {
+      real = { mapX: mapX, mapY: mapY, mapW: mapW, mapH: mapH, vw: vw, cw: cw, ch: ch };
+      var GT = scanGlobeTex(nLon * GLOBE_TEX_K, nLat * GLOBE_TEX_K);
+      ctx = GT.ctx;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#070e14'; ctx.fillRect(0, 0, GT.w, GT.h);
+      mapX = 0; mapY = 0; mapW = GT.w; mapH = GT.h;
+      vw = { z: 1, vc: nLon, vr: nLat, col0: 0, row0: 0, nLon: nLon, nLat: nLat };
+      cw = mapW / nLon; ch = mapH / nLat;
+    }
     ctx.save();
     ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
     ctx.imageSmoothingEnabled = (ui.style | 0) === 0;
@@ -7928,19 +8606,21 @@
     /* graticule: every 30 degrees at 1x, finer as you go in */
     var step = vw.z >= 8 ? 5 : vw.z >= 4 ? 10 : vw.z >= 2 ? 15 : 30;
     ctx.font = '10px ui-monospace, monospace';
-    ctx.strokeStyle = 'rgba(120,190,220,0.14)';
-    ctx.lineWidth = 1;
+    /* Dark under, pale over (scanHalo): one of the two always reads, from
+     * the dark teal ground to the white-hot end of the scale. Kept faint -
+     * a grid is a ruler, not a feature. */
     var gLab = [];
+    var gridCol = 'rgba(225,240,250,0.42)', gridHalo = 0.38;
     for (var gi = 0; gi < 360; gi += step) {
       var gpx = sxc(gi);
       if (gpx < mapX - 1 || gpx > mapX + mapW + 1) continue;
-      ctx.beginPath(); ctx.moveTo(gpx, mapY); ctx.lineTo(gpx, mapY + mapH); ctx.stroke();
+      scanHalo(ctx, function () { ctx.moveTo(gpx, mapY); ctx.lineTo(gpx, mapY + mapH); }, gridCol, 1, gridHalo);
       gLab.push([gpx, gi]);
     }
     for (var gy = -90 + step; gy < 90; gy += step) {
       var gpy = syr((90 - gy) * nLat / 180);
       if (gpy < mapY || gpy > mapY + mapH) continue;
-      ctx.beginPath(); ctx.moveTo(mapX, gpy); ctx.lineTo(mapX + mapW, gpy); ctx.stroke();
+      scanHalo(ctx, function () { ctx.moveTo(mapX, gpy); ctx.lineTo(mapX + mapW, gpy); }, gridCol, 1, gridHalo);
     }
     ctx.restore();
 
@@ -7954,6 +8634,27 @@
         if (fcid && dp0.cid !== fcid) continue;
         scanGlyph(ctx, dp0.cid, sxc(scanX(dp0.lo, flip, nLon) + 0.5), syr(nLat - 0.5 - dp0.la),
                   gsz, SCAN_INK[dp0.cid] || '#7dffb0');
+      }
+    }
+    /* THE MAGNETOMETER'S HIGHS (interiors slice 3), ringed where the list
+     * names them: warm for one nothing aboard explains, as on the gravity
+     * slice. A broad province gets a wide faint ring the size of its patch
+     * so it does not read as a pinpoint. */
+    if (ui.layer !== 'res' && hasMag && rec && Sv.magContacts) {
+      var mcs0 = Sv.magContacts(body, G.sys, rec, lvl);
+      for (var mi = 0; mi < mcs0.length; mi++) {
+        var mc0 = mcs0[mi], MX = sxLon(mc0.lon), MY = syLat(mc0.lat);
+        var mcol = mc0.explained ? 'rgba(190,225,245,0.85)' : 'rgba(255,186,110,0.95)';
+        scanHalo(ctx, function () { ctx.arc(MX, MY, 6, 0, 6.2832); }, mcol, mc0.explained ? 1.4 : 2);
+        if (mc0.broad) {
+          var rpx = Math.max(10, (mc0.widthKm / 2) / (2 * Math.PI * (body.radius || 1)) * nLon * cw);
+          ctx.save(); ctx.setLineDash([3, 4]);
+          /* Wider east-west toward the poles, as the patch itself is on
+           * this projection: a circle there would undersell it. */
+          var rpxX = rpx / Math.max(0.2, Math.cos(mc0.lat));
+          scanHalo(ctx, function () { ctx.ellipse(MX, MY, rpxX, rpx, 0, 0, 6.2832); }, mcol, 1);
+          ctx.restore();
+        }
       }
     }
 
@@ -7973,14 +8674,18 @@
           var X = sxLon(pts[i][1]), Y = syLat(pts[i][0]);
           var ok = cellsM[cl];
           if (ok && pen && Math.abs(X - px0) < mapW * 0.5) {
-            ctx.beginPath(); ctx.moveTo(px0, py0); ctx.lineTo(X, Y); ctx.stroke();
+            (function (ax, ay, bx2, by2) {
+              scanHalo(ctx, function () { ctx.moveTo(ax, ay); ctx.lineTo(bx2, by2); }, 'rgba(235,245,255,0.85)', 1.1, 0.6);
+            })(px0, py0, X, Y);
             if (i === mid) {
               var ang = Math.atan2(Y - py0, X - px0);
               ctx.beginPath();
               ctx.moveTo(X, Y);
               ctx.lineTo(X - 7 * Math.cos(ang - 0.45), Y - 7 * Math.sin(ang - 0.45));
               ctx.lineTo(X - 7 * Math.cos(ang + 0.45), Y - 7 * Math.sin(ang + 0.45));
-              ctx.closePath(); ctx.fill();
+              ctx.closePath();
+              ctx.save(); ctx.strokeStyle = 'rgba(2,8,12,0.75)'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+              ctx.fill();
             }
           }
           pen = !!ok; px0 = X; py0 = Y;
@@ -7989,11 +8694,9 @@
       fl.poles.forEach(function (pl, n) {
         if (!cellsM[Sv.cellOfLatLon(pl[0], pl[1])]) return;
         var X = sxLon(pl[1]), Y = syLat(pl[0]);
-        ctx.strokeStyle = n === 0 ? '#ff7a4a' : '#5fb4ff';
-        ctx.lineWidth = 2;
-        ctx.beginPath(); ctx.arc(X, Y, 5, 0, 6.2832); ctx.stroke();
-        ctx.fillStyle = ctx.strokeStyle;
-        ctx.fillText(n === 0 ? 'N' : 'S', X + 8, Y + 4);
+        var pcol = n === 0 ? '#ff7a4a' : '#5fb4ff';
+        scanHalo(ctx, function () { ctx.arc(X, Y, 5, 0, 6.2832); }, pcol, 2);
+        scanText(ctx, n === 0 ? 'N' : 'S', X + 8, Y + 4, pcol);
       });
     }
 
@@ -8007,8 +8710,10 @@
         var tc = trk[ti];
         var TX = sxc(scanX(tc % nLon, flip, nLon) + 0.5), TY = syr(nLat - 0.5 - Math.floor(tc / nLon));
         if (prevX !== null && Math.abs(TX - prevX) < mapW * 0.4 && Math.abs(TY - prevY) < mapH * 0.5) {
-          ctx.strokeStyle = 'rgba(255,255,255,' + (0.12 + 0.75 * ti / nT).toFixed(2) + ')';
-          ctx.beginPath(); ctx.moveTo(prevX, prevY); ctx.lineTo(TX, TY); ctx.stroke();
+          (function (ax, ay, bx2, by2, a) {
+            scanHalo(ctx, function () { ctx.moveTo(ax, ay); ctx.lineTo(bx2, by2); },
+                     'rgba(255,255,255,' + a.toFixed(2) + ')', 2, a * 0.8);
+          })(prevX, prevY, TX, TY, 0.12 + 0.75 * ti / nT);
           if (ti % 70 === 0 || ti === nT - 1) {
             var ta = Math.atan2(TY - prevY, TX - prevX);
             ctx.fillStyle = 'rgba(255,255,255,' + (0.3 + 0.7 * ti / nT).toFixed(2) + ')';
@@ -8016,7 +8721,9 @@
             ctx.moveTo(TX + 5 * Math.cos(ta), TY + 5 * Math.sin(ta));
             ctx.lineTo(TX - 5 * Math.cos(ta - 0.6), TY - 5 * Math.sin(ta - 0.6));
             ctx.lineTo(TX - 5 * Math.cos(ta + 0.6), TY - 5 * Math.sin(ta + 0.6));
-            ctx.closePath(); ctx.fill();
+            ctx.closePath();
+            ctx.save(); ctx.strokeStyle = 'rgba(2,8,12,0.75)'; ctx.lineWidth = 2.5; ctx.lineJoin = 'round'; ctx.stroke(); ctx.restore();
+            ctx.fill();
           }
         }
         prevX = TX; prevY = TY;
@@ -8039,10 +8746,8 @@
     }
     function droneMark(cell, col) {
       var X = sxc(scanX(cell % nLon, flip, nLon) + 0.5), Y = syr(nLat - 0.5 - Math.floor(cell / nLon));
-      ctx.strokeStyle = col; ctx.lineWidth = 2;
-      ctx.beginPath(); ctx.arc(X, Y, 6, 0, 6.2832); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(X - 3, Y); ctx.lineTo(X + 3, Y);
-      ctx.moveTo(X, Y - 3); ctx.lineTo(X, Y + 3); ctx.stroke();
+      scanHalo(ctx, function () { ctx.arc(X, Y, 6, 0, 6.2832); }, col, 2);
+      scanHalo(ctx, function () { ctx.moveTo(X - 3, Y); ctx.lineTo(X + 3, Y); ctx.moveTo(X, Y - 3); ctx.lineTo(X, Y + 3); }, col, 2);
     }
     theirs.forEach(function (c) { droneMark(c, '#ff9f7a'); });
     mine.forEach(function (c) { droneMark(c, '#7dffb0'); });
@@ -8052,13 +8757,29 @@
     if (opM) {
       var oc = Sv.cellOfLatLon(opM.at.lat, opM.at.lon);
       var OX = sxc(scanX(oc % nLon, flip, nLon) + 0.5), OY = syr(nLat - 0.5 - Math.floor(oc / nLon));
-      ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 2.5;
-      if (!OpM.standing(opM, G.t)) ctx.setLineDash([5, 4]);
-      ctx.strokeRect(OX - 15, OY - 15, 30, 30);
+      var dashed = !OpM.standing(opM, G.t);
+      scanHalo(ctx, function () {
+        if (dashed) ctx.setLineDash([5, 4]);
+        ctx.rect(OX - 15, OY - 15, 30, 30);
+      }, '#ffd36b', 2.5);
       ctx.setLineDash([]);
       ctx.font = 'bold 10px ui-monospace, monospace';
-      ctx.fillStyle = '#ffd36b';
-      ctx.fillText('OUTPOST', OX + 19, OY + 4);
+      scanText(ctx, 'OUTPOST', OX + 19, OY + 4, '#ffd36b');
+    }
+    /* The world's own drilling teams at work here (digs.js): a diamond on
+     * the dig's cell and how far through it is. */
+    var DgM = global.Digs;
+    if (DgM && Sv.cellOfLatLon && T.body) {
+      DgM.active(G, G.sys, (G.here && G.here.id) || G.sys.starId, G.t).forEach(function (dg) {
+        if (dg.body !== T.body.id) return;
+        var dc = Sv.cellOfLatLon(dg.lat, dg.lon);
+        var DX = sxc(scanX(dc % nLon, flip, nLon) + 0.5), DY = syr(nLat - 0.5 - Math.floor(dc / nLon));
+        scanHalo(ctx, function () {
+          ctx.moveTo(DX, DY - 12); ctx.lineTo(DX + 12, DY); ctx.lineTo(DX, DY + 12); ctx.lineTo(DX - 12, DY); ctx.closePath();
+        }, '#9fd8ff', 2.5);
+        ctx.font = 'bold 10px ui-monospace, monospace';
+        scanText(ctx, 'DIG ' + Math.floor(DgM.progress(G, dg, G.t) * 100) + '%', DX + 16, DY + 4, '#9fd8ff');
+      });
     }
 
     /* the ship */
@@ -8068,14 +8789,32 @@
         ctx.fillStyle = 'rgba(255,255,255,0.10)';
         ctx.fillRect(shx - cw * 1.5, mapY, cw * 3, mapH);
       }
-      ctx.strokeStyle = '#ffffff';
-      ctx.lineWidth = 1.5;
-      ctx.beginPath(); ctx.arc(shx, shy, 6, 0, 6.2832); ctx.stroke();
-      ctx.beginPath(); ctx.moveTo(shx - 10, shy); ctx.lineTo(shx + 10, shy);
-      ctx.moveTo(shx, shy - 10); ctx.lineTo(shx, shy + 10); ctx.stroke();
+      scanHalo(ctx, function () { ctx.arc(shx, shy, 6, 0, 6.2832); }, '#ffffff', 1.5);
+      scanHalo(ctx, function () {
+        ctx.moveTo(shx - 10, shy); ctx.lineTo(shx + 10, shy);
+        ctx.moveTo(shx, shy - 10); ctx.lineTo(shx, shy + 10);
+      }, '#ffffff', 1.5);
     }
     ctx.restore();
 
+    /* Back to the screen, and wrap what was just drawn onto the sphere. */
+    var globeV = null;
+    if (glb) {
+      ctx = realCtx;
+      mapX = real.mapX; mapY = real.mapY; mapW = real.mapW; mapH = real.mapH;
+      vw = real.vw; cw = real.cw; ch = real.ch;
+      globeV = scanGlobeView(ui, shipDisp, nLon, nLat, mapX, mapY, mapW, mapH);
+      scanGlobeBlit(ctx, scanGlobeTex(), globeV);
+      ctx.save();
+      ctx.font = '10px ui-monospace, monospace';
+      ctx.fillStyle = '#4f7d90';
+      ctx.fillText('GLOBE  ·  arrows turn it' + (ui.sweep === 2 ? '   ·   following the ship' : '') +
+                   '   ·   centre X ' + Math.round(globeV.yawDeg) + '  Y ' + (globeV.pitchDeg >= 0 ? '+' : '') +
+                   Math.round(globeV.pitchDeg), mapX, mapY + mapH + 26);
+      ctx.restore();
+    }
+
+    if (!glb) {
     ctx.save();
     ctx.strokeStyle = 'rgba(74,151,176,0.8)';
     ctx.lineWidth = 1;
@@ -8097,11 +8836,21 @@
     ctx.fillText('Y  latitude (deg)', -40, 0);
     ctx.restore();
     ctx.restore();
+    }
 
     /* hover readout, click to pin; x is always the true scan column */
     var hov = null;
     var cx = G.cursor.x, cy = G.cursor.y;
-    if (G.cursor.active && cx >= mapX && cx < mapX + mapW && cy >= mapY && cy < mapY + mapH) {
+    if (glb) {
+      /* On the globe: back through the projection to a cell, if the
+       * pointer is on the near face at all. */
+      var gpt = G.cursor.active ? scanGlobeUnproject(globeV, cx, cy) : null;
+      if (gpt) {
+        var gdc = Math.floor(gpt.u * nLon) % nLon, grow = Math.max(0, Math.min(nLat - 1, Math.floor(gpt.v * nLat)));
+        var glo = flip ? nLon - 1 - gdc : gdc, gla = nLat - 1 - grow;
+        hov = { lo: glo, la: gla, x: gdc, cell: gla * nLon + glo };
+      }
+    } else if (G.cursor.active && cx >= mapX && cx < mapX + mapW && cy >= mapY && cy < mapY + mapH) {
       var habs = Math.floor(((vw.col0 + (cx - mapX) / cw) % nLon + nLon) % nLon);
       var hrow = Math.floor(vw.row0 + (cy - mapY) / ch);
       var hlo = flip ? nLon - 1 - habs : habs, hla = nLat - 1 - Math.max(0, Math.min(nLat - 1, hrow));
@@ -8112,11 +8861,37 @@
       if (hov) ui.pin = { key: T.key, cell: hov.cell, x: hov.x };
     }, 'pin a reading');
     var show = hov || (pin ? { cell: pin.cell, x: pin.x, la: Math.floor(pin.cell / nLon), lo: pin.cell % nLon } : null);
-    if (show) {
+    if (show && glb) {
+      /* The selected point on the globe, if it is on the near face. */
+      var gsp = scanGlobeProject(globeV, (scanX(show.lo, flip, nLon) + 0.5) / nLon, (nLat - 1 - show.la + 0.5) / nLat);
+      if (gsp) {
+        ctx.save();
+        scanHalo(ctx, function () { ctx.rect(gsp.x - 7, gsp.y - 7, 14, 14); }, '#fff4c8', 1.5);
+        scanHalo(ctx, function () {
+          ctx.moveTo(gsp.x - 14, gsp.y); ctx.lineTo(gsp.x - 9, gsp.y);
+          ctx.moveTo(gsp.x + 9, gsp.y); ctx.lineTo(gsp.x + 14, gsp.y);
+          ctx.moveTo(gsp.x, gsp.y - 14); ctx.lineTo(gsp.x, gsp.y - 9);
+          ctx.moveTo(gsp.x, gsp.y + 9); ctx.lineTo(gsp.x, gsp.y + 14);
+        }, '#fff4c8', 1.5);
+        ctx.restore();
+      }
+    } else if (show) {
       ctx.save();
       ctx.beginPath(); ctx.rect(mapX, mapY, mapW, mapH); ctx.clip();
-      ctx.strokeStyle = '#ffd36b'; ctx.lineWidth = 1;
-      ctx.strokeRect(sxc(scanX(show.lo, flip, nLon)) - 2, syr(nLat - 1 - show.la) - 2, cw + 4, ch + 4);
+      /* THE SELECTED POINT: a box round the cell, never smaller than a
+       * fingertip (a cell is three pixels wide at 1x), and four ticks
+       * pointing in at it from outside, so it can be found at a glance on
+       * any colour - each drawn with its dark halo (scanHalo). Warm white
+       * rather than the old amber, which vanished on yellow ground. */
+      var selX = sxc(scanX(show.lo, flip, nLon)) + cw / 2, selY = syr(nLat - 1 - show.la) + ch / 2;
+      var hb = Math.max(cw, ch, 10) / 2 + 2, tick = 7;
+      scanHalo(ctx, function () { ctx.rect(selX - hb, selY - hb, hb * 2, hb * 2); }, '#fff4c8', 1.5);
+      scanHalo(ctx, function () {
+        ctx.moveTo(selX - hb - tick, selY); ctx.lineTo(selX - hb - 2, selY);
+        ctx.moveTo(selX + hb + 2, selY); ctx.lineTo(selX + hb + tick, selY);
+        ctx.moveTo(selX, selY - hb - tick); ctx.lineTo(selX, selY - hb - 2);
+        ctx.moveTo(selX, selY + hb + 2); ctx.lineTo(selX, selY + hb + tick);
+      }, '#fff4c8', 1.5);
       ctx.restore();
     }
 
@@ -8130,7 +8905,12 @@
       ctx.fillStyle = '#ffd36b';
       ctx.fillText('X ' + show.x + '   Y ' + (latDeg >= 0 ? '+' : '') + latDeg.toFixed(1) + '°', mapX, ry);
       var parts = [], gl = [];
-      if (rec && Sv.magRead(rec, show.cell)) parts.push('field ' + Sv.fieldAt(body, G.sys, show.cell).toFixed(2));
+      if (rec && Sv.magRead(rec, show.cell)) {
+        parts.push('field ' + Sv.fieldAt(body, G.sys, show.cell).toFixed(2));
+        /* The part of it that is the rock, not the core: what a prospector reads. */
+        var mmc = Sv.magMap(body, G.sys), an = mmc && mmc.anom ? mmc.anom[show.cell] * (Sv.NT_PER || 50000) : 0;
+        if (an >= 50) parts.push('+' + Math.round(an) + ' nT');
+      }
       else if (hasMag) parts.push('field: not read');
       if (cellsR && cellsR[show.cell]) {
         gl = Sv.groundAt(body, G.sys, show.cell).filter(function (g) {
@@ -8180,6 +8960,52 @@
                          Op.dronesOn(G, T.key).length + ' drones build it in about ' +
                          Math.round(Op.daysFor(Op.dronesOn(G, T.key).length)) + ' days',
                        mapX + 200, ry + 56);
+          /* THE DRILLING TEAM (outposts.js): your engineers set down at a
+           * standing outpost to dig it out into a port, or fetched back.
+           * Only from the ground there; the line says why not otherwise. */
+          if (opHere && Op.standing(opHere, G.t) && !opHere.port) {
+            var mineDown = Op.teamAboardBooks(G, opHere).length;
+            var fetch = mineDown > 0 && !Op.recallRefusal(G, G.sys, G.t);
+            var tWhy = fetch ? null : Op.postRefusal(G, G.sys, G.t);
+            btn(ctx, mapX, ry + 70, 190, 24, fetch ? 'FETCH THE TEAM BACK' : 'SET ENGINEERS DOWN TO DIG', function () {
+              var rr = fetch ? Op.recallTeam(G, G.sys, G.t) : Op.postTeam(G, G.sys, G.t, { say: say });
+              say(rr.ok ? rr.text : 'Drilling team: ' + rr.why, rr.ok ? 9 : 5);
+              if (rr.ok && global.Save) global.Save.store(G);
+            }, { bold: true, font: 11, disabled: !!tWhy });
+            ctx.font = 'bold 10px ui-monospace, monospace';
+            ctx.fillStyle = tWhy ? '#ff9f7a' : '#7dffb0';
+            var eN = Op.engineersAboard(G).length;
+            ctx.fillText(tWhy ? tWhy
+                         : fetch ? mineDown + ' of your crew down there'
+                         : eN + ' engineer' + (eN === 1 ? '' : 's') + ' aboard dig it out into a port of yours' +
+                           (!opHere.dig || !opHere.dig.paid
+                             ? '  ·  it eats ' + Op.DIG_STORES + ' t of structural alloys' +
+                               (global.Licence && global.Licence.needed && global.Licence.needed(G.sys) ? ', and needs a station licence' : '')
+                             : ''),
+                         mapX + 200, ry + 86);
+            /* THE DIG'S STORES: alloys hauled down and unloaded, or the
+             * Guild paid to bring the shortfall in. One button: unload when
+             * there are alloys in the hold, otherwise the contract. */
+            var hold = (G.ship && G.ship.cargo && G.ship.cargo[Op.STORE_GOOD]) || 0;
+            var needT = opHere.dig ? Op.storesNeeded(opHere, G.t) : Op.DIG_STORES;
+            if (needT > 0) {
+              var unload = hold > 0;
+              var sWhy = unload ? Op.unloadRefusal(G, G.sys, G.t) : Op.contractRefusal(G, G.sys, G.t);
+              var price = Op.contractPrice(needT);
+              btn(ctx, mapX, ry + 100, 190, 24,
+                  unload ? 'UNLOAD ALLOYS FOR THE DIG' : 'GUILD BRINGS STORES IN', function () {
+                var rs = unload ? Op.unloadStores(G, G.sys, G.t) : Op.contractStores(G, G.sys, G.t);
+                say(rs.ok ? rs.text : 'Stores: ' + rs.why, rs.ok ? 8 : 5);
+                if (rs.ok && global.Save) global.Save.store(G);
+              }, { bold: true, font: 11, disabled: !!sWhy });
+              ctx.font = 'bold 10px ui-monospace, monospace';
+              ctx.fillStyle = sWhy ? '#ff9f7a' : '#7dffb0';
+              ctx.fillText(sWhy ? sWhy
+                           : unload ? 'unload ' + Math.floor(Math.min(hold, needT)) + ' t  ·  dig wants ' + Math.ceil(needT) + ' t'
+                           : Math.ceil(needT) + ' t for ' + price.toLocaleString('en-US') + ' cr',
+                           mapX + 200, ry + 116);
+            }
+          }
         }
       }
     } else {
@@ -8198,7 +9024,13 @@
     ctx.font = 'bold 12px ui-monospace, monospace';
     var y = py2 + 20;
     ctx.fillStyle = '#5d8fa4';
-    ctx.fillText('LEGEND', px2 + 10, y); y += 8;
+    ctx.fillText('LEGEND', px2 + 10, y);
+    /* The surface under the readout (Astra, 2026-11-22: "a button on the
+     * side bar there to switch"). V does the same. */
+    btn(ctx, px2 + panelW - 168, py2 + 6, 158, 20, 'SURFACE: ' + SURFACE_MODES[ui.base | 0],
+        function () { ui.base = ((ui.base | 0) + 1) % SURFACE_MODES.length; },
+        { hot: (ui.base | 0) > 0, bold: true, font: 10 });
+    y += 8;
     ctx.font = 'bold 11px ui-monospace, monospace';
     Sv.CIDS.forEach(function (cid) {
       y += 17;
@@ -8240,7 +9072,51 @@
       ctx.fillText((mmx ? mmx.max : 0).toFixed(2), px2 + panelW - 10, y + 12);
       ctx.textAlign = 'left';
       y += 28;
-      if (mmx && !mmx.dipole) { ctx.fillText('no dipole: only ore-province anomalies', px2 + 10, y); y += 14; }
+      if (mmx && !mmx.dipole) { ctx.fillText('no dipole: only what the crust holds', px2 + 10, y); y += 14; }
+      if (mmx && mmx.remanence) { ctx.fillText('remanent crust: old field frozen in the rock', px2 + 10, y); y += 14; }
+    }
+
+    /* THE MAGNETIC LAYER LISTS WHAT THE COIL HEARD, where the others list
+     * deposits: the gravimeter's list has a sibling (interiors slice 3). */
+    if (ui.layer === 'mag' && hasMag) {
+      y += 14;
+      ctx.fillStyle = '#5d8fa4';
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      var mcs = Sv.magContacts ? Sv.magContacts(body, G.sys, rec, lvl) : [];
+      var mUn = mcs.filter(function (c) { return !c.explained; }).length;
+      ctx.fillText('MAGNETIC HIGHS  ' + mcs.length + (mUn ? '  ·  ' + mUn + ' unexplained' : ''), px2 + 10, y);
+      y += 6;
+      ctx.font = 'bold 11px ui-monospace, monospace';
+      if (!mcs.length) {
+        y += 14; ctx.fillStyle = '#4f7d90';
+        ctx.fillText(rec && rec.covM >= 0.05 ? 'nothing over ' + Sv.MAG_FLOOR_NT + ' nT read yet' : 'not enough mapped', px2 + 10, y);
+      }
+      var mRows = Math.max(2, Math.floor((bottom - 70 - y) / 28));
+      mcs.slice(0, mRows).forEach(function (mc) {
+        y += 16;
+        var mla = Math.floor(mc.cell / nLon), mlo = mc.cell % nLon;
+        var MXl = scanX(mlo, flip, nLon), MYl = mla - 89.5;
+        ctx.fillStyle = mc.explained ? '#9fc4d4' : '#ffb978';
+        ctx.fillText((mc.explained ? '  ' : '! ') + (mc.broad ? 'province' : 'buried'), px2 + 10, y);
+        ctx.fillStyle = '#7fd6c0';
+        ctx.fillText('X' + MXl + ' Y' + (MYl >= 0 ? '+' : '') + Math.round(MYl), px2 + 150, y);
+        y += 12;
+        ctx.fillStyle = mc.explained ? 'rgba(140,170,195,0.85)' : '#e8d8b8';
+        ctx.fillText(clipText(Sv.describeMag(mc), 40), px2 + 22, y - 1);
+        (function (d, la_, lo_) {
+          hot(px2 + 6, y - 28, panelW - 12, 30, function () {
+            ui.pin = { key: T.key, cell: d.cell, x: scanX(lo_, flip, nLon) };
+            ui.cx = scanX(lo_, flip, nLon) + 0.5;
+            ui.cy = nLat - 0.5 - la_;
+            if (ui.sweep === 2) ui.sweep = 1;
+          }, 'pin this high');
+        })(mc, mla, mlo);
+      });
+      ctx.font = 'italic 10px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(255,185,120,0.75)';
+      ctx.fillText('! a high your survey kit cannot name', px2 + 10, bottom - 26);
+      ctx.restore();
+      return;
     }
 
     y += 14;
@@ -8319,6 +9195,14 @@
   }
   function scanPan(dx, dy) {
     var Sv = global.Survey, ui = scanUI();
+    /* On the globe the arrows turn it, 15 degrees a press, pointer-wise:
+     * → brings the east round to face you, ↑ tips the north toward you. */
+    if (ui.globe && ui.layer !== 'grav' && ui.layer !== 'int') {
+      if (ui.sweep === 2) ui.sweep = 1;
+      ui.gYaw = ((ui.gYaw === undefined ? 180 : ui.gYaw) + dx * 15 + 360) % 360;
+      ui.gPitch = Math.max(-85, Math.min(85, (ui.gPitch === undefined ? 20 : ui.gPitch) - dy * 15));
+      return true;
+    }
     var z = ZOOMS[ui.zoom | 0] || 1;
     if (z === 1) return false;
     if (ui.sweep === 2) ui.sweep = 1;
@@ -8343,8 +9227,11 @@
     if (key === 'm') { ui.layer = 'mag'; return true; }
     if (key === 'b') { ui.layer = 'both'; return true; }
     if (key === 'g') { ui.layer = 'grav'; return true; }
-    /* The three principal cuts, while the slice is the layer showing. */
-    if (ui.layer === 'grav' && (key === '1' || key === '2' || key === '3')) {
+    if (key === 'i') { ui.layer = 'int'; return true; }
+    if (key === 'v') { ui.base = ((ui.base | 0) + 1) % SURFACE_MODES.length; return true; }
+    if (key === 'o') { ui.globe = !ui.globe; return true; }
+    /* The three principal cuts, while a slice is the layer showing. */
+    if ((ui.layer === 'grav' || ui.layer === 'int') && (key === '1' || key === '2' || key === '3')) {
       ui.plane = { '1': 'xy', '2': 'yz', '3': 'zx' }[key];
       return true;
     }
@@ -9988,6 +10875,7 @@
     bind: bind,
     draw: draw,
     scannerKey: scannerKey, scanMini: scanMini,
+    globeProject: scanGlobeProject, globeUnproject: scanGlobeUnproject,
     commsContacts: commsContacts, trackInk: trackInk, markAt: markAt, TRACK: TRACK,
     systemManifest: systemManifest, worldFacts: worldFacts,
     btn: btn,

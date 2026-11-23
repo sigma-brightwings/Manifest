@@ -145,6 +145,13 @@
   function buildRings(sys, base) {
     var rr = base.fork('rings');
     var planets = sys.root.children.filter(function (b) { return b.kind === 'planet'; });
+    /* And a distant companion's warm giant (generate.js, 2026-11-20): her
+     * own fork, keyed by id like every other, so no ring already drawn
+     * moves - and a ringed giant over a living moon is the postcard. */
+    (sys.stars || []).forEach(function (s) {
+      if (!s.distant) return;
+      (s.children || []).forEach(function (b) { if (b.kind === 'planet') planets.push(b); });
+    });
     for (var i = 0; i < planets.length; i++) {
       var p = planets[i];
       if (!isGiant(p)) continue;

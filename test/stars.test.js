@@ -52,7 +52,10 @@ var TIMES = [0, 86400 * 3.3, 3.7e7, 2.9e8];
 for (var s = 0; s < N; s++) {
   var st = gal.stars[s];
   var fac = gal.factionById ? gal.factionById[st.factionId] : null;
-  var sys = Gen.generateSystem(st.seed, fac ? { faction: fac, allFactions: gal.factions } : {});
+  /* noMultiples since stage 3 (2026-11-20): this section is the single-star
+   * guarantee, so it is held on single stars; test/multiples.test.js holds
+   * the systems that now have more than one. */
+  var sys = Gen.generateSystem(st.seed, fac ? { faction: fac, allFactions: gal.factions, noMultiples: true } : { noMultiples: true });
   if (!(sys.stars && sys.stars.length === 1 && sys.stars[0] === sys.root)) starsOK = false;
   if (Sim.starLabel(sys) !== sys.root.type || Sim.starLuminosity(sys) !== sys.root.luminosity) labelOK = false;
   for (var ti = 0; ti < TIMES.length; ti++) {

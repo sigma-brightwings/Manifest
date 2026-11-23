@@ -48,6 +48,7 @@
   var TRUST_BONUS = 15;           // standing their doors read you at, while paid
   var PRICE_EDGE = 0.05;          // 5% off what you buy, 5% on what you sell, at their ports
   var SUSPECT_SEARCH = 0.9;       // a suspected ship is searched at least this often
+  var PROTECTION_CUT = 0.03;      // what an independent port in a hold passes on (slice 5)
 
   function hash(s) {
     var R = global.RNG;
@@ -238,6 +239,19 @@
   /* A market row, as a port the Syndicate holds quotes it to a ship that
    * has paid. Returns a new row; the port's own book is not touched. */
   function adjustRow(G, sys, port, row, t) {
+    /* PROTECTION, PASSED ON (ship AI slice 5): an independent port in a
+     * hold pays the overboss's collectors like every independent hull
+     * does, and its prices carry it - a little dearer to buy from, a little
+     * meaner to sell to. Astra chose "both": live near you, and as prices
+     * and gossip everywhere else. */
+    if (row && port && held(sys) && (port.faction || '') !== 'outlaw' && !port.playerStation) {
+      var pr = {};
+      for (var pk in row) pr[pk] = row[pk];
+      if (typeof pr.buy === 'number' && pr.buy > 0) pr.buy = pr.buy * (1 + PROTECTION_CUT);
+      if (typeof pr.sell === 'number' && pr.sell > 0) pr.sell = pr.sell * (1 - PROTECTION_CUT);
+      pr.protection = true;
+      return pr;
+    }
     if (!row || !port || (port.faction || '') !== 'outlaw' || !paid(G, sys, t)) return row;
     var out = {};
     for (var k in row) out[k] = row[k];
@@ -257,7 +271,7 @@
 
   var Tithe = {
     PAID_DAYS: PAID_DAYS, SUSPECT_DAYS: SUSPECT_DAYS, SILENCE_S: SILENCE_S, TRUST_BONUS: TRUST_BONUS,
-    PRICE_EDGE: PRICE_EDGE, SUSPECT_SEARCH: SUSPECT_SEARCH, STANDING_GAIN: STANDING_GAIN,
+    PRICE_EDGE: PRICE_EDGE, SUSPECT_SEARCH: SUSPECT_SEARCH, STANDING_GAIN: STANDING_GAIN, PROTECTION_CUT: PROTECTION_CUT,
     held: held, quote: quote, owed: owed, status: status, paid: paid, suspected: suspected,
     onArrive: onArrive, tick: tick, pay: pay, haggle: haggle, canHaggle: canHaggle, refuse: refuse,
     standingBonus: standingBonus, adjustRow: adjustRow, channelNote: channelNote, bossName: bossName

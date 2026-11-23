@@ -465,7 +465,8 @@ console.log('--- an overcast from underneath ---');
    * ground (the edge-on shell the fade hides), and the ceiling fades into
    * its own mean toward the horizon rather than being drawn edge-on. */
   var src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
-  check('the painted deck stays off the ground below 3 km', /mask \*= smoothstep\(3\.0, 10\.0, sqrt\(dot\(oc, oc\)\) - uWorldRadius\)/.test(src));
+  check('the painted deck stays off the ground below 3 km', /float offG = uSkyA\.w > 0\.0 \? smoothstep\(3\.0, 10\.0, sqrt\(dot\(oc, oc\)\) - uWorldRadius\) : 1\.0;/.test(src) &&
+        /mask \*= offG;/.test(src) && /lowM = smoothstep\(cutL, cutL \+ [@A-Z0-9_.]+, lowF\) \* offG/.test(src));
   check('the ceiling goes to its mean toward the horizon', /float hz = smoothstep\(0\.10, 0\.40, e\);/.test(src) && /float op = mix\(cov, m, hz\)/.test(src));
   check('the ground, the sea, the meshes and the sun all read it',
         /if \(uSkyA\.w > 0\.0\) lam = lam \* uSkyC\.z \+ uSkyC\.w;/.test(src) &&
@@ -474,7 +475,198 @@ console.log('--- an overcast from underneath ---');
   var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
   check('main.js hands the ground sky Weather.overhead',
         /setGroundSky\(skyPort\.parentBody, skyGb\.up,\s*sunDirAt\(skyGb\.entrance\.pos\), overheadAt\(skyPort, skyGb\)\)/.test(msrc) &&
-        /Weather\.overhead\(port\.parentBody, gb\.up, G\.t\)/.test(msrc));
+        /* With the system since 2026-11-22: the climate needs the season,
+         * and the season needs where the star is. */
+        /Weather\.overhead\(port\.parentBody, gb\.up, G\.t, G\.sys\)/.test(msrc));
+})();
+
+/* ---- down through a storm (2026-11-22) -----------------------------------
+ * Astra: "if you go down through a storm, that should be obvious in the
+ * weather changing and the view going from clear to reduced visibility as
+ * the density of the cloud increases." The column's own profile first,
+ * pure numbers; then a real descent through Weather.aloft. */
+console.log('--- down through a storm ---');
+(function () {
+  var storm = { cloud: 1, thick: 1, storm: 1, low: 0 };
+  var span = W.deckSpan(storm);
+  var ladder = [];
+  for (var a = span.hi + 0.04; a >= 0; a -= 0.005) ladder.push({ a: a, c: W.column(storm, a) });
+  var peak = ladder.reduce(function (m, r) { return r.c.density > m.c.density ? r : m; });
+  var u = (peak.a - span.lo) / (span.hi - span.lo);
+  check('clear air above the anvil', ladder[0].c.density < 0.01, ladder[0].c.density.toFixed(3));
+  check('the heart of a storm is a wall', peak.c.density > 0.9 && peak.c.vis < 0.06,
+        'density ' + peak.c.density.toFixed(2) + ' vis ' + peak.c.vis.toFixed(3));
+  check('and it is low in the cloud, not at the top', u > 0.25 && u < 0.55, u.toFixed(2) + ' of the way up');
+  /* THE ONE THE FIRST CUT FAILED: it clipped a storm at 1 the whole way
+   * down, so 38 km and 7 km were the same grey. Graded means more than a
+   * handful of different values between top and heart. */
+  var topHalf = ladder.filter(function (r) { return r.a > peak.a && r.a < span.hi; });
+  var rising = topHalf.every(function (r, i) { return i === 0 || r.c.density >= topHalf[i - 1].c.density - 1e-9; });
+  var spread = topHalf.length ? topHalf[0].c.density : 1;
+  check('going down from the top it only thickens', rising);
+  check('and it starts thin', spread < 0.45, 'density near the top ' + spread.toFixed(2));
+  check('thinner again toward the base',
+        W.column(storm, span.lo + 0.1 * (span.hi - span.lo)).density < peak.c.density * 0.8);
+  check('out under the base it is clear to see', W.column(storm, span.lo * 0.5).density < 0.01);
+  var tauRise = ladder.every(function (r, i) { return i === 0 || r.c.tau >= ladder[i - 1].c.tau - 1e-9; });
+  check('and the cloud over you only grows as you descend', tauRise);
+  /* An ordinary deck is thinner than a storm at every height. */
+  var deck = { cloud: 1, thick: 1, storm: 0, low: 0 }, ds = W.deckSpan(deck);
+  var mid = (ds.lo + ds.hi) / 2;
+  check('an ordinary deck is less than a storm', W.column(deck, mid).density < W.column(storm, mid).density);
+  /* The low layer lives near the sea and nowhere else. */
+  var fog = { cloud: 0, thick: 0, storm: 0, low: 1 };
+  check('fog at the sea', W.column(fog, (W.LOW_BASE + W.LOW_TOP) / 2).density > 0.5);
+  check('and not up in the deck', W.column(fog, mid).density < 0.01);
+})();
+
+/* The same through aloft, on a real world: the stormiest daylit place. */
+(function () {
+  var sys = null, body = null;
+  [1, 2, 3, 4, 5, 6, 7, 8].some(function (sd) {
+    var s = Gen.generateSystem(sd);
+    var b = s.bodies.filter(function (x) { return x.type === 'terran' && x.atmosphere && x.atmosphere.cloud > 0.3; })[0];
+    if (b) { sys = s; body = b; return true; }
+    return false;
+  });
+  check('a terran world to storm on', !!body);
+  if (!body) return;
+  var t = 4000, st = Sim.bodyState(body, sys, t), air = body.atmosphere;
+  function pos(d, alt) {
+    return { pos: { x: st.pos.x + d.x * (body.radius + alt), y: st.pos.y + d.y * (body.radius + alt),
+                    z: st.pos.z + d.z * (body.radius + alt) } };
+  }
+  var dayBest = null, nightBest = null;
+  for (var i = 0; i < 3000; i++) {
+    var z = 1 - 2 * (i + 0.5) / 3000, r = Math.sqrt(1 - z * z), th = i * 2.39996;
+    var d = { x: r * Math.cos(th), y: r * Math.sin(th), z: z };
+    var w0 = W.aloft(pos(d, 1), sys, t);
+    if (!w0) continue;
+    var sc = w0.storm * w0.cloud;
+    if (w0.day > 0.9 && (!dayBest || sc > dayBest.s)) dayBest = { d: d, s: sc };
+    if (w0.day < 0.02 && (!nightBest || sc > nightBest.s)) nightBest = { d: d, s: sc };
+  }
+  check('a storm by day and a place by night', dayBest && dayBest.s > 0.5 && !!nightBest,
+        dayBest ? dayBest.s.toFixed(2) : 'none');
+  if (!dayBest) return;
+  var top = W.aloft(pos(dayBest.d, 1), sys, t).deckHi;
+  var seen = [], gl = [];
+  for (var f = 1.15; f >= 0.02; f -= 0.05) {
+    var w = W.aloft(pos(dayBest.d, top * f), sys, t);
+    seen.push(w.vis); gl.push(w.gloom);
+  }
+  var minVis = Math.min.apply(null, seen);
+  var levels = {};
+  seen.forEach(function (v) { levels[v.toFixed(2)] = 1; });
+  check('a descent starts and ends able to see', seen[0] > 0.95 && seen[seen.length - 1] > 0.95,
+        seen[0].toFixed(2) + ' ... ' + seen[seen.length - 1].toFixed(2));
+  check('and goes nearly blind in between', minVis < 0.12, minVis.toFixed(3));
+  check('through many shades, not a switch', Object.keys(levels).length >= 8, Object.keys(levels).length + ' distinct');
+  check('the light goes as you descend',
+        gl.every(function (g, i) { return i === 0 || g >= gl[i - 1] - 1e-9; }));
+  var above = W.aloft(pos(dayBest.d, top * 1.1), sys, t);
+  check('no rain above the anvil', above.rain < 0.01, above.rain.toFixed(3));
+  check('daylight by day', W.aloft(pos(dayBest.d, top * 0.5), sys, t).day > 0.9);
+  if (nightBest) check('and dark by night', W.aloft(pos(nightBest.d, top * 0.5), sys, t).day < 0.05);
+})();
+
+/* What the canopy and the picture are told to do with it. */
+(function () {
+  var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  var wf = msrc.slice(msrc.indexOf('function weatherFall('), msrc.indexOf('function weatherFall(') + 4000);
+  /* The glass leaves the context in 'lighter'; the wash and the murk must
+   * paint over the view, or they add to it and a storm goes white. */
+  check('the dark wash and the murk paint over, not add',
+        (wf.match(/globalCompositeOperation = 'source-over'/g) || []).length >= 2);
+  check('the murk is dark at night', /dayC = wx\.day !== undefined/.test(wf));
+  check('a paused strike does not hold the flash', /if \(G\.paused\) lit = 0;/.test(msrc));
+  /* The weather is outside the glass and the HUD on it: weather first. */
+  var gb = msrc.indexOf('Render.glassBegin(ctx, aperture);\n    /* THE WEATHER FIRST');
+  var gb2 = msrc.indexOf('Render.glassBegin(ctx, aperture);\r\n    /* THE WEATHER FIRST');
+  var at = gb >= 0 ? gb : gb2;
+  check('the weather goes on the glass before the instruments',
+        at >= 0 && msrc.indexOf('drawCanopyWeather(ctx, cam, w, h);', at) < msrc.indexOf('Render.drawAttitudeLadder(ctx, cam, G.ship', at));
+  var src = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'gl.js'), 'utf8');
+  check('the tops are lit by a look sunward', /float clS = fbm2\(cp \+ sT \* \(@SUN_EPS@ \* @CLOUD_SCALE@\)\) \+ \(cl - clv\.y\);/.test(src) &&
+        /float topLit = clamp\(1\.0 \+ \(cl - clS\) \* @TOP_SHADE@/.test(src));
+  check('the clouds cast shadows', /base \*= 1\.0 - 0\.38 \* maskS \* \(1\.0 - mask\)/.test(src));
+  check('thin edges let the ground through', /mask \* \(0\.55 \+ 0\.45 \* thick\)/.test(src));
+  check('the low layer is the same field the forecast reads',
+        /fbm2\(cp \* @LOW_SCALE@ \+ vec3\(@LOW_OFF@\)\) \* 1\.25/.test(src) &&
+        /fbm2\(cp\.x \* ls \+ K\.LOW_OFF, cp\.y \* ls \+ K\.LOW_OFF, cp\.z \* ls \+ K\.LOW_OFF\) \* 1\.25/.test(
+          require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'weather.js'), 'utf8')));
+})();
+
+/* ---- vapour off a hull (2026-11-22) --------------------------------------
+ * Astra: "contrails on ship leading tips / edges for control surfaces in
+ * atmosphere". Lift condenses wet air: it follows the PULL and the WET. */
+console.log('--- vapour off a hull ---');
+(function () {
+  var fast = 0.25, thick = 0.8, wet = 0.9, dry = 0.3;
+  var coast = W.vapourOf(0, wet, fast, thick);
+  check('coasting (free fall, no lift) lays nothing, however wet', coast.tip === 0 && coast.sheet === 0);
+  var wetPull = W.vapourOf(2.7, wet, fast, thick), dryPull = W.vapourOf(2.7, dry, fast, thick);
+  check('a hard pull in wet air streams the tips', wetPull.tip > 0.4, wetPull.tip.toFixed(2));
+  check('the same pull in dry air does not', dryPull.tip < 0.08, dryPull.tip.toFixed(3));
+  check('a gentle 1 g in wet air shows a little', W.vapourOf(1, wet, fast, thick).tip > 0.08);
+  check('the sheet over the hull wants a hard pull', W.vapourOf(1.5, wet, fast, thick).sheet === 0 &&
+        W.vapourOf(4, wet, fast, thick).sheet > 0.3);
+  check('more pull, more vapour', W.vapourOf(4, wet, fast, thick).tip > wetPull.tip);
+  check('none standing still in the air', W.vapourOf(4, wet, 0.01, thick).tip === 0);
+  check('none at the thin top of the air', W.vapourOf(4, wet, fast, 0.01).tip === 0);
+  check('capped at 1', W.vapourOf(20, 1, 2, 5).tip <= 1 && W.vapourOf(20, 1, 2, 5).sheet <= 1);
+  /* Humidity is the column's: dry air where a world has no cloud. */
+  check('dry air where there is no cloud to be near', W.humidity({ pos: { x: 1e9, y: 0, z: 0 } }, Gen.generateSystem(1), 0) === 0.25);
+
+  var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  check('the tips are laid from her true span', /Sim\.hullBox\(f\.spec \|\| f\.ship\)/.test(msrc) &&
+        /layPoint\(f\.key \+ ':tl'/.test(msrc) && /layPoint\(f\.key \+ ':tr'/.test(msrc));
+  check('an NPC\'s pull is her velocity change less gravity, smoothed',
+        /V\.sub\(acc, Sim\.acceleration\(pos, G\.sys, G\.t\)\)/.test(msrc) && /Math\.min\(1, dt \/ 0\.3\)/.test(msrc));
+  check('the pull is what is felt ACROSS the airflow',
+        /V\.addScaled\(felt, flow, -V\.dot\(felt, flow\)\)/.test(msrc));
+  check('the air\'s wet is looked up twice a second, not every frame', /Math\.abs\(G\.t - hc\.t\) > 0\.5/.test(msrc));
+  check('the per-hull caches go with the hull',
+        /for \(vk in npcVel\) if \(!alive\[vk\]\) delete npcVel\[vk\];/.test(msrc) &&
+        /for \(vk in humCache\) if \(!alive\[vk\]\) delete humCache\[vk\];/.test(msrc));
+  var cv = msrc.slice(msrc.indexOf('function drawCanopyVapour('), msrc.indexOf('function drawCanopyVapour(') + 3000);
+  check('from the seat it is on the glass, without the glow blur', /ctx\.shadowBlur = 0;/.test(cv));
+  check('and under the instruments, with the weather',
+        msrc.indexOf('drawCanopyVapour(ctx, cam, w, h);') > 0 &&
+        msrc.indexOf('drawCanopyVapour(ctx, cam, w, h);') < msrc.indexOf('Render.drawAttitudeLadder(ctx, cam, G.ship, attitudeUp(lv)'));
+  check('the sheet is drawn on her hull from outside', /Render\.drawVapourSheet\(ctx, cam, G\.ship, Sim\.hullBox\(G\.ship\)/.test(msrc));
+})();
+
+/* ---- a sky in flight (2026-11-22) ---------------------------------------
+ * The sky over a port only came on at a port: flying in air anywhere else
+ * the screen above the horizon was space - black at noon. */
+console.log('--- a sky in flight ---');
+(function () {
+  var sys = Gen.generateSystem(1), body = null;
+  [1, 2, 3, 4, 5, 6].some(function (sd) {
+    var s = Gen.generateSystem(sd);
+    body = s.bodies.filter(function (x) { return x.type === 'terran' && x.atmosphere; })[0];
+    if (body) { sys = s; return true; } return false;
+  });
+  check('a world with air to fly in', !!body);
+  if (!body || !GL.skyOver) return;
+  var up = { x: 0, y: 0, z: 1 }, sun = { x: 0, y: 0.5, z: 0.866 };
+  var ground = GL.skyOver(body, up, sun), same = GL.skyOver(body, up, sun, null, 1);
+  check('thin 1 is the ground\'s own sky', ground[0] === same[0] && ground[2] === same[2]);
+  var mid = GL.skyOver(body, up, sun, null, 0.2), high = GL.skyOver(body, up, sun, null, 0.02);
+  var lum = function (c) { return c[0] + c[1] + c[2]; };
+  check('the sky darkens as the air thins', lum(ground) > lum(mid) && lum(mid) > lum(high),
+        lum(ground).toFixed(2) + ' > ' + lum(mid).toFixed(2) + ' > ' + lum(high).toFixed(2));
+  check('and lets the stars through near the top', high.lit < 0.25, high.lit.toFixed(2));
+
+  var msrc = require('fs').readFileSync(require('path').join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  check('the flight sky is thinned by the air left at the eye',
+        /Math\.sqrt\(Math\.max\(0, Sim\.airDensity\(atmo\.body, alt\)\) \/ atmo\.body\.atmosphere\.rho0\)/.test(msrc));
+  check('a port\'s own sky wins at a port, and none in the map or underground',
+        /var flySky = \(!skyPortNow && !mapMode\(\) && !buried/.test(msrc));
+  check('no flight sky through a shed roof', /if \(flySky && rock\) \{ flySky = null; groundSkyNow = null; \}/.test(msrc));
+  check('the dark wash is light under plain overcast, heavy in a storm',
+        /wx\.gloom \* \(0\.30 \+ 0\.45 \* Math\.min\(1, wx\.storm \/ 0\.8\)\)/.test(msrc));
 })();
 
 console.log('');

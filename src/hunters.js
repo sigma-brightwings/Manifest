@@ -212,18 +212,163 @@
       if (ship.docked || ship.landed) continue;        // they wait for you to come out
       dispatch(sys, G, e, t, hooks);
     }
+    updateSquad(sys, G, t, hooks);
+  }
+
+  /* ---- THE SYNDICATE'S GRUDGE (2026-11-22, ship AI slice 5) --------------
+   * Astra chose: "a hit squad comes" - after a few days, enforcers come
+   * looking for you in ANY system, until you settle with a fixer.
+   *
+   * A third ledger, beside the bounty and the navy's notoriety, because it
+   * behaves like neither:
+   *
+   *              G.wanted.outlaw         G.notoriety[emp]     G.grudge  (this)
+   *   means      what they'd fine you    the navy's anger     the mob's
+   *   reaches    their holds             that empire's space  everywhere
+   *   decays     by paying               by half in 3 days    never
+   *   clears     paying at their door    time                 a fixer, for a price
+   *
+   * It grows when a wrong against Syndicate traffic is REPORTED (their own
+   * runners, heavies and enforcers, and their hold's traffic): an unseen
+   * kill is unseen by them too, and an unidentified hull (the shroud) gives
+   * them no name. Nobody comes at once: the word goes upstairs, and the
+   * squad is sent GRUDGE_DELAY_S later. Then, in whatever system you are in,
+   * half an hour after you arrive, they drop out of slipspace a couple of
+   * thousand km off and come for you. Survive it and leave, and the next
+   * system sends them again; kill them, and the word goes upstairs again.
+   * They will not take a tithe. */
+  var GRUDGE = { demand: 20, assault: 12, kill: 40, killPolice: 60, killNavy: 60, sabotage: 40 };
+  var GRUDGE_AT = 40;                  // one kill, or two hold-ups
+  var GRUDGE_THREE = 120;              // and three come for this much
+  var GRUDGE_DELAY_S = 2 * 86400;      // the word goes upstairs
+  var SQUAD_KM = 2500;                 // they drop out of slipspace this far off
+  var SQUAD_ACCEL = 0.033;
+  var SQUAD_SIZE = 0.07;
+  var SETTLE_BASE = 3000, SETTLE_PER = 150;
+  var SQUAD_NAMES = ['Final Notice', 'Courtesy Call', 'Collector', 'Bailiff', 'Notary', 'Auditor',
+                     'Executor', 'Reminder', 'Account Closed', 'Settlement', 'Overdue', 'House Call'];
+
+  /* Is this ship the Syndicate's own? Its flag, not its paperwork: a runner
+   * flies her home port's faction on the record (combat.js liftTrader) but
+   * the Syndicate knows whose she is. */
+  function isSyndicate(v) {
+    if (!v) return false;
+    if (v.faction === 'outlaw') return true;
+    var r = v.liftedFrom || v.route;
+    return !!(r && (r.runner || r.flag === 'outlaw'));
+  }
+  function grudgeOf(G) { return G && G.grudge && G.grudge.v > 0 ? G.grudge : null; }
+  function grudge(G) { var g = grudgeOf(G); return g ? g.v : 0; }
+
+  /* Combat.report has filed a wrong against `victim`. */
+  function onWrong(G, kind, victim, t, hooks) {
+    if (!isSyndicate(victim)) return 0;
+    var pts = GRUDGE[kind];
+    if (!pts) return 0;
+    var before = grudge(G);
+    var g = G.grudge || (G.grudge = { v: 0, since: t });
+    g.v = before + pts;
+    if (before < GRUDGE_AT && g.v >= GRUDGE_AT) {
+      g.since = t;
+      g.dueAt = t + GRUDGE_DELAY_S;
+      if (hooks && hooks.say) hooks.say('That was Syndicate traffic. Somebody upstairs will hear about it.', 8);
+      if (global.Journal && global.Journal.add) global.Journal.add(G, 'law', 'The Syndicate has a grudge: word of the ' + (victim.name || 'ship') + ' is going upstairs');
+    }
+    return g.v;
+  }
+  function settlePrice(G) { var v = grudge(G); return v ? Math.round(SETTLE_BASE + SETTLE_PER * v) : 0; }
+  /* The fixer squares it: the grudge and what they'd fine you, both gone.
+   * Your standing with them is not bought back - that is earned. */
+  function settle(G, hooks) {
+    var price = settlePrice(G);
+    if (!price) return { ok: false, why: 'nobody upstairs is angry with you' };
+    if (G.marks && G.marks.outlaw) return { ok: false, why: 'you are marked; nobody will carry that message' };
+    if ((G.ship.credits || 0) < price) return { ok: false, why: 'it costs ' + price + ' cr to square', price: price };
+    G.ship.credits -= price;
+    G.grudge = null;
+    if (G.wanted) delete G.wanted.outlaw;
+    if (global.Journal && global.Journal.add) global.Journal.add(G, 'law', 'Squared it with the Syndicate for ' + price + ' cr');
+    return { ok: true, price: price };
+  }
+
+  function dispatchSquad(sys, G, t, hooks) {
+    var Sm = global.Sim, ship = G.ship;
+    var st = state(sys).outlaw;
+    st.count = (st.count || 0) + 1;
+    var n = grudge(G) >= GRUDGE_THREE ? 3 : 2;
+    /* Out of slipspace behind you: the side you are not looking at. */
+    var back = ship.fwd ? V.scale(V.norm(ship.fwd), -1) : { x: -1, y: 0, z: 0 };
+    var side = Math.abs(back.z) < 0.9 ? V.norm(V.cross(back, { x: 0, y: 0, z: 1 })) : { x: 1, y: 0, z: 0 };
+    var up = V.norm(V.cross(side, back));
+    var toYou = V.scale(back, -1);
+    var fac = (G.galaxy && G.galaxy.factionById && G.galaxy.factionById.outlaw) ||
+              (sys.factionById && sys.factionById.outlaw) || {};
+    var out = [], used = {};
+    for (var i = 0; i < n; i++) {
+      var key = 'squad|' + (sys.seed || sys.name || '') + '|' + st.count + '|' + i;
+      var ni = Math.floor(hash01(key) * SQUAD_NAMES.length);
+      while (used[ni]) ni = (ni + 1) % SQUAD_NAMES.length;
+      used[ni] = true;
+      var pos = V.add(ship.pos, V.add(V.scale(back, SQUAD_KM), V.scale(side, (i - (n - 1) / 2) * 8)));
+      var spec = {
+        id: 'squad-' + st.count + '-' + i,
+        kind: 'police', faction: 'outlaw', cls: 'police', hullClass: 'enforcer', sizeLetter: 'm',
+        name: 'The ' + SQUAD_NAMES[ni], className: 'Syndicate enforcer',
+        color: fac.color || '#c86bff',
+        size: SQUAD_SIZE, accel: SQUAD_ACCEL,
+        hunter: true, hunterOf: 'outlaw', squad: true, hostileToPlayer: true, onSight: true,
+        mode: 'attack', modeSince: 0,
+        rail: { type: 'lifted' },
+        live: { pos: pos, vel: V.clone(ship.vel || { x: 0, y: 0, z: 0 }), fwd: toYou, up: up, right: side }
+      };
+      spec.live.spec = spec; spec.live.kind = 'police'; spec.live.id = spec.id;
+      spec.live.name = spec.name; spec.live.cls = 'police'; spec.live.className = spec.className;
+      spec.live.size = spec.size; spec.live.color = spec.color; spec.live.faction = 'outlaw';
+      if (C() && C().npcHull) C().npcHull(spec);
+      sys.patrols.push(spec);
+      out.push(spec);
+    }
+    sys._ships = null;
+    st.active = true;
+    if (hooks && hooks.say) {
+      hooks.say(out.map(function (s) { return s.name; }).join(', ') + ' drop out of slipspace behind you - ' +
+                'Syndicate enforcers. "Somebody upstairs would like a word." They are not here for a tithe.', 9);
+    }
+    if (hooks && hooks.sound) hooks.sound('warn');
+    if (global.Journal && global.Journal.add) global.Journal.add(G, 'law', 'A Syndicate hit squad of ' + out.length + ' came for you in ' + (sys.name || 'this system'));
+    return out;
+  }
+
+  /* The squad's own frame, any system: the grudge, the delay, the arrival. */
+  function updateSquad(sys, G, t, hooks) {
+    var g = grudgeOf(G);
+    var hs = state(sys);
+    if (!g || g.v < GRUDGE_AT) { if (hs.outlaw) hs.outlaw.dueAt = undefined; return; }
+    if (t < (g.dueAt || 0)) return;
+    var s = hs.outlaw || (hs.outlaw = {});
+    if (s.active) return;
+    if (s.dueAt === undefined) { s.dueAt = t + DISPATCH_DELAY_S; return; }
+    if (t < s.dueAt) return;
+    if (G.ship.docked || G.ship.landed) return;
+    dispatchSquad(sys, G, t, hooks);
   }
 
   /* Hunters are never slept for range and never put back on a rail; the
    * encounter loop asks this (Sim.updateEncounters). */
-  function keepAwake(spec) { return !!(spec && spec.hunter); }
+  /* And a warship answering a platform's alarm (milsats.js, slice 5) is on
+   * a job, not a beat, until she stands down. */
+  function keepAwake(spec) { return !!(spec && (spec.hunter || spec.questioning)); }
 
   var Hunters = {
     LOUD: LOUD, HUNT_AT: HUNT_AT, HUNT_THREE: HUNT_THREE, NOTORIETY_HALF_S: NOTORIETY_HALF_S,
     DISPATCH_DELAY_S: DISPATCH_DELAY_S, REDISPATCH_S: REDISPATCH_S, HUNTER_ACCEL: HUNTER_ACCEL,
     notoriety: notoriety, addNotoriety: addNotoriety, onReport: onReport,
     empirePorts: empirePorts, dispatch: dispatch, update: update, keepAwake: keepAwake,
-    huntersOf: huntersOf
+    huntersOf: huntersOf,
+    GRUDGE: GRUDGE, GRUDGE_AT: GRUDGE_AT, GRUDGE_THREE: GRUDGE_THREE, GRUDGE_DELAY_S: GRUDGE_DELAY_S,
+    SQUAD_KM: SQUAD_KM, SETTLE_BASE: SETTLE_BASE, SETTLE_PER: SETTLE_PER,
+    isSyndicate: isSyndicate, grudge: grudge, onWrong: onWrong, settlePrice: settlePrice, settle: settle,
+    dispatchSquad: dispatchSquad, updateSquad: updateSquad
   };
   global.Hunters = Hunters;
   if (typeof module !== 'undefined' && module.exports) module.exports = Hunters;

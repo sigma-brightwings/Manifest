@@ -47,17 +47,17 @@ var GROUPS = {
   core: [
     'tools/lint-globals.js', 'test/packed.test.js', 'test/packed-browser.test.js',
     'test/self.test.js', 'test/release.test.js', 'test/physics.test.js',
-    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/precip.test.js',
+    'test/nodes.test.js', 'test/galaxy.test.js', 'test/weather.test.js', 'test/climate.test.js', 'test/precip.test.js',
     'test/blacksites.test.js', 'test/intel.test.js',
     'test/orbitline.test.js', 'test/heading.test.js', 'test/airdata.test.js',
     'test/twilight.test.js', 'test/polar.test.js', 'test/rings.test.js',
     'test/magnetosphere.test.js', 'test/magnetometer.test.js',
-    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js',
+    'test/turningground.test.js', 'test/stars.test.js', 'test/habitable.test.js', 'test/multiples.test.js',
     'test/saveroundtrip.test.js'
   ],
   render: ['test/render.test.js'],
   view: [
-    'test/cockpit.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
+    'test/cockpit.test.js', 'test/panels.test.js', 'test/greebles.test.js', 'test/dressing.test.js',
     'test/hangar.test.js', 'test/cruisesky.test.js', 'test/navsystem.test.js',
     'test/tear.test.js', 'test/groundport-look.test.js', 'test/outworks.test.js',
     'test/galaxyzoom.test.js', 'test/surfaces.test.js'
@@ -73,31 +73,31 @@ var GROUPS = {
   ],
   /* The exit transfer runs every port's carrier route: 2.2 GB, a heavy
    * file in the same class as berths, so it stands alone too. */
-  transfer: ['test/transfer.test.js', 'test/lanes.test.js'],
+  transfer: ['test/transfer.test.js', 'test/lanes.test.js', 'test/streams.test.js'],
   combat: [
     'test/combat.test.js', 'test/gunnery.test.js', 'test/massdriver.test.js',
     'test/syndicate-fleet.test.js', 'test/aggression.test.js', 'test/band.test.js',
-    'test/rendezvous.test.js', 'test/hunters.test.js',
+    'test/rendezvous.test.js', 'test/hunters.test.js', 'test/flights.test.js', 'test/civilians.test.js', 'test/turncoats.test.js', 'test/crookedlaw.test.js', 'test/doctrine.test.js',
     'test/stealth.test.js', 'test/mark.test.js', 'test/arms.test.js', 'test/guns.test.js', 'test/drives.test.js',
     'test/licence.test.js', 'test/split.test.js', 'test/tithe.test.js',
-    'test/wars.test.js', 'test/workoff.test.js'
+    'test/wars.test.js', 'test/workoff.test.js', 'test/scars.test.js', 'test/conversions.test.js', 'test/milsats.test.js'
   ],
   economy: [
-    'test/economy.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
+    'test/economy.test.js', 'test/cargocost.test.js', 'test/holdings.test.js', 'test/milfuel.test.js',
     'test/shiptrade.test.js', 'test/analysers.test.js', 'test/farms.test.js',
     'test/growth.test.js', 'test/construction.test.js', 'test/stations.test.js',
     'test/city-sites.test.js', 'test/upkeep.test.js', 'test/parcel.test.js',
-    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js',
-    'test/catalogue.test.js', 'test/lore.test.js'
+    'test/tradeanalyser.test.js', 'test/tradingfirm.test.js', 'test/comsats.test.js', 'test/icons.test.js', 'test/islands.test.js',
+    'test/appeal.test.js', 'test/tourism.test.js', 'test/resorts.test.js', 'test/seams.test.js', 'test/catalogue.test.js', 'test/lore.test.js'
   ],
   ground: [
-    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
+    'test/survey.test.js', 'test/charts.test.js', 'test/gravity.test.js', 'test/interior.test.js', 'test/magnetics.test.js', 'test/interior-cut.test.js', 'test/claims.test.js', 'test/outposts.test.js', 'test/digs.test.js', 'test/dronedrop.test.js', 'test/ground.test.js',
     'test/mining.test.js', 'test/prospectors.test.js', 'test/biomes.test.js',
     'test/seaplatform.test.js'],
   story: [
     'test/arcs.test.js', 'test/patronage.test.js', 'test/fieldwork.test.js',
     'test/guild.test.js', 'test/dawdle.test.js', 'test/poaching.test.js',
-    'test/captains.test.js', 'test/captain-stories.test.js',
+    'test/captains.test.js', 'test/captain-stories.test.js', 'test/shipai.test.js',
     'test/messages.test.js', 'test/favours.test.js', 'test/rumours.test.js',
     'test/journal.test.js', 'test/recap.test.js', 'test/reach.test.js', 'test/concourse.test.js', 'test/fixer.test.js', 'test/tutorial.test.js', 'test/rescue.test.js', 'test/slipspace.test.js',
     'test/cruisedrive.test.js', 'test/intercept.test.js'

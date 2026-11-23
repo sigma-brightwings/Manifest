@@ -146,5 +146,89 @@ check('N empties every drone on the claim', ca.ok && Math.abs(aboard - Math.min(
       ca.text + '  (' + (b1 + b2 + b3) + ' t in the bins)');
 check('and keeps its bins after', d1.baseT === t30 && Cl.hopper(G, d1, long + t30).tonnes === Op.OUTPOST_HOPPER);
 
+console.log('--- the drilling team ---');
+['crew', 'construction', 'licence', 'journal', 'stations'].forEach(function (m) {
+  try { require('../src/' + m + '.js'); } catch (e) { console.log('  (could not load ' + m + ': ' + e.message + ')'); }
+});
+var Cw = global.Crew, St = global.Stations;
+var op1 = o.outpost, tP = t30 + DAY;
+landOn(cells[0], tP);
+ship.crew = [Cw.make('Kes Lund', 'engineer', 3, 'e1'), Cw.make('Mira Sable', 'engineer', 5, 'e2'), Cw.make('Bo Quist', 'gunner', 2, 'g1')];
+check('no engineers, no dig', (function () { var keep = ship.crew; ship.crew = [keep[2]]; var w = Op.postRefusal(G, sys, tP); ship.crew = keep; return /no engineers/.test(w || ''); })());
+G.forgedBlanks = 1;                       // a licence, whether or not this system asks for one
+ship.credits = 200000;
+ship.cargo = {};
+var post = Op.postTeam(G, sys, tP, null);
+check('engineers go down to dig', post.ok, post.text || post.why);
+check('setting them down costs nothing', ship.credits === 200000, ship.credits + ' cr');
+check('with no stores on site they wait', Op.digDoneAt(op1) === Infinity && /no stores/.test(post.text));
+check('the engineers are on the books, not aboard', Cw.aboard(ship).length === 3 && Cw.present(ship).length === 1 &&
+      Cw.present(ship)[0].role === 'gunner');
+var rate = Op.engRate({ rating: 3 }) + Op.engRate({ rating: 5 });
+check('the team digs at its ratings', Math.abs(Op.teamRate(op1) - rate) < 1e-9, rate.toFixed(2) + ' a day');
+
+console.log('--- the dig\'s stores ---');
+check('nothing to unload, it says so', /no structural alloys/.test(Op.unloadRefusal(G, sys, tP) || ''));
+ship.cargo = { alloys: 25 };
+var un = Op.unloadStores(G, sys, tP);
+check('alloys in the hold go down as stores', un.ok && un.tonnes === 25 && !ship.cargo.alloys && Math.abs(Op.stores(op1, tP) - 25) < 1e-9, un.text || un.why);
+check('the dig wants the rest', Op.storesNeeded(op1, tP) === Op.DIG_STORES - 25, Op.storesNeeded(op1, tP) + ' t');
+var w25 = 25 / Op.STORE_PER_WORK, stall = Op.stallAt(op1);
+check('the stores run out on a formula', Math.abs(stall - (tP + w25 / rate * DAY)) < 1e-3, ((stall - tP) / DAY).toFixed(1) + ' days');
+check('and the port waits on the rest', Op.digDoneAt(op1) === Infinity);
+var saidS = [];
+G.t = stall + 60;
+Op.tickDig(G, stall + 60, { say: function (s) { saidS.push(s); } });
+Op.tickDig(G, stall + 3600, { say: function (s) { saidS.push(s); } });
+check('running out is said once', saidS.length === 1 && /run out of alloys/.test(saidS[0]), saidS[0]);
+check('and the dig stands where the stores ran out', Math.abs(Op.dug(op1, stall + 30 * DAY) - w25) < 1e-6);
+check('the status line says it is stalled', /STALLED/.test(Op.statusLine(G, op1, stall + DAY)) && /15 t short/.test(Op.statusLine(G, op1, stall + DAY)),
+      Op.statusLine(G, op1, stall + DAY));
+var tS = stall + 5 * DAY;
+landOn(cells[0], tS);
+check('stalled, it wants exactly the rest', Op.storesNeeded(op1, tS) === 15, Op.storesNeeded(op1, tS) + ' t');
+ship.credits = 1000;
+check('the Guild wants paying', /Guild wants/.test(Op.contractRefusal(G, sys, tS) || ''), Op.contractRefusal(G, sys, tS));
+ship.credits = 200000;
+var price15 = Op.contractPrice(15);
+var ct = Op.contractStores(G, sys, tS);
+check('the Guild brings the shortfall in, at a premium', ct.ok && ship.credits === 200000 - price15 &&
+      price15 === Math.ceil(15 * Eco.BY_ID.alloys.base * Op.STORE_CONTRACT), ct.text || ct.why);
+check('and the port is a formula again', Math.abs(Op.digDoneAt(op1) - (tS + (Op.DIG_WORK - w25) / rate * DAY)) < 1e-3,
+      ((Op.digDoneAt(op1) - tS) / DAY).toFixed(1) + ' days');
+check('nothing more to bring', Op.storesNeeded(op1, tS) === 0 && /all the stores/.test(Op.contractRefusal(G, sys, tS) || ''));
+var legacy = { dig: { work: 30, at: 0, rate: 1, stock: null } };
+check('a dig from before stores was paid in full', Op.digDoneAt(legacy) === 90 * DAY && Op.stallAt(legacy) === Infinity);
+
+var tHalf = tS + 0.5 * (Op.digDoneAt(op1) - tS), wHalf = w25 + (Op.DIG_WORK - w25) / 2;
+landOn(cells[0], tHalf);
+var rc = Op.recallTeam(G, sys, tHalf);
+check('fetched back half way', rc.ok && Cw.present(ship).length === 3, rc.text || rc.why);
+check('the dig keeps what they did', Math.abs(Op.dug(op1, tHalf) - wHalf) < 1e-6 && Op.dug(op1, tHalf + 50 * DAY) === Op.dug(op1, tHalf));
+check('and the stores they did not eat', Math.abs(Op.stores(op1, tHalf + 50 * DAY) - (Op.DIG_WORK - wHalf) * Op.STORE_PER_WORK) < 1e-6);
+check('and goes no further without them', Op.digDoneAt(op1) === Infinity);
+var tBack = tHalf + 10 * DAY;
+var cr2 = ship.credits;
+landOn(cells[0], tBack);
+var post2 = Op.postTeam(G, sys, tBack, null);
+check('a second trip down costs nothing more', post2.ok && ship.credits === cr2, post2.text || post2.why);
+var doneAt = Op.digDoneAt(op1);
+check('the rest takes the other half', Math.abs(doneAt - (tBack + (Op.DIG_WORK - wHalf) / rate * DAY)) < 1e-3);
+var said2 = [];
+check('nothing opens before the day', Op.tickDig(G, doneAt - 60, { say: function (s) { said2.push(s); } }) === 0 && !op1.port);
+G.t = doneAt + 60;                       // the game asks at its own clock
+check('on the day, a port of yours opens', Op.tickDig(G, doneAt + 60, { say: function (s) { said2.push(s); } }) === 1 && !!op1.port, said2[0]);
+var stn = St.byId(G, op1.port);
+check('a dug mining station, open from the day the dig finished', stn && stn.dug && stn.type === 'mining' && stn.kind === 'surface' &&
+      Math.abs(St.opensAt(stn) - doneAt) < 1e-3);
+check('standing where the outpost does', stn && stn.at.lat === op1.at.lat && stn.at.lon === op1.at.lon);
+check('in the system, with no Crawler up-port', !!sys.byId[St.portId(stn)] && !sys.byId[St.upId(stn)],
+      sys.byId[St.portId(stn)] && sys.byId[St.portId(stn)].name);
+check('with traffic from the day it opened', (sys.traffic || []).some(function (r) { return (r.from === St.portId(stn) || r.to === St.portId(stn)) && r.t0 >= doneAt - 1; }));
+check('her books run on what the dig cost', St.buildCost(stn) === Op.DUG_COST);
+check('the outpost says so', /stands here/.test(Op.statusLine(G, op1, doneAt + 120)));
+ship.landed = false; ship.docked = op1.portId;
+check('dock there and the team comes aboard', Op.tick(G, doneAt + 3600, null) >= 1 && Cw.present(ship).length === 3 && !op1.team.length);
+
 console.log('\n' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);

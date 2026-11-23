@@ -78,6 +78,10 @@
 <!-- Weighing a world from the inside (2026-11-12): the gravimeter's
      planar slice. After survey.js, whose ground map and hashes it reads. -->
 <script src="src/gravity.js"></script>
+<!-- One seeded interior per world (2026-11-22): crust, core, dynamo, Curie
+     depth and what every mass is made of. After gravity.js, whose profile it
+     wraps unchanged. -->
+<script src="src/interior.js"></script>
 <script src="src/claims.js"></script>
 <script src="src/outposts.js"></script>
     <!-- THE CARTOGRAPHERS (2026-11-13): the second buyer for one survey
@@ -88,9 +92,14 @@
 <script src="src/wars.js"></script>
 <script src="src/mining.js"></script>
 <script src="src/economy.js"></script>
+<!-- Appeal: would anyone visit a world for the pleasure of it. Before
+     generate.js, which reads it to seat the ferries (fillShuttleSeats). -->
+<script src="src/appeal.js"></script>
 <script src="src/generate.js"></script>
 <script src="src/galaxy.js"></script>
 <script src="src/sim.js"></script>
+<!-- What weapon fire leaves on a hull: hot metal, breaches (scars.js). -->
+<script src="src/scars.js"></script>
 <script src="src/combat.js"></script>
 <script src="src/intercept.js"></script>
 <!-- What a new career is handed - the difficulty and focus presets. After
@@ -146,6 +155,9 @@
 <script src="src/arcs.js"></script>
 <script src="src/shiptrade.js"></script>
 <script src="src/captains.js"></script>
+<!-- Ship AI: six roles and the captain's dials (nerve, greed, probity...),
+     read off captains.js profiles and Combat's corruption at call time. -->
+<script src="src/shipai.js"></script>
 <script src="src/messages.js"></script>
 <script src="src/favours.js"></script>
 <!-- Other ships' tanks, purses and breakdowns: read by sim.js's
@@ -171,6 +183,13 @@
 <script src="src/arms.js"></script>
 <script src="src/licence.js"></script>
 <script src="src/stations.js"></script>
+<!-- The world's own drilling teams: ground ports dug on a dated schedule. -->
+<script src="src/digs.js"></script>
+<!-- The relay network and your own com-sat: live prices along the chain. -->
+<script src="src/comsats.js"></script>
+<!-- Armed defence platforms (milsats.js): after comsats.js, whose RTG
+     cycle they run on, and combat.js, whose shot path they join. -->
+<script src="src/milsats.js"></script>
 <!-- Who hunts whom: NPCs that rob, chase, arrest and skirmish (Phase 9). -->
 <script src="src/aggression.js"></script>
 <script src="src/hunters.js"></script>
@@ -211,6 +230,8 @@
 <script src="src/weather.js"></script>
 <script src="src/gl.js"></script>
 <script src="src/npcgl.js"></script>
+<!-- Small drawn marks for what a thing is: ports, ships, relays (icons.js). -->
+<script src="src/icons.js"></script>
 <script src="src/screens.js"></script>
 <!-- The captains' stories on the title card. Needs nothing; main.js picks one.
      (captains.js, above, is the captains out in their ships.) -->

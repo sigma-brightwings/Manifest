@@ -413,6 +413,10 @@
      * meant the first was overwritten before it was ever drawn, so the
      * player was told which key launches and never told what they were
      * sitting on. */
+    /* "Docked at ..." is about where you are: the moment you are not, it
+     * goes (the frame tick below), rather than sitting on screen for its
+     * full twelve seconds over a ship already out in space. */
+    if (G.startedDocked) G.dockedLine = { port: G.startedDocked.id };
     if (G.startedDocked && plan) {
       /* A focus start says what it set you up for — in one line on the
        * pad, and in full in the captain's log, where it is still there
@@ -425,6 +429,7 @@
           '  —  F4 to trade or ask to launch, F5 for the yard, then U', 12);
       G.startedDocked = null;
     }
+    if (G.dockedLine) G.dockedLine.text = G.message;
     if (G.startRefused && G.startRefused.length) console.warn('start fit refused', G.startRefused);
   }
 
@@ -460,6 +465,12 @@
     /* Any station you founded here that has opened since this system was
      * generated (stations.js). Idempotent, and cheap when there are none. */
     if (typeof Stations !== 'undefined') Stations.inject(G, G.systemCache[star.id], star.id);
+    /* And any ground port the world's own drilling teams have dug out by
+     * now (digs.js) - the same idempotent way. */
+    if (global.Digs) global.Digs.inject(G, G.systemCache[star.id], star.id);
+    /* And the isotope refineries' RTG fuel (comsats.js), after the
+     * system's traffic is built, so no route moves. Idempotent. */
+    if (global.Comsats) global.Comsats.attachRefineries(G.systemCache[star.id]);
     return G.systemCache[star.id];
   }
   /* Your ships working in other systems book their sales against that
@@ -540,6 +551,10 @@
     /* Deliveries you bought off ships before they arrived (shiptrade.js):
      * back onto this system's shelves, wherever the system came from. */
     if (global.ShipTrade && global.ShipTrade.attach) global.ShipTrade.attach(G, G.sys, G.t || 0);
+    /* A crooked cop you reported and who was recalled (combat.js
+     * answerShakedown) stays off the lanes for a month. */
+    if (global.Combat && Combat.applySuspensions) Combat.applySuspensions(G, G.sys, star.id);
+    G.shakedown = null;
     /* Fetch the station art this system's ports wear now, while the jump
      * tunnel is still on screen, rather than as each one comes into view.
      * ports.js is an index since 2026-09-22; the triangles are per model. */
@@ -1904,6 +1919,15 @@
 
       G.keys[e.key.toLowerCase()] = true;
 
+      /* A crooked cop wants her "inspection fee" (combat.js, slice 4):
+       * while she waits, C pays, X refuses, Z reports her. The three keys
+       * mean nothing else until she has her answer. */
+      if (G.shakedown && flying() && !e.shiftKey && !e.ctrlKey) {
+        var sk = e.key.toLowerCase();
+        var how = sk === 'c' ? 'pay' : sk === 'x' ? 'refuse' : sk === 'z' ? 'report' : null;
+        if (how) { Combat.answerShakedown(G, how, HOOKS); return; }
+      }
+
       switch (e.key.toLowerCase()) {
         /* In cruise these set the drive's speed instead of the clock —
          * there is no reason to accelerate time when you are already
@@ -2490,7 +2514,14 @@
        * mouse rather than opposing it, which is what a head does — or you
        * are flying, and the mouse is a stick. */
       if (aiming) aimBy(dx, dy);
-      else if (G.viewMode === 'cockpit') lookBy(dx * 0.0042, -dy * 0.0042);
+      /* FREE LOOK HOLDS THE POINTER (2026-11-20, Astra: "cockpit mouselook
+       * is sluggish"). It was read off the cursor's position, which stops
+       * dead at the screen's edge, at 0.0042 rad a pixel - a quarter turn
+       * took most of the screen and the rest of the turn was not there. Now
+       * right-Alt captures the pointer (syncPointerLock) and the look runs
+       * on raw movement, and a drag turns half as fast again. */
+      else if (looking && pointerLocked()) lookBy((e.movementX || 0) * COCKPIT_LOOK, -(e.movementY || 0) * COCKPIT_LOOK);
+      else if (G.viewMode === 'cockpit') lookBy(dx * COCKPIT_LOOK, -dy * COCKPIT_LOOK);
       // (free-look lands in the branch above: cockpit, head, not the stick)
       else {
         G.cam.yaw -= dx * 0.006;
@@ -5241,10 +5272,13 @@
    * Esc (the browser lets go on Esc itself), any F-screen, the menu or
    * sitting down do too. A click puts it back after Esc. */
   var WALK_LOOK = 0.0028;           // rad per count of mouse movement
+  var COCKPIT_LOOK = 0.0062;        // rad per pixel (drag) or count (held free look) in the seat
   function pointerLocked() {
     return !!(canvas && typeof document !== 'undefined' && document.pointerLockElement === canvas);
   }
   function walkLookWanted() {
+    if (G.freeLook && G.viewMode === 'cockpit' && !G.walk && flying() && !menuOpen() &&
+        !(G.cursor && G.cursor.active) && !G.analyser) return true;     // held right-Alt free look, in the seat
     return !!((G.walk || G.eva) && flying() && !menuOpen() && !(G.cursor && G.cursor.active) && !G.talk && !G.analyser);
   }
   /* `ask` only from inside an input event; every frame only ever lets go. */
@@ -5817,7 +5851,14 @@
       var st = want[i];
       if (a.reports[st.id]) continue;
       var t0 = (typeof performance !== 'undefined' && performance.now) ? performance.now() : 0;
-      a.reports[st.id] = TA.systemReport(systemFor(st), st, Galaxy.distance3(G.here, st), G.t, a.ctx.adjust);
+      /* By the relay chain when your com-sat reaches it (comsats.js),
+       * otherwise by freighter. */
+      var chainAge = global.Comsats ? global.Comsats.ageDaysFor(G, G.galaxy, G.here, st) : null;
+      /* Docked at an island, the chain does not reach this desk: its
+       * news of other stars comes the way the freighters bring it. */
+      var dkP = G.ship.docked && G.sys.byId[G.ship.docked];
+      if (chainAge !== null && dkP && G.here && global.Comsats.isIsland(G, G.sys, G.here.id, dkP, G.t)) chainAge = null;
+      a.reports[st.id] = TA.systemReport(systemFor(st), st, Galaxy.distance3(G.here, st), G.t, a.ctx.adjust, chainAge);
       if (t0) a.lastReportMs = performance.now() - t0;
       break;
     }
@@ -5899,6 +5940,8 @@
       var cost = lot ? Math.round(lot.cr) : tonnes * row.buy;
       G.ship.credits -= cost;
       G.ship.cargo[cid] = heldTonnes(cid) + tonnes;
+      /* What it cost, for the trade panel's profit (Economy.costBuy). */
+      if (Eco.costBuy) Eco.costBuy(G.ship, cid, tonnes, cost);
       Eco.applyTrade(port, cid, tonnes, G.t);
       logTrade((cost < 0 ? 'Collected ' : 'Bought ') + tonnes + 't ' + row.name +
                '  ' + fmtCredits(-cost));
@@ -5961,6 +6004,9 @@
       var cut = gain > 0 ? Combat.lienTake(G, gain) : { taken: 0, cleared: false };
       G.ship.credits += gain - cut.taken;
       if (hotSold > 0) Clm.spendHot(G, cid, hotSold);
+      /* Its share of what the cargo cost goes with it (Economy.costSell),
+       * out of the sellable tonnage held before the sale. */
+      if (Eco.costSell) Eco.costSell(G.ship, cid, qty, Missions.sellableTonnes(G, cid, heldTonnes(cid)));
       G.ship.cargo[cid] = heldTonnes(cid) - qty;
       if (G.ship.cargo[cid] <= 1e-9) delete G.ship.cargo[cid];
       Eco.applyTrade(port, cid, -qty, G.t);
@@ -7911,6 +7957,21 @@
      * next comes round - on the clock, wherever you are. */
     if (global.Claims && G.thefts && G.thefts.length) global.Claims.tickThefts(G, G.t, HOOKS);
     if (global.Outposts && G.outposts && G.outposts.length) global.Outposts.tick(G, G.t, HOOKS);
+    /* The world's own drilling teams: a port they dig opens on its day,
+     * here as anywhere (digs.js). One pass over a cached, short list. */
+    if (global.Digs && G.sys) global.Digs.update(G, G.sys, (G.here && G.here.id) || G.sys.starId, G.t, HOOKS);
+    /* The start's "Docked at ..." line goes when you are no longer docked
+     * there (it used to sit over open space for its full twelve seconds). */
+    if (G.dockedLine && G.ship.docked !== G.dockedLine.port) {
+      if (G.message === G.dockedLine.text) { G.message = null; G.messageUntil = 0; }
+      G.dockedLine = null;
+    }
+    /* Docked at an island, your ship is its courier: you carry its prices
+     * out as they stood when you left (Comsats.seenAt reads this). */
+    if (global.Comsats && G.ship.docked && G.here && G.sys.byId[G.ship.docked]) {
+      var isl = G.sys.byId[G.ship.docked];
+      if (global.Comsats.isIsland(G, G.sys, G.here.id, isl, G.t)) (G.portSeen = G.portSeen || {})[isl.id] = G.t;
+    }
     /* AND THE ONES ON THE SLIPS. A commissioned hull is handed over at her
      * yard when her build time is up, wherever you are — said, and logged,
      * so a pilot three stars away hears that she is ready. */
@@ -8007,6 +8068,14 @@
      * here rather than waiting on a key press. */
     if (G.encounter.scanNow) Combat.resolveScan(G, G.encounter.scanNow, HOOKS);
     if (G.encounter.jamReport) Combat.citeJamming(G, G.encounter.jamReport, HOOKS);
+    /* A shakedown waiting on your answer: she holds alongside, the clock
+     * runs at 1x so her patience is yours to read, and silence is a no. */
+    if (G.shakedown) {
+      var sdSpec = G.shakedown.spec;
+      if (sdSpec && sdSpec.live) { sdSpec.mode = 'inspect'; sdSpec.scanned = true; }
+      G.encounter.warpCap = 1;
+      if (Combat.tickShakedown) Combat.tickShakedown(G, HOOKS);
+    }
 
     if (G.encounter.warpCap < Infinity) {
       var maxIdx = 0;
@@ -8027,6 +8096,8 @@
      * Runs after the encounter step so an NPC turned hostile this frame
      * steers on it next frame — one frame of lag nobody can perceive. */
     Combat.update(G.sys, G, G.t, G.lastDtSim || 0, HOOKS);
+    /* The system's defence platforms pick their targets (milsats.js). */
+    if (global.Milsats) global.Milsats.update(G.sys, G, G.t, HOOKS);
     /* What a tug's jaws hold comes with her (arms.js). */
     if (global.Arms && G.ship.arms) Arms.update(G, cockpitShip(), G.lastDtSim || 0, HOOKS);
 
@@ -8352,7 +8423,7 @@
    * read. Null without weather (no air, or none to speak of). */
   function overheadAt(port, gb) {
     if (!Weather || !Weather.overhead || !port || !port.parentBody || !gb) return null;
-    return Weather.overhead(port.parentBody, gb.up, G.t);
+    return Weather.overhead(port.parentBody, gb.up, G.t, G.sys);
   }
   function eyeUnderStreet(port, cam) {
     var gb = Sim.groundBasis ? Sim.groundBasis(port, G.sys, G.t) : null;
@@ -8481,6 +8552,35 @@
     if (!best) return null;
     if (eyeUnderStreet(best, cam)) return null;
     return best;
+  }
+  /* THE SKY IN FLIGHT (2026-11-22). The sky over a port (groundSky) only
+   * ever came on at a port: in a ground port's cut and within 30 km of a
+   * sea platform. Everywhere else, flying in a world's air, the screen
+   * above the horizon was cleared to space - a black, starry sky at noon
+   * three kilometres over the sea, found by the overcast probe while
+   * tuning the weather's dimming (the dimming was going dark against
+   * black, which is why every overcast looked like dusk).
+   *
+   * So: wherever the eye is inside a world's air, the same sky, at the
+   * eye's own vertical, with the weather overhead there. Thinned by how
+   * much air is left above the eye - sqrt(rho here / rho at the ground),
+   * the arithmetic GLWorld's airOf already uses - so it fades through a
+   * dark-blue stratosphere to space as you climb out, rather than
+   * snapping off at some height. Below FLIGHT_SKY_MIN it is not drawn at
+   * all and the planet seen from outside its air is the picture again. */
+  var FLIGHT_SKY_MIN = 0.03;
+  function flightSky(cam) {
+    if (!G.sys || !cam || !cam.eye || !Sim.atmosphereContext) return null;
+    var atmo = Sim.atmosphereContext(cam.eye, G.sys, G.t);
+    if (!atmo || !atmo.body || !atmo.body.atmosphere || !(atmo.body.atmosphere.rho0 > 0)) return null;
+    var off = V.sub(cam.eye, atmo.pos), r = V.len(off);
+    var alt = r - atmo.body.radius;
+    if (!(r > 0) || alt < 0) return null;
+    var thin = Math.sqrt(Math.max(0, Sim.airDensity(atmo.body, alt)) / atmo.body.atmosphere.rho0);
+    if (!(thin > FLIGHT_SKY_MIN)) return null;
+    var up = V.scale(off, 1 / r);
+    return { body: atmo.body, up: up, sun: sunDirAt(cam.eye), thin: thin,
+             wx: Weather && Weather.overhead ? Weather.overhead(atmo.body, up, G.t, G.sys) : null };
   }
   function seaPortNear(cam) {
     if (!G.ship || !G.sys || !cam || !cam.eye || !Render.seaPosts) return null;
@@ -9170,6 +9270,9 @@
                  planetW: port.parentBody ? Sim.bodyPosition(port.parentBody, G.sys, G.t) : null,
                  planetR: (port.parentBody && port.parentBody.radius || 1e9) / r,
                  planetKm: port.parentBody ? port.parentBody.radius : 0, rim: CUT_RIM,
+                 /* What the pit is cut through: the world's own top layer
+                 * (Render.groundRock, 2026-11-22). */
+                 rock: Render.groundRock ? Render.groundRock(port.parentBody, G.sys) : null,
                  rShip: rShip / r, rEye: rEye / r, rCap: rCap > 0 ? rCap / r : 0,
                  r: r, lift: g.lift || 0, seed: port.id,
                  room: room, duct: ((g.mouthR || 0.55) + (g.throatR || 0.45)) / 2,
@@ -9599,6 +9702,9 @@
 
   function draw() {
     if (mainCtx) { ctx = mainCtx; mainCtx = null; }
+    /* The boxes drawn over the view last frame, for the HUD to keep clear
+     * of this one (Render.claimOverlay, `panel` below). */
+    if (Render.overlayFrame) Render.overlayFrame();
     var ps = pixelScale();
     var w = canvas.width / ps;
     var h = canvas.height / ps;
@@ -9622,6 +9728,15 @@
                                          (G.walk.dy || 0) + (G.walk.eyeDy || 0), w, h - FBAR_H);
       else {
         cam.buildCockpit(cockpitShip(), w, viewH, G.look);
+        /* THE FIT'S SEAT (Render.cabinOf): off the centre line on a big
+         * ship's two-abreast flight deck, raised, or low and forward. The
+         * room stays where it is; the eye moves within it. */
+        var csp = Render.cockpitSpec ? Render.cockpitSpec(cockpitShip()) : null;
+        if (csp && csp.cabin && csp.seat) {
+          var sh = cockpitShip(), sk = csp.size * 0.001;
+          cam.eye = V.add(cam.eye, V.add(V.add(V.scale(sh.right, csp.seat.x * sk),
+                    V.scale(sh.up, csp.seat.y * sk)), V.scale(sh.fwd, csp.seat.z * sk)));
+        }
         applyCockpitSway(cam);
       }
     }
@@ -9693,6 +9808,11 @@
                    : (!mapMode() ? seaSkyPort(cam) : null);
     var groundSkyNow = skyPortNow ? groundSky(skyPortNow) : null;
     if (groundSkyNow) buried = null;
+    /* Anywhere else in a world's air: the sky in flight (flightSky). Not
+     * underground, not in the map, and the port's own sky wins at a port. */
+    var flySky = (!skyPortNow && !mapMode() && !buried && glLive() && global.GLWorld.skyOver)
+               ? flightSky(cam) : null;
+    if (flySky) groundSkyNow = global.GLWorld.skyOver(flySky.body, flySky.up, flySky.sun, flySky.wx, flySky.thin);
     /* Berthed in a shed: the shed is the world. See enclosedPort.
      *
      * EXCEPT IN THE ORBIT MAP, which is a chart rather than a window. F2 is
@@ -9711,6 +9831,8 @@
      * it, which would have shown one frame of empty space through the roof
      * on the way in. */
     var rock = buried || inside;
+    /* In a shed the shed is the world: no flight sky through its roof. */
+    if (flySky && rock) { flySky = null; groundSkyNow = null; }
 
     if (glLive()) {
       ctx.clearRect(0, 0, w, h);
@@ -9720,9 +9842,13 @@
        * planet pass for the haze that makes the horizon. See GLWorld.skyAt.
        * Its own lines, apart from the ground's shading, on purpose. */
       if (groundSkyNow && global.GLWorld.setGroundSky) {
-        var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
-        global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
-          sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
+        if (flySky) {
+          global.GLWorld.setGroundSky(flySky.body, flySky.up, flySky.sun, flySky.wx, flySky.thin);
+        } else {
+          var skyPort = skyPortNow, skyGb = Sim.groundBasis(skyPort, G.sys, G.t);
+          global.GLWorld.setGroundSky(skyPort.parentBody, skyGb.up,
+            sunDirAt(skyGb.entrance.pos), overheadAt(skyPort, skyGb));
+        }
         global.GLWorld.drawGroundSky(cam);
       }
       /* STANDING OUTSIDE HER (2026-10-26): the world is the GL layer's to
@@ -10106,6 +10232,9 @@
      * toggle: Y hides the timetable, and what is left of a ship you shot is
      * not the timetable. */
     drawDebris(ctx, cam);
+    /* The relays round this system's worlds, and your com-sats. */
+    if (!inside) drawRelays(ctx, cam);
+    if (!inside) drawPlatforms(ctx, cam);
     /* A station of yours going up: the Crawler, and her crates (stations.js). */
     if (!inside) drawFoundings(ctx, cam);
     drawShedCar(ctx, cam);
@@ -10955,6 +11084,8 @@
       /* Blooms likewise: at that distance the flash is the only thing
        * telling you the shot landed at all. */
       drawHullBlooms(ctx, cam, s);
+      /* And what stays on her hull: hot metal, holes, arcing, venting. */
+      if (lenPx > 5) drawShipScars(ctx, cam, s, s.hullClass || s.cls, s.size);
 
       /* A hostile gets a hard bracket regardless of how small it is. Losing
        * track of the pirate because it was two pixels wide is not the kind
@@ -11180,9 +11311,24 @@
      * kilometres of water and the world outside loses its contrast, which
      * is most of what makes being under weather feel different from being
      * above it. One fill. */
+    /* PAINTED OVER, NOT ADDED (2026-11-22). The canopy's glass pass runs
+     * just before this and leaves the context in 'lighter', and nothing
+     * here said otherwise - so the dark wash under a deck was ADDED to
+     * the view and brightened it, and the murk inside a storm summed to
+     * flat white. Found by logging the fills on a probe descent: every
+     * one of them went through as 'lighter'. Each block says what it
+     * means now. */
     if (wx.gloom > 0.02) {
       ctx.save();
-      ctx.globalAlpha = Math.min(0.66, wx.gloom * 0.78);
+      ctx.globalCompositeOperation = 'source-over';
+      /* LIGHT UNDER PLAIN OVERCAST, HEAVY IN A STORM (2026-11-22). Since
+       * the flight sky, the sky itself is grey under a deck (overcastSky
+       * dims it by the gloom); this wash on top of it was a second
+       * darkening, and an ordinary overcast noon read as dusk. So the wash
+       * now carries what the sky cannot - a storm's dark heart - and only
+       * a touch for a plain deck: 0.52 gloom under Mirven II's overcast
+       * gave 0.40 alpha before and 0.16 now; a storm's 0.94 still 0.66. */
+      ctx.globalAlpha = Math.min(0.66, wx.gloom * (0.30 + 0.45 * Math.min(1, wx.storm / 0.8)));
       /* Neutral and dark. The first wash was a blue-grey and, laid over a
        * world whose own air is tinted, came out teal — the view from under
        * an overcast looked like the view from under water. */
@@ -11194,11 +11340,43 @@
     /* IN the cloud, not under it: the window fills with grey and you fly
      * on instruments, which is the entire reason a cloud deck is a place
      * and not a texture. */
-    if (wx.inCloud > 0.05) {
+    /* GRADED (2026-11-22): the column's density at your height, so the
+     * murk thickens and thins as you go down through a storm, and it is
+     * lit from above - pale near the top of the deck, dark in a storm's
+     * heart and under a deep one (gloom is the cloud above you). Then
+     * WISPS: a few soft banks in front of the murk that rise past the
+     * glass as you descend and drift as you fly, so moving through cloud
+     * reads as moving, not as a grey screen. Three gradients a frame. */
+    if (wx.inCloud > 0.02) {
+      var dens = wx.inCloud, op = 1 - (wx.vis !== undefined ? wx.vis : Math.exp(-3.2 * dens));
+      var lightC = 1 - 0.75 * Math.max(wx.gloom || 0, wx.storm * 0.8);
+      /* Night takes the whole colour down, not just the lit part of it:
+       * the first cut scaled only the top term and a storm at midnight
+       * came out the same mid-grey as one at dusk. */
+      var dayC = wx.day !== undefined ? 0.12 + 0.88 * wx.day : 1;
+      var cr = Math.round((70 + 100 * lightC) * dayC), cg = Math.round((76 + 104 * lightC) * dayC),
+          cb = Math.round((88 + 112 * lightC) * dayC);
       ctx.save();
-      ctx.globalAlpha = Math.min(0.94, wx.inCloud * 1.05);
-      ctx.fillStyle = '#9aa6b8';
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.globalAlpha = Math.min(0.96, op * 1.04);
+      ctx.fillStyle = 'rgb(' + cr + ',' + cg + ',' + cb + ')';
       ctx.fillRect(0, 0, w, h);
+      /* The banks: positions from altitude and real time, no state. A
+       * bank is wider than the screen, so its edge is what you see. */
+      var altK = (wx.alt || 0) * 0.9, now = performance.now() / 1000;
+      for (var bk = 0; bk < 3; bk++) {
+        var ph = altK * (0.55 + 0.25 * bk) + bk * 1.7;
+        var by = h * (1.15 - ((ph % 1.6) + 1.6) % 1.6);
+        var bx = w * (0.5 + 0.35 * Math.sin(now * 0.05 * (bk + 1) + bk * 2.1));
+        var br = Math.max(w, h) * (0.55 + 0.2 * bk);
+        var gr = ctx.createRadialGradient(bx, by, br * 0.05, bx, by, br);
+        var a0 = Math.min(0.55, dens * (0.30 + 0.12 * bk)) * (1 - Math.min(1, op) * 0.6);
+        gr.addColorStop(0, 'rgba(' + Math.min(255, cr + 30) + ',' + Math.min(255, cg + 30) + ',' + Math.min(255, cb + 30) + ',' + a0.toFixed(3) + ')');
+        gr.addColorStop(1, 'rgba(' + cr + ',' + cg + ',' + cb + ',0)');
+        ctx.globalAlpha = 1;
+        ctx.fillStyle = gr;
+        ctx.fillRect(0, 0, w, h);
+      }
       ctx.restore();
     }
 
@@ -11218,6 +11396,12 @@
          * white rectangle is not a flash, it is a missing frame. Lower, so
          * the sky goes pale and what is falling through it stays visible. */
         var lit = Math.min(0.5, env * wx.storm * (0.40 + 0.50 * sp.salt[1]));
+        /* NOT WHILE PAUSED (2026-11-22). The stroke's phase is sim time,
+         * so a pause that lands on a strike holds the flash forever - a
+         * canopy gone pale-white for as long as the menu is up. Found by
+         * the storm probe, which pauses: every frame inside the cell read
+         * 105 grey before the flash and 238 after it. */
+        if (G.paused) lit = 0;
         if (lit > 0.01) {
           ctx.save();
           ctx.globalCompositeOperation = 'lighter';
@@ -11409,7 +11593,12 @@
     if (!Weather || !Weather.aloft) return;
     var wx = Weather.aloft(G.ship, G.sys, G.t);
     if (!wx) return;
+    /* Without the glass's glow: a shadow blur on a full-screen fill is a
+     * blur of the whole screen, every frame. */
+    ctx.save();
+    ctx.shadowBlur = 0;
     weatherFall(ctx, cam, w, h, wx);
+    ctx.restore();
   }
 
   /* THE SAME WEATHER FROM OUTSIDE THE HULL: the chase camera, and standing
@@ -11423,6 +11612,64 @@
     var wx = Weather.aloft(G.ship, G.sys, G.t);
     if (!wx) return;
     weatherFall(ctx, cam, w, h, wx);
+  }
+
+  /* ---- vapour, from the seat (2026-11-22) ---------------------------------
+   * The tip trails and the sheet over the hull are drawn in the world, and
+   * from the seat you see neither: the tips are behind you and the sheet is
+   * on the hull under the glass. What a pilot does see in a hard pull in wet
+   * air is vapour boiling off the canopy rails and the leading edges just
+   * outside it, streaming past the frame. So: short white wisps in the
+   * outer part of the glass, running outward from where you are going
+   * (the stagnation point, as the re-entry streaks do), crowded toward the
+   * side you are pulling toward - the lifting side, where the pressure is
+   * lowest. Hashed off a time bucket like the rain: no state.
+   *
+   * Drawn with the weather, before the instruments: it is outside. */
+  function drawCanopyVapour(ctx, cam, w, h) {
+    var v = G.vapour && G.vapour.player;
+    if (!v || !v.flow) return;
+    var s = Math.min(1, v.sheet + 0.25 * v.tip);
+    if (!(s > 0.04)) return;
+    var p = cam.projectDir(v.flow);
+    var x = w / 2, y = h / 2;
+    if (p && p.x > -w * 0.2 && p.x < w * 1.2 && p.y > -h * 0.2 && p.y < h * 1.2) { x = p.x; y = p.y; }
+    /* The lifting side, on the screen. */
+    var lx = 0, ly = -1;
+    if (v.liftDir) {
+      lx = V.dot(v.liftDir, cam.r); ly = -V.dot(v.liftDir, cam.u);
+      var lm = Math.hypot(lx, ly);
+      if (lm > 1e-6) { lx /= lm; ly /= lm; } else { lx = 0; ly = -1; }
+    }
+    var tS = nowSeconds(), bucket = Math.floor(tS * 24);
+    var reach = Math.hypot(w, h);
+    var n = Math.round(10 + 40 * s);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    ctx.shadowBlur = 0;            // the glass's glow, on long strokes, is the ladder's cost again
+    ctx.lineCap = 'round';
+    for (var band = 0; band < 2; band++) {
+      ctx.strokeStyle = 'rgba(240,244,250,' + ((0.16 + 0.40 * s) * (band ? 0.55 : 1)).toFixed(3) + ')';
+      ctx.lineWidth = (2 + 5 * s) * (band ? 1.8 : 1);
+      ctx.beginPath();
+      for (var i = band; i < n; i += 2) {
+        /* Angles bunched toward the lifting side: a uniform draw over a fan
+         * that narrows as the pull hardens. */
+        var u = hashUnit(i * 4.13 + bucket * 0.173);
+        var spread = (u - 0.5) * Math.PI * (1.6 - 0.9 * s);
+        var ang = Math.atan2(ly, lx) + spread;
+        /* The outer part of the GLASS: the canopy frame is about a quarter
+         * of the diagonal out from the middle, and the first cut started
+         * these past it, where the frame hid them. */
+        var r0 = reach * (0.13 + 0.20 * hashUnit(i * 2.31 + bucket * 0.611));
+        var len = reach * (0.04 + 0.10 * s) * (0.5 + hashUnit(i * 6.07 + bucket * 0.33));
+        var ca = Math.cos(ang), sa = Math.sin(ang);
+        ctx.moveTo(x + ca * r0, y + sa * r0);
+        ctx.lineTo(x + ca * (r0 + len), y + sa * (r0 + len));
+      }
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   /* ---- re-entry, from the seat --------------------------------------------
@@ -11665,6 +11912,236 @@
     ctx.restore();
   }
 
+  /* ---- scars: hot metal, and the holes (scars.js, 2026-11-20) ------------
+   * Astra: "heated metal from weapon fire striking a station or ship, as
+   * well as damage decals which show a glowing, arcing interior, or which
+   * show gas venting from the ship's interior."
+   *
+   * Drawn like the blooms, in screen space over the hull, because what is
+   * being drawn is light and gas, not geometry. Each scar sits on the
+   * plating in the hull's own frame (Render.hullScarPoint for a ship, the
+   * shot's own measured point for a station), so it turns with the hull,
+   * and one on the far side is not drawn: the plating's normal against the
+   * line to the eye decides, with a short fade at the limb so a scar
+   * rolling round the edge does not blink out.
+   *
+   * `place(sc)` gives { p: [x,y,z], n: [x,y,z] } in the frame's units,
+   * `scale` turns those into km (a ship's length, a station's radius),
+   * `spot` is the size of a fresh hole as a share of `scale`.
+   *
+   * Three layers per scar, in this order:
+   *   - THE HOLE (a breach): a dark ragged mouth with a hot lip, and what
+   *     is behind it - an orange glow and, for 'arc', the wiring shorting
+   *     across it in blue-white fits;
+   *   - THE HEAT: a glow the colour the metal is at that heat;
+   *   - THE GAS ('vent'): a plume of puffs leaving along the normal, thinning
+   *     as the compartment empties.
+   * The flicker and the puffs run on the wall clock (they are light and
+   * motion); how hot, how open and how much air is left run on sim time. */
+  var SCAR_TMP = { x: 0, y: 0, z: 0 };
+  function scarHash(a, b) { return global.Scars.hash01(a + '|' + b); }
+  function drawScars(ctx, cam, frame, scale, list, place, spot, keySeed) {
+    var Scars = global.Scars;
+    if (!list || !list.length || !Scars) return 0;
+    var tS = G.t, nowS = nowSeconds(), drawn = 0;
+    for (var i = 0; i < list.length; i++) {
+      var sc = list[i];
+      var heat = Scars.heatAt(sc, tS);
+      if (!sc.kind && heat < 0.02) continue;
+      var pl = place(sc);
+      if (!pl || !pl.p) continue;
+      var W = Render.localToWorld(frame, pl.p[0] * scale, pl.p[1] * scale, pl.p[2] * scale);
+      var N = V.norm(V.add(V.add(V.scale(frame.right, pl.n[0]), V.scale(frame.up, pl.n[1])),
+                           V.scale(frame.fwd, pl.n[2])));
+      var toEye = V.norm(V.sub(cam.eye, W));
+      var facing = V.dot(N, toEye);
+      if (facing < -0.05) continue;
+      var vis = Math.min(1, (facing + 0.05) / 0.3);
+      var pr = cam.project(W);
+      if (!pr) continue;
+      var r = Math.max(1.2, scale * spot * pr.scale);
+      if (r > 400) continue;            // the camera is in the hole; nothing sensible to draw
+      drawn++;
+      var seed = keySeed + '|' + sc.seq;
+
+      /* The heat FIRST, additive: a glow the colour of the metal. Under a
+       * breach it is drawn before the mouth, so the hole stays a dark hole
+       * in a glowing rim rather than vanishing in a white disc. */
+      if (heat > 0.02) {
+        var hc = Scars.heatRGB(heat), hr = r * (sc.kind ? 1.25 : 0.8) * (0.8 + 0.5 * Math.min(1, heat));
+        var ha = hc[3] * vis;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        var gh = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, hr);
+        gh.addColorStop(0, 'rgba(' + hc[0] + ',' + hc[1] + ',' + hc[2] + ',' + ha.toFixed(3) + ')');
+        gh.addColorStop(0.45, 'rgba(' + hc[0] + ',' + Math.round(hc[1] * 0.6) + ',' + Math.round(hc[2] * 0.4) + ',' + (ha * 0.5).toFixed(3) + ')');
+        gh.addColorStop(1, 'rgba(' + hc[0] + ',60,20,0)');
+        ctx.fillStyle = gh;
+        ctx.beginPath(); ctx.arc(pr.x, pr.y, hr, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+
+      if (sc.kind) {
+        /* The mouth: a ragged dark polygon, foreshortened by how square-on
+         * it is, with a lip that keeps a little heat of its own. */
+        var lipHeat = Math.max(heat, 0.3);
+        var lc = Scars.heatRGB(lipHeat);
+        var sq = 0.35 + 0.65 * Math.max(0, facing);
+        /* The hole's own axes on screen: along the plating's tilt. */
+        var T1 = V.norm(V.cross(N, Math.abs(N.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 }));
+        var pT = cam.project(V.addScaled(W, T1, scale * spot));
+        var ang = pT ? Math.atan2(pT.y - pr.y, pT.x - pr.x) : 0;
+        ctx.save();
+        ctx.translate(pr.x, pr.y);
+        ctx.rotate(ang);
+        ctx.scale(1, sq);
+        ctx.globalAlpha = vis;
+        ctx.beginPath();
+        var K7 = 9;
+        for (var k = 0; k < K7; k++) {
+          var a = k / K7 * Math.PI * 2;
+          var rr = r * (0.55 + 0.45 * scarHash(seed, k));
+          if (k === 0) ctx.moveTo(Math.cos(a) * rr, Math.sin(a) * rr);
+          else ctx.lineTo(Math.cos(a) * rr, Math.sin(a) * rr);
+        }
+        ctx.closePath();
+        ctx.fillStyle = 'rgba(10,7,6,0.94)';
+        ctx.fill();
+        /* The lip: thin, and never whiter than orange - a white rim on a
+         * big hole read as a wireframe, not a wound (the platform probe). */
+        ctx.lineWidth = Math.max(1, r * 0.08);
+        var lc2 = Scars.heatRGB(Math.min(lipHeat, Scars.HEAT_MAX * 0.6));
+        ctx.strokeStyle = 'rgba(' + lc2[0] + ',' + lc2[1] + ',' + lc2[2] + ',' + (0.6 * lc2[3]).toFixed(3) + ')';
+        ctx.stroke();
+        /* What is behind it: fire-light deep in the compartment, small
+         * enough that the mouth still reads as dark. */
+        ctx.globalCompositeOperation = 'lighter';
+        var arc = Scars.arcAt(sc, tS), vent = Scars.ventAt(sc, tS);
+        var inner = sc.kind === 'arc' ? 0.4 + 0.2 * Math.sin(nowS * 9 + sc.seq) : 0.15 + 0.15 * vent;
+        var gi = ctx.createRadialGradient(0, 0, 0, 0, 0, r * 0.5);
+        gi.addColorStop(0, 'rgba(255,120,40,' + (inner * vis).toFixed(3) + ')');
+        gi.addColorStop(1, 'rgba(140,30,8,0)');
+        ctx.fillStyle = gi;
+        ctx.beginPath(); ctx.arc(0, 0, r * 0.5, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+
+        /* The wiring, shorting across the mouth in fits: a few jagged
+         * strokes from inside out past the lip, blue-white, different every
+         * fourteenth of a second and only some of them. */
+        if (arc > 0) {
+          var slot = Math.floor(nowS * 14);
+          if (scarHash(seed, 'on' + slot) < 0.3 + 0.55 * arc) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.globalAlpha = vis;
+            var nArc = 1 + Math.floor(scarHash(seed, 'n' + slot) * 3);
+            for (var q = 0; q < nArc; q++) {
+              var a0 = scarHash(seed, 'a' + slot + q) * Math.PI * 2;
+              var len = r * (1.0 + 1.4 * scarHash(seed, 'l' + slot + q));
+              var segs = 5, px0 = pr.x, py0 = pr.y;
+              ctx.beginPath();
+              ctx.moveTo(px0, py0);
+              for (var g = 1; g <= segs; g++) {
+                var f = g / segs, j = (scarHash(seed, 'j' + slot + q + '|' + g) - 0.5) * r * 0.7;
+                var x = pr.x + Math.cos(a0) * len * f - Math.sin(a0) * j;
+                var y = pr.y + Math.sin(a0) * len * f * sq + Math.cos(a0) * j;
+                ctx.lineTo(x, y);
+              }
+              ctx.strokeStyle = 'rgba(140,190,255,0.55)';
+              ctx.lineWidth = Math.max(1.6, r * 0.22);
+              ctx.stroke();
+              ctx.strokeStyle = 'rgba(235,245,255,0.95)';
+              ctx.lineWidth = Math.max(0.8, r * 0.07);
+              ctx.stroke();
+            }
+            var gb = ctx.createRadialGradient(pr.x, pr.y, 0, pr.x, pr.y, r * 1.8);
+            gb.addColorStop(0, 'rgba(170,210,255,' + (0.35 * arc).toFixed(3) + ')');
+            gb.addColorStop(1, 'rgba(120,170,255,0)');
+            ctx.fillStyle = gb;
+            ctx.beginPath(); ctx.arc(pr.x, pr.y, r * 1.8, 0, Math.PI * 2); ctx.fill();
+            ctx.restore();
+          }
+        }
+
+        /* The air going: puffs leaving along the normal, spreading and
+         * thinning, fewer and fainter as the compartment empties. In
+         * world space, so the plume streams off the hull whichever way the
+         * camera looks at it. */
+        if (vent > 0) {
+          var T2 = V.cross(N, T1), NP = 12;
+          ctx.save();
+          for (var m = 0; m < NP; m++) {
+            var ph = nowS * 0.8 + m / NP, cyc = Math.floor(ph), u = ph - cyc;
+            var jx = (scarHash(seed, 'vx' + cyc + '|' + m) - 0.5) * 0.9 * u;
+            var jy = (scarHash(seed, 'vy' + cyc + '|' + m) - 0.5) * 0.9 * u;
+            var reach = scale * spot * (0.6 + 7 * u);
+            SCAR_TMP = V.add(V.add(V.addScaled(W, N, reach), V.scale(T1, jx * reach)), V.scale(T2, jy * reach));
+            var pp = cam.project(SCAR_TMP);
+            if (!pp) continue;
+            var pr2 = Math.max(1, r * (0.45 + 2.6 * u));
+            var al = (1 - u) * (1 - u) * 0.6 * vent;
+            if (!(al > 0.01)) continue;
+            var gv = ctx.createRadialGradient(pp.x, pp.y, 0, pp.x, pp.y, pr2);
+            gv.addColorStop(0, 'rgba(226,232,240,' + al.toFixed(3) + ')');
+            gv.addColorStop(1, 'rgba(200,210,224,0)');
+            ctx.fillStyle = gv;
+            ctx.beginPath(); ctx.arc(pp.x, pp.y, pr2, 0, Math.PI * 2); ctx.fill();
+          }
+          ctx.restore();
+        }
+      }
+
+    }
+    return drawn;
+  }
+  /* A ship's scars: on her hull as her class draws it. `kind` is the
+   * shield's own key, so the scar and the field agree about the shape. */
+  var SCAR_SPOT_SHIP = 0.05;
+  function drawShipScars(ctx, cam, s, kind, lenKm, holder) {
+    var spec = holder || s.spec || s;
+    if (!spec || !spec.scars || !spec.scars.length || !global.Scars) return 0;
+    global.Scars.reconcile(spec, spec.hullHp, spec.hullMax);
+    var frame = s.live && s.live.fwd ? s.live : s;
+    if (!frame.fwd) return 0;
+    return drawScars(ctx, cam, frame, lenKm, spec.scars, function (sc) {
+      Render.hullScarPoint(kind, sc);
+      return { p: sc._p, n: sc._n };
+    }, SCAR_SPOT_SHIP, String(spec.id || spec.name || 'ship'));
+  }
+  /* A station's: where the shots actually landed on its plating. */
+  var SCAR_SPOT_PORT = 0.03;
+  function drawPortScars(ctx, cam, frame, b) {
+    if (!b.scars || !b.scars.length || !global.Scars) return 0;
+    /* A station's crews patch the plating: a scar two days old and cold
+     * is gone. */
+    b.scars = b.scars.filter(function (sc) {
+      return G.t - (sc.openAt !== null && sc.openAt !== undefined ? sc.openAt : sc.ht) < 2 * 86400 ||
+             global.Scars.heatAt(sc, G.t) > 0.02;
+    });
+    return drawScars(ctx, cam, frame, b.radius || 1, b.scars, function (sc) {
+      if (!sc.p) return null;
+      return { p: sc.p, n: [sc.n.x, sc.n.y, sc.n.z] };
+    }, SCAR_SPOT_PORT, String(b.id));
+  }
+  /* THE SHOT LANDS WHERE THE STATION IS (combat.js portOnRay): the exact
+   * test against the hull it is drawn with, on the frame it is drawn on. */
+  if (global.Combat && Combat.api) {
+    Combat.api.portHitTest = function (b, origin, dir, range) {
+      var model = stationModelFor(b), frame = stationFrame(b, true);
+      if (!frame || b.seaPlatform) return null;
+      var sc = b.radius || 1, mesh = Render.portHullMesh(model);
+      var rel = V.sub(origin, frame.pos);
+      var o = [V.dot(rel, frame.right) / sc, V.dot(rel, frame.up) / sc, V.dot(rel, frame.fwd) / sc];
+      var d = [V.dot(dir, frame.right), V.dot(dir, frame.up), V.dot(dir, frame.fwd)];
+      var h = Render.rayMesh(mesh, o, d);
+      if (!h) return null;
+      var dist = h.t * sc;
+      if (dist > range) return null;
+      return { dist: dist, point: V.addScaled(origin, dir, dist),
+               local: { p: h.p, n: { x: h.n[0], y: h.n[1], z: h.n[2] } } };
+    };
+  }
+
   /* ---- wreckage, drawn ---------------------------------------------------
    * Shards tumble, so each one needs an attitude every frame. It is built
    * here rather than stored on the shard, for two reasons: an orthonormal
@@ -11737,6 +12214,154 @@
     if (GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir)) return;
     Render.paintMesh(ctx, cam, fr, crateMesh(), CRATE_HALF_KM[size] || 0.006, sunDir, null);
   }
+  /* ---- RELAYS AND YOUR COM-SATS IN SPACE (comsats.js, 2026-11-20) -------
+   * Astra: relays and sats should be "models in space as well as on the
+   * map". A small mesh - a foil-wrapped body, two solar wings, a dish
+   * looking down at its world - about twelve metres across, which is what
+   * one is. Close enough to resolve, the model; further out, where it
+   * would be a pixel, a faint drawn mark (icons.js) so a pilot can find
+   * one at all: green for yours, grey and slashed for a dark one. */
+  var RELAY_MESH = null, RELAY_HALF_KM = 0.006, RELAY_MARK_KM = 25000;
+  function relayMesh() {
+    if (RELAY_MESH) return RELAY_MESH;
+    var m = { v: [], f: [] };
+    Render.mergeMesh(m, Render.box(0.32, 0.32, 0.42), 0, 0, 0, 1, '#c9a24a');          // the bus, in foil
+    Render.mergeMesh(m, Render.box(0.75, 0.02, 0.3), -1.15, 0, 0, 1, '#1d3550');       // wings
+    Render.mergeMesh(m, Render.box(0.75, 0.02, 0.3), 1.15, 0, 0, 1, '#1d3550');
+    Render.mergeMesh(m, Render.box(0.42, 0.04, 0.04), -0.5, 0, 0, 1, '#8a8f96');       // booms
+    Render.mergeMesh(m, Render.box(0.42, 0.04, 0.04), 0.5, 0, 0, 1, '#8a8f96');
+    Render.mergeMesh(m, Render.tube(10, 0.06, 0.34, 0.08, true), 0, 0, 0.52, 1, '#dfe3e6'); // the dish
+    RELAY_MESH = m;
+    return m;
+  }
+  function drawRelays(ctx, cam) {
+    var Cs = global.Comsats;
+    if (!Cs || !G.sys) return;
+    var star = (G.here && G.here.id) || G.sys.starId;
+    var list = [];
+    Cs.relaysFor(G.sys, star).forEach(function (r) {
+      list.push({ o: r, pos: Cs.relayPos(G.sys, r, G.t), dark: Cs.worldDark(G, star, r.body, G.t), mine: false });
+    });
+    Cs.satsIn(G, star).forEach(function (s) {
+      list.push({ o: s, pos: Cs.satPos(G.sys, s, G.t), dark: !Cs.satLive(s, G.t), mine: true });
+    });
+    var GLW = global.GLWorld, Ic = global.Icons;
+    for (var i = 0; i < list.length; i++) {
+      var it = list[i];
+      if (!it.pos) continue;
+      var d = V.dist(it.pos, cam.eye || G.ship.pos);
+      var onMap = mapMode();
+      if (d > RELAY_MARK_KM && !onMap) continue;
+      var sp = cam.project(it.pos);
+      if (!sp || sp.x < -20 || sp.x > cam.w + 20 || sp.y < -20 || sp.y > cam.h + 20) continue;
+      var w = G.sys.byId[it.o.body];
+      /* ON THE MAP, at any range - but only once it stands clear of its
+       * world on the screen; zoomed out, six marks on a dot are clutter. */
+      if (onMap) {
+        var wsp = w ? cam.project(Sim.bodyPosition(w, G.sys, G.t)) : null;
+        if (wsp && Math.hypot(wsp.x - sp.x, wsp.y - sp.y) < 12) continue;
+        if (Ic) Ic.draw(ctx, it.dark ? 'sat-down' : it.mine ? 'mysat' : 'sat', sp.x, sp.y, 4.5,
+                        it.dark ? '#7f8c96' : it.mine ? '#7dffb0' : '#9fd8ff');
+        continue;
+      }
+      if (RELAY_HALF_KM * 2 * sp.scale > 3 && w) {
+        /* Dish to the world, wings square to that. */
+        var C = Sim.bodyPosition(w, G.sys, G.t);
+        var fwd = V.norm(V.sub(C, it.pos));
+        var right = V.norm(V.cross(fwd, Math.abs(fwd.z) < 0.9 ? { x: 0, y: 0, z: 1 } : { x: 1, y: 0, z: 0 }));
+        var fr = { pos: it.pos, fwd: fwd, right: right, up: V.cross(right, fwd) };
+        var sun = sunDirAt(it.pos);
+        if (!(GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, relayMesh(), RELAY_HALF_KM, sun))) {
+          Render.paintMesh(ctx, cam, fr, relayMesh(), RELAY_HALF_KM, sun, null);
+        }
+        continue;
+      }
+      if (!Ic) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.25, 0.8 - d / RELAY_MARK_KM * 0.6);
+      Ic.draw(ctx, it.dark ? 'sat-down' : it.mine ? 'mysat' : 'sat', sp.x, sp.y, 4,
+              it.dark ? '#7f8c96' : it.mine ? '#7dffb0' : '#9fd8ff');
+      ctx.restore();
+    }
+  }
+
+  /* ---- ARMED DEFENCE PLATFORMS (milsats.js, 2026-11-20) ------------------
+   * A heavier cousin of the relay: a dark armoured drum about forty metres
+   * across, a radiator either side, and a turret with its barrel along the
+   * station's orbit. The owner's colour on the drum's band. Far off, the
+   * icon (icons.js 'milsat'): solid when armed, slashed when its RTG is
+   * out, dashed when it has been destroyed. A destroyed one is not drawn
+   * as a model - there is nothing left that size. */
+  var PLAT_MESH = {}, PLAT_HALF_KM = 0.02, PLAT_MARK_KM = 4000;
+  function platMesh(col) {
+    var k = col || '#6f7a86';
+    if (PLAT_MESH[k]) return PLAT_MESH[k];
+    var m = { v: [], f: [] };
+    Render.mergeMesh(m, Render.tube(8, 0.42, 0.42, 0.55, true), 0, 0, 0, 1, '#3d434b');   // the drum
+    Render.mergeMesh(m, Render.tube(8, 0.44, 0.44, 0.1, true), 0, 0, 0.05, 1, k);          // owner's band
+    Render.mergeMesh(m, Render.box(0.9, 0.03, 0.34), -1.25, 0, 0, 1, '#2a2f36');           // radiators
+    Render.mergeMesh(m, Render.box(0.9, 0.03, 0.34), 1.25, 0, 0, 1, '#2a2f36');
+    Render.mergeMesh(m, Render.box(0.2, 0.2, 0.18), 0, 0.5, 0, 1, '#5b636d');              // turret
+    Render.mergeMesh(m, Render.box(0.05, 0.05, 0.55), 0, 0.5, 0.5, 1, '#9aa2ab');          // barrel
+    PLAT_MESH[k] = m;
+    return m;
+  }
+  function drawPlatforms(ctx, cam) {
+    var Ms = global.Milsats;
+    if (!Ms || !G.sys || !G.here) return;
+    var plats = Ms.platformsFor(G.sys, G.here, G.galaxy);
+    if (!plats.length) return;
+    var GLW = global.GLWorld, Ic = global.Icons, onMap = mapMode();
+    var owner = G.galaxy && G.galaxy.factionById ? G.galaxy.factionById[plats[0].owner] : null;
+    var col = owner && owner.color;
+    for (var i = 0; i < plats.length; i++) {
+      var p = plats[i], pos = Ms.posOf(G.sys, p, G.t);
+      if (!pos) continue;
+      var dead = Ms.isDead(G, p), dark = !dead && Ms.isDark(G, p, G.t);
+      var kind = dead ? 'milsat-gone' : dark ? 'milsat-down' : 'milsat';
+      var ink = dead ? '#7f8c96' : dark ? '#9aa2ab' : Ms.hostileToYou(G, p, G.t) ? '#ff6b5a' : (col || '#ffd36b');
+      var d = V.dist(pos, cam.eye || G.ship.pos);
+      /* ON THE MAP, beside the station they guard (Astra, 2026-11-20:
+       * "put icons to the left of the station's name"): forty-five km is
+       * nothing at map scale, and drawn where they are they sat on top of
+       * the name. So a row of marks running out to the left of the
+       * station's own marker, one per platform, in its state's colour. */
+      if (onMap) {
+        var port = G.sys.byId[p.port];
+        var psp = port ? cam.project(Sim.bodyPosition(port, G.sys, G.t)) : null;
+        if (!psp || !Ic) continue;
+        var k = 0;
+        for (var j = 0; j < i; j++) if (plats[j].port === p.port) k++;
+        Ic.draw(ctx, kind, psp.x - 13 - k * 11, psp.y, 4.2, ink);
+        continue;
+      }
+      var sp = cam.project(pos);
+      if (!sp || sp.x < -20 || sp.x > cam.w + 20 || sp.y < -20 || sp.y > cam.h + 20) continue;
+      if (d > PLAT_MARK_KM) continue;
+      if (!dead && PLAT_HALF_KM * 2 * sp.scale > 3) {
+        var fr = Ms.frameOf(G.sys, p, G.t);
+        var sun = sunDirAt(pos);
+        if (!(GLW && GLW.queueMesh && glLive() && GLW.queueMesh(cam, fr, platMesh(col), PLAT_HALF_KM, sun))) {
+          Render.paintMesh(ctx, cam, fr, platMesh(col), PLAT_HALF_KM, sun, null);
+        }
+        /* Where it has been hit (scars.js): a drum, so a scar sits on a
+         * sphere of its size - close enough for something forty metres
+         * across. */
+        if (p.scars && p.scars.length) {
+          drawScars(ctx, cam, fr, PLAT_HALF_KM, p.scars, function (sc) {
+            return { p: [sc.n.x * 0.45, sc.n.y * 0.45, sc.n.z * 0.45], n: [sc.n.x, sc.n.y, sc.n.z] };
+          }, 0.2, p.id);
+        }
+        continue;
+      }
+      if (!Ic) continue;
+      ctx.save();
+      ctx.globalAlpha = Math.max(0.3, 0.85 - d / PLAT_MARK_KM * 0.55);
+      Ic.draw(ctx, kind, sp.x, sp.y, 4.2, ink);
+      ctx.restore();
+    }
+  }
+
   /* ---- the car in a procedural shed's shaft (2026-11-02) ---------------
    * Astra: "no elevators in internal elevator shafts ... this needs fixed".
    * A modelled site's lifts are the art's own cars (Render.drawMovers puts
@@ -15397,6 +16022,126 @@
    * pilot and the canopy, so it should cut off the bottom of the attitude
    * ladder rather than the ladder floating over the console. That mattered
    * a little before; now that the head can turn, it matters constantly. */
+  /* ---- WHAT THIS SHIP'S GLASS LEADS WITH (2026-11-21) ---------------------
+   * Astra: "Maybe you can make different interfaces for each ship type?
+   * Like a fighter shows missiles and guns selected, a freighter shows the
+   * current prices of your cargo at your selected destination." And when
+   * asked what decides it: the hull's role sets the main panel, and gear
+   * fitted to any hull adds its own lines (a Mule with guns gets a weapons
+   * line). Everything here is read off state the game already keeps - the
+   * fit, the racks, the hold, the market, the contracts - and says nothing
+   * it does not know: there is no cost basis kept for cargo yet, so the
+   * freighter's panel prices the hold at the destination against here,
+   * not against what you paid. Drawn by Render.drawRolePanel. */
+  function roleReadout() {
+    var s = G.ship, role = (Render.HULL_ROLE && Render.HULL_ROLE[s.hullId]) || 'freight';
+    var lines = [], title = '';
+    function add(t, opt) { if (lines.length < 5) lines.push({ t: t, warn: opt === 'warn', dim: opt === 'dim' }); }
+    var nav = navTargetState();
+    var navPort = G.navTarget && G.sys && G.sys.byId ? G.sys.byId[G.navTarget.id] : null;
+    if (navPort && !navPort.market) navPort = null;
+    var herePort = s.docked && G.sys && G.sys.byId ? G.sys.byId[s.docked] : null;
+    if (herePort && !herePort.market) herePort = null;
+    var heldT = Math.round(Sim.cargoMass(s)), cap = s.cargoCap || 0;
+    var cargo = [];
+    for (var cid in (s.cargo || {})) if (s.cargo[cid] > 0) cargo.push(cid);
+    cargo.sort(function (a, b) { return s.cargo[b] - s.cargo[a]; });
+    var guns = Combat.gunsInGroup ? Combat.gunsInGroup(s, 'a').concat(Combat.gunsInGroup(s, 'b')) : [];
+    var rack = s.missileId && Combat.rackList ? Combat.rackList(s).filter(function (r) { return r.id === s.missileId; })[0] : null;
+    var souls = 0, pax = [];
+    (G.missions || []).forEach(function (m) { if (m.type === 'passage') { souls += m.souls || 0; pax.push(m); } });
+    /* Through global: the render suite draws this view without a market. */
+    var Eco = global.Economy;
+    function comName(c) { var b = Eco && Eco.BY_ID && Eco.BY_ID[c]; return b ? b.name : c; }
+    function sellAt(port, c) { var p = port && Eco && Eco.price ? Eco.price(port, c, G.t) : null; return p && p.sell !== null ? p.sell : null; }
+    function groupLine(g) {
+      var list = Combat.gunsInGroup(s, g);
+      if (!list.length) return null;
+      var n = {}; list.forEach(function (e) { n[e.item.name] = (n[e.item.name] || 0) + 1; });
+      return g.toUpperCase() + '  ' + Object.keys(n).map(function (k) { return (n[k] > 1 ? n[k] + '× ' : '') + k; }).join(', ');
+    }
+    function missileLine() {
+      if (rack) return 'MSL ' + ((Combat.MISSILES[rack.id] || {}).name || rack.id) + ' ×' + rack.n;
+      return null;
+    }
+    function heatLine() {
+      var k = Math.round(100 * (s.heat || 0) / (Sim.HEAT_LIMIT || 1));
+      return { t: 'HEAT ' + k + '%', o: k >= 70 ? 'warn' : null };
+    }
+    if (role === 'fight') {
+      title = 'WEAPONS';
+      var ga = groupLine('a'), gb = groupLine('b');
+      if (ga) add(ga); if (gb) add(gb);
+      if (!ga && !gb) add('NO GUNS FITTED', 'warn');
+      add(missileLine() || 'NO MISSILES', rack ? null : 'dim');
+      var hl = heatLine(); add(hl.t, hl.o);
+      add(nav ? 'TGT ' + nav.name + '  ' + fmtDist(nav.range) : 'NO TARGET', nav ? (nav.hostile ? 'warn' : null) : 'dim');
+    } else if (role === 'freight') {
+      /* WHAT THE HOLD WILL MAKE (2026-11-21). Astra: "Trade HUD should
+       * show the cargo in your hull, how much you'll make or lose taking it
+       * to your destination in either bright green or bright red, fading
+       * through orange and yellow for deals which are less and less bad."
+       * Each of your own cargoes: its mark, its tonnes, and what selling
+       * them at the port locked on NAV comes to against what they cost you
+       * (Economy.costOf), coloured by the margin (Render.dealColour).
+       * Contract freight is not yours to sell and gets a plain line. */
+      var dest = navPort || null;
+      title = 'HOLD ' + heldT + ' / ' + cap + ' t' + (dest ? '  →  ' + dest.name.toUpperCase() : '');
+      if (!cargo.length) add('hold empty', 'dim');
+      var net = 0, netCost = 0, priced = !!dest, freight = 0;
+      var signed = function (n) { return (n >= 0 ? '+' : '−') + Math.abs(Math.round(n)).toLocaleString('en-US') + ' cr'; };
+      var shown = 0;
+      cargo.forEach(function (c) {
+        var Mi = global.Missions, held = s.cargo[c];
+        var own = Mi && Mi.sellableTonnes ? Mi.sellableTonnes(G, c, held) : held;
+        freight += Math.max(0, held - own);
+        if (!(own > 0)) return;
+        var p = sellAt(dest, c), co = Eco && Eco.costOf ? Eco.costOf(s, c, own) : { cr: 0 };
+        if (shown++ >= 3) return;
+        var nm = comName(c); if (nm.length > 12) nm = nm.slice(0, 11) + '.';
+        if (!dest) { lines.length < 5 && lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: co.cr > 0 ? 'paid ' + Math.round(co.cr).toLocaleString('en-US') : 'free', col: null }); return; }
+        if (p === null) { priced = false; lines.length < 5 && lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: 'no buyer', col: Render.dealColour(-1) }); return; }
+        var gain = p * own - co.cr;
+        net += gain; netCost += co.cr;
+        if (lines.length < 5) lines.push({ icon: c, t: nm + '  ' + Math.round(own) + 't', r: signed(gain),
+                                           col: Render.dealColour(co.cr > 0 ? gain / co.cr : null) });
+      });
+      if (shown > 3) add('+' + (shown - 3) + ' more', 'dim');
+      if (freight > 0) add('FREIGHT ' + Math.round(freight) + ' t under contract', 'dim');
+      if (!dest && cargo.length) add('lock a port on NAV to price the hold', 'dim');
+      else if (dest && shown && priced && lines.length < 5) {
+        lines.push({ t: 'NET AT ' + (dest.name.length > 14 ? dest.name.slice(0, 13) + '.' : dest.name).toUpperCase(),
+                     r: signed(net), col: Render.dealColour(netCost > 0 ? net / netCost : null) });
+      }
+    } else if (role === 'work') {
+      title = 'WORK  ·  HOLD ' + heldT + ' / ' + cap + ' t';
+      var ore = Math.round((s.cargo && s.cargo.ores) || 0), rare = Math.round((s.cargo && s.cargo.rare) || 0);
+      add('ORE ' + ore + ' t  ·  RARE ' + rare + ' t', ore || rare ? null : 'dim');
+      add('HOLD ' + (cap ? Math.round(100 * heldT / cap) : 0) + '% full', cap && heldT / cap > 0.9 ? 'warn' : null);
+      if (global.Arms && Arms.hasArms(s)) {
+        var st = s.arms || { jaw: 0 };
+        add('ARMS ' + (st.held ? 'HOLDING ' + String(st.held.kind || 'load').toUpperCase() : st.jaw > 0.5 ? 'OPEN' : 'STOWED'));
+      }
+      if (s.tow) add('TOW ENGAGED');
+      add(nav ? 'TGT ' + nav.name + '  ' + fmtDist(nav.range) : 'NO TARGET', nav ? null : 'dim');
+    } else {
+      title = 'PASSENGERS  ·  ' + souls + ' ABOARD';
+      if (!pax.length) add('no passengers aboard', 'dim');
+      pax.slice(0, 4).forEach(function (m) {
+        var left = (m.deadline || 0) - G.t;
+        add((m.souls || 0) + ' → ' + (m.toName || '?') + '  ' + (m.pay || 0) + ' cr  ' + (left > 0 ? fmtTime(left) : 'LATE'),
+            left < 6 * 3600 ? 'warn' : null);
+      });
+    }
+    /* Gear the hull's role did not lead with gets a line of its own. */
+    if (role !== 'fight' && guns.length) add('GUNS ' + guns.length + (rack ? '  ·  ' + missileLine() : ''));
+    else if (role !== 'fight' && rack) add(missileLine());
+    if (role !== 'passage' && souls) add('PAX ' + souls + ' aboard');
+    if ((role === 'fight' || role === 'passage') && cargo.length) add('HOLD ' + heldT + ' / ' + cap + ' t');
+    if (role !== 'work' && global.Arms && Arms.hasArms(s)) add('ARMS ' + ((s.arms && s.arms.jaw > 0.5) ? 'OPEN' : 'STOWED'));
+    return { title: title, lines: lines };
+  }
+
   function drawCockpitView(ctx, cam, w, h) {
     /* The cannon's capacitor bank on the console reads this (render.js
      * drawCapacitorBank): fitted or not, and how hot, 0..1. */
@@ -15405,14 +16150,22 @@
     for (var ci = 0; ci < cgC.length; ci++) hotC = Math.max(hotC, cgC[ci].k);
     G.ship.capGlow = cgC.length ? { fitted: cgC.length, k: hotC } : null;
     if (shipWalkGpu()) { drawShipWalkView(ctx, cam, w, h); return; }
+    /* This hull's own HUD layout and colour (Render.cockpitLook). */
+    Render.setHudLook(Render.cockpitLook(cockpitShip()).hud);
     drawOwnHullFromBridge(ctx, cam);
     /* Berthed: her hangar out of the glass (hangarSeat). */
     if (hangarSeat()) { queueHangarFromShip(cam); }
-    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h) : null;
+    var shell = G.showCockpitFrame ? Render.drawCockpitShell(ctx, cam, cockpitShip(), w, h, { furnitureLater: true }) : null;
     /* Your crew at their stations, behind you on the bridge deck. */
     if (shell && Render.cockpitGpu && Render.cockpitGpu()) queueNpcs(cam);
     var apertures = shell ? shell.apertures : null;
     var aperture = shell ? shell.aperture : null;
+    /* The air-data boxes keep inside this windscreen (Render.hudGeom). */
+    /* ...and centre on the glass, between its middle and the seat's own
+     * straight-ahead (Render.hudGeom): where a point far down the ship's
+     * nose lands on screen from this eye. */
+    var seatAhead = cam.project(V.addScaled(cam.eye, cockpitShip().fwd, 1e6));
+    if (Render.setHudRoom) Render.setHudRoom(aperture, seatAhead ? seatAhead.x : null);
 
     if (shell) {
       /* No star to glare off the canopy while you are between them — the
@@ -15430,6 +16183,9 @@
           starVisible: V.dot(V.norm(starRel), cam.f) > 0
         });
       }
+      /* The window reveals and posts stand in front of the glass, so they
+       * go on over its wash (Render.drawCanopyFurnitureFor). */
+      Render.drawCanopyFurnitureFor(ctx, cam, cockpitShip());
     }
 
     var lv = Sim.localVertical(G.ship.pos, G.sys, G.t);
@@ -15454,6 +16210,14 @@
     }
 
     Render.glassBegin(ctx, aperture);
+    /* THE WEATHER FIRST, THEN THE INSTRUMENTS ON TOP OF IT (2026-11-22).
+     * It used to be the last thing inside the glass, which was harmless
+     * while the murk was (wrongly) added; painted over properly, a storm's
+     * heart erased the ladder, the air data and every box - "fly on
+     * instruments" with the instruments gone. The cloud and the rain are
+     * outside the canopy; the HUD is projected on the inside of it. */
+    drawCanopyWeather(ctx, cam, w, h);
+    drawCanopyVapour(ctx, cam, w, h);
     /* The glass is laid out against the VIEW, which ends at the icon bar
      * when the band is stowed (see draw), not against the window. */
     var hv = cam.h || h;
@@ -15461,7 +16225,9 @@
     Render.drawFlightPathMarker(ctx, cam, fr.prograde, w, hv);
     // The bank scale is a fixed instrument on the glass ahead of you, so it
     // has no business being drawn once you have looked away from it.
-    if (centred) Render.drawBankScale(ctx, w, hv, angles.rollDeg, hv * 0.30);
+    /* Where this hull's look stands each instrument (Render.hudGeom). */
+    var hg = Render.hudGeom(w, hv, Math.min(hv, deckTop(h)));
+    if (centred && hg.bank) Render.drawBankScale(ctx, w, hv, angles.rollDeg, hg.bankY, hg.bankDown, hg.cx);
 
     // The navigation lock gets the strongest box on the glass.
     var nav = navTargetState();
@@ -15477,7 +16243,7 @@
       var hd = Sim.headingAngles(G.ship, upH, Sim.bodyPole(lv.body),
                                  navLen > 1e-9 ? V.scale(toNav, 1 / navLen) : null);
       Render.drawHeadingTape(ctx, w, h, hd, {
-        cy: Math.max(40, hv * 0.30 - 74 - 44),
+        cy: hg.tapeY, cx: hg.cx,
         ref: lv.body.name.toUpperCase(),
         bugColor: nav && nav.hostile ? '#ff6b5a' : '#ffd36b'
       });
@@ -15502,7 +16268,7 @@
       var spdBox = Render.airSpeedReadout(cruising ? G.cruise.speed : V.len(vRel), cruising);
       if (!cruising && hspG && hspG.frame !== 'orbit') spdBox.unit += hspG.frame === 'air' ? ' AIR' : ' GND';
       Render.drawAirData(ctx, w, h, {
-        cy: hv / 2,
+        cy: hg.airY, off: hg.off, cx: hg.cx,
         speed: spdBox,
         g: felt,
         peak: G.gPeak,
@@ -15511,42 +16277,57 @@
         air: Render.airReadout(lv.body, altKm, Sim.airDensityAt(lv.body, altKm))
       });
     }
+    /* The panel this hull's role leads with, in the corner of the glass its
+     * look left clear (roleReadout, Render.drawRolePanel). */
+    if (centred && Render.drawRolePanel) Render.drawRolePanel(ctx, w, hv, roleReadout(), hg);
+    /* Every box on the glass is queued, then placed together so no name
+     * lands on another name, another ship's box, a readout or a panel
+     * (Render.drawHoloTargets, 2026-11-22). Queue order is priority. */
+    var holoQ = Render.queueHoloTarget ? Render.queueHoloTarget : null;
+    var holo = function (pos, name, sub, color, emph) {
+      if (holoQ) holoQ(pos, name, sub, color, emph); else Render.drawHoloTarget(ctx, cam, pos, name, sub, color, w, h);
+    };
     if (nav) {
-      Render.drawHoloTarget(ctx, cam, nav.pos, nav.name,
+      holo(nav.pos, nav.name,
         fmtDist(nav.range) + (isFinite(nav.eta) ? '  ETA ' + fmtTime(nav.eta) : ''),
-        nav.hostile ? '#ff6b5a' : '#ffd36b', w, h);
+        nav.hostile ? '#ff6b5a' : '#ffd36b');
     }
     if (G.dockTarget && !G.ship.docked && (!nav || nav.obj !== G.dockTarget)) {
       var tp = Sim.bodyPosition(G.dockTarget, G.sys, G.t);
-      Render.drawHoloTarget(ctx, cam, tp, G.dockTarget.name,
-        fmtDist(V.dist(tp, G.ship.pos)), '#7dffb0', w, h);
+      holo(tp, G.dockTarget.name, fmtDist(V.dist(tp, G.ship.pos)), '#7dffb0');
     }
     /* Anything awake gets boxed on the glass — a pirate in red, because
-     * that is the one contact you must never have to hunt for. */
+     * that is the one contact you must never have to hunt for. Hostiles
+     * first, so they get the spot beside their own box. */
     if (G.encounter && G.encounter.active.length) {
-      G.encounter.active.forEach(function (spec) {
+      /* Hostiles first, then whoever is scanning you (they want the spot
+       * beside their own box too), then the rest. */
+      var pri = function (s) { return s.kind === 'pirate' || s.hostileToPlayer ? 2 : scanningYou(s) ? 1 : 0; };
+      G.encounter.active.slice().sort(function (a, b) { return pri(b) - pri(a); }).forEach(function (spec) {
         if (!spec.live) return;
-        Render.drawHoloTarget(ctx, cam, spec.live.pos, spec.name,
-          spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
-          spec.kind === 'pirate' ? '#ff6b5a' : '#7dffb0', w, h);
+        var hostile = spec.kind === 'pirate' || spec.hostileToPlayer, scan = !hostile && scanningYou(spec);
+        holo(spec.live.pos, spec.name,
+          (scan ? 'SCANNING YOU · ' : '') + spec.className + ' · ' + fmtDist(V.dist(spec.live.pos, G.ship.pos)),
+          hostile ? '#ff6b5a' : scan ? SCAN_AMBER : '#7dffb0', scan);
       });
     }
+    if (Render.drawHoloTargets) Render.drawHoloTargets(ctx, cam, w, h, labelHud || cockpitReadoutBoxes(w, hv, h), labelBoxes);
 
     if (centred) {
       ctx.save();
       ctx.font = 'bold 11px ui-monospace, monospace';
-      ctx.fillStyle = '#6ef0c0';
+      ctx.fillStyle = Render.hudTint();
       ctx.textAlign = 'center';
       ctx.fillText(angles.degenerate ? '' :
         'PITCH ' + angles.pitchDeg.toFixed(1) + '°   ROLL ' + angles.rollDeg.toFixed(1) +
-        '°   REF ' + lv.body.name.toUpperCase(), w / 2, hv / 2 + 40);
+        '°   REF ' + lv.body.name.toUpperCase(), hg.cx, hv / 2 + 40);
       ctx.textAlign = 'left';
       ctx.restore();
       /* Facing into or against the way you are going, in words, under the
        * attitude line where the eye already is. Against the same body as
        * the speed box and the markers. */
       Render.drawFacingCue(ctx, w, h,
-        Render.facingInfo(G.ship.fwd, fr.prograde, fr.vrel ? V.len(fr.vrel) : 0), hv / 2 + 66);
+        Render.facingInfo(G.ship.fwd, fr.prograde, fr.vrel ? V.len(fr.vrel) : 0), hv / 2 + 66, hg.cx);
     }
     /* Last thing on the glass, and INSIDE the clip on purpose: the field
      * flares a metre outside the canopy, so you see it through the glass and
@@ -15554,7 +16335,6 @@
     drawCanopyPlasma(ctx, cam, w, h);
     drawCanopyShieldFlare(ctx, cam, w, h);
     drawCanopyShieldRim(ctx, aperture, w, h);
-    drawCanopyWeather(ctx, cam, w, h);
     Render.glassEnd(ctx);
 
     if (shell) {
@@ -15906,9 +16686,18 @@
       var focused = G.focus === b;
       var locked = G.navTarget && G.navTarget.kind === 'body' && G.navTarget.id === b.id;
       ctx.fillStyle = bodyDotColor(b.kind);
-      ctx.fillText(navMark({ kind: 'body', obj: b }), lx + 8, yy);
+      /* Drawn, not typed (icons.js). */
+      var IcB = global.Icons, ikB = IcB ? IcB.kindOf({ kind: 'body', obj: b }, G.sys) : null;
+      if (ikB) IcB.draw(ctx, ikB, lx + 12, yy - 4, 4.6, ctx.fillStyle);
+      else ctx.fillText(navMark({ kind: 'body', obj: b }), lx + 8, yy);
       ctx.fillStyle = locked ? MFD_HOT : focused ? '#b4f0ff' : (b.habitable ? '#7dffb0' : MFD_INK);
       ctx.fillText(clipText(b.name, 20), lx + 20, yy);
+      /* AN ISLAND (comsats.js): its relays are dark, its news by courier -
+       * the slashed relay, amber, at the row's end. */
+      if (IcB && b.market && global.Comsats && G.here &&
+          global.Comsats.isIsland(G, G.sys, G.here.id, b, G.t)) {
+        IcB.draw(ctx, 'sat-down', lx + listW - 14, yy - 4, 4.6, '#ffb86b');
+      }
       hot(lx + 4, yy - 11, listW - 8, 15, (function (body) {
         return function () {
           if (G.focus === body) {
@@ -16278,6 +17067,7 @@
     { id: 'weapons', title: 'WEAPONS', draw: function (ctx) { drawWeaponsPage(ctx); } },
     { id: 'guns',    title: 'GUNS',    draw: function (ctx) { drawGunsPage(ctx); } },
     { id: 'survey',  title: 'SURVEY',  draw: function (ctx) { drawSurveyPage(ctx); } },
+    { id: 'relay',   title: 'RELAY',   draw: function (ctx) { drawRelayPage(ctx); } },
     { id: 'blank',   title: 'OFF',     draw: null }
   ];
   var DASH_PAGE_BY_ID = {};
@@ -17137,10 +17927,13 @@
         ctx.fillStyle = 'rgba(255,211,107,0.20)';
         ctx.fillRect(6, y - 10, MFD_W - 12, rowH);
         ctx.fillStyle = MFD_HOT;
-        ctx.fillText('>', 8, y);
+        ctx.beginPath(); ctx.moveTo(8, y - 8); ctx.lineTo(13, y - 4); ctx.lineTo(8, y); ctx.closePath(); ctx.fill();
       }
       ctx.fillStyle = e.hostile ? '#ff8a76' : (idx === sel ? MFD_HOT : e.color);
-      ctx.fillText(navMark(e), 18, y);
+      /* Drawn, not typed (icons.js): what it is by shape. */
+      var Ic = global.Icons, ik = Ic ? Ic.kindOf(e, G.sys) : null;
+      if (ik) Ic.draw(ctx, ik, 22, y - 4, 4.4, ctx.fillStyle);
+      else ctx.fillText(navMark(e), 18, y);
       ctx.fillStyle = idx === sel ? MFD_HOT : MFD_INK;
       ctx.fillText(clipText(e.name, 20), 30, y);
       ctx.fillStyle = idx === sel ? MFD_HOT : MFD_DIM;
@@ -17270,6 +18063,116 @@
     var rel = V.sub(s.pos, bp), r = V.len(rel);
     if (!(r > 0) || r > body.radius * Sv.RANGE_R) return null;
     return Sv.cellOfWorld(body, V.scale(rel, 1 / r), G.t);
+  }
+
+  /* --- RELAY: who you are talking to, and the chain (2026-11-20) ---------
+   * Astra: "another panel selectable for the MFDs which tells you which sat
+   * you're connected to, and shows which links are up" - drawn, not typed:
+   * a sat for each star the chain runs through, a line for each link, a
+   * slashed sat for one that is down, broken wings for one destroyed but
+   * still expected, and a cut line where a link is out (icons.js).
+   *
+   * Which chain: to your com-sat if it is at another star, else to the
+   * star you have plotted, else to the nearest claimed neighbour - the way
+   * your news would come. Shown as BUILT, so a break sits where it is. */
+  var RELAY_CHAIN_MAX = 8;
+  function drawRelayPage(ctx) {
+    var Cs = global.Comsats, Ic = global.Icons;
+    mfdShell(ctx, 'RELAY', 'the network your news rides');
+    if (!Cs || !Ic || !G.here) return;
+    var star = G.here.id, t = G.t;
+    ctx.font = 'bold 11px ui-monospace, monospace';
+    /* WHO YOU ARE TALKING TO. */
+    var con = G.ship && G.ship.pos ? Cs.connectedTo(G, G.sys, star, G.ship.pos, t) : null;
+    var y1 = MFD_BODY_TOP + 16;
+    if (con) {
+      Ic.draw(ctx, con.mine ? 'mysat' : 'sat', 16, y1 - 4, 5, con.mine ? '#7dffb0' : '#9fd8ff');
+      ctx.fillStyle = MFD_INK;
+      ctx.fillText(clipText('LINKED  ' + con.name, 44), 28, y1);
+      ctx.fillStyle = MFD_DIM; ctx.textAlign = 'right';
+      ctx.fillText(fmtDist(con.dist), MFD_W - 10, y1); ctx.textAlign = 'left';
+    } else {
+      Ic.draw(ctx, 'sat-down', 16, y1 - 4, 5, '#ff9f7a');
+      ctx.fillStyle = '#ff9f7a';
+      ctx.fillText(Cs.relaysFor(G.sys, star).length ? 'NO RELAY IN SIGHT - behind a world, or they are dark'
+                                                     : 'NO NETWORK in this system', 28, y1);
+    }
+    /* THIS SYSTEM: its worlds' relays and its uplink. */
+    var worlds = {}, dark = [];
+    Cs.relaysFor(G.sys, star).forEach(function (r) { worlds[r.body] = r.bodyName; });
+    Object.keys(worlds).forEach(function (b) { if (Cs.worldDark(G, star, b, t)) dark.push(worlds[b]); });
+    var nW = Object.keys(worlds).length, upDark = !!G.here.factionId && Cs.uplinkDark(G, star, t);
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    ctx.fillStyle = dark.length || upDark ? '#ffd36b' : MFD_DIM;
+    ctx.fillText(clipText(nW ? (nW - dark.length) + ' of ' + nW + ' worlds lit' +
+                 (dark.length ? '  ·  dark over ' + dark.join(', ') : '') +
+                 (upDark ? '  ·  UPLINK DARK' : G.here.factionId ? '  ·  uplink lit' : '')
+               : 'no relays here', 70), 12, y1 + 16);
+    /* THE CHAIN. */
+    var mine = Cs.sats(G).filter(function (s) { return s.star !== star; });
+    var to = null, why = '';
+    if (mine.length) {
+      to = G.galaxy.stars.filter(function (s) { return s.id === mine[0].star; })[0];
+      why = 'to your com-sat';
+    } else if (G.courseStar && G.courseStar !== star) {
+      to = G.galaxy.stars.filter(function (s) { return s.id === G.courseStar; })[0];
+      why = 'to your plotted star';
+    }
+    if (!to) {
+      var nb = Cs.neighbours(G.galaxy)[star] || [];
+      to = nb.filter(function (s) { return s.factionId; })
+             .sort(function (a, b) { return Galaxy.distance3(G.here, a) - Galaxy.distance3(G.here, b); })[0] || null;
+      why = 'to the nearest star';
+    }
+    var path = to ? Cs.chainPath(G, G.galaxy, G.here, to) : [];
+    var cy = MFD_BODY_TOP + 66;
+    if (!path.length) {
+      ctx.fillStyle = MFD_DIM;
+      ctx.fillText(to ? 'no chain reaches ' + to.name + ' - its news rides the freighters' : 'nowhere on a chain from here', 12, cy);
+      return;
+    }
+    /* Too long to show: the first stars, a gap, the last. */
+    var show = path, gap = -1;
+    if (path.length > RELAY_CHAIN_MAX) {
+      var head = Math.ceil((RELAY_CHAIN_MAX - 1) / 2), tail = RELAY_CHAIN_MAX - 1 - head;
+      show = path.slice(0, head).concat([null]).concat(path.slice(path.length - tail));
+      gap = head;
+    }
+    var x0 = 26, x1 = MFD_W - 26, step = show.length > 1 ? (x1 - x0) / (show.length - 1) : 0;
+    var states = show.map(function (s) { return s ? Cs.nodeState(G, s) : 'gap'; });
+    var INK = { up: '#9fd8ff', down: '#ff9f7a', gone: '#ff6b5b', gap: MFD_DIM };
+    for (var i = 0; i < show.length - 1; i++) {
+      var a = states[i], b = states[i + 1];
+      var up = a !== 'down' && a !== 'gone' && b !== 'down' && b !== 'gone';
+      Ic.link(ctx, x0 + i * step + 9, x0 + (i + 1) * step - 9, cy, up, up ? '#4fa8c8' : '#ff9f7a');
+    }
+    var firstBreak = null;
+    show.forEach(function (s, k) {
+      var x = x0 + k * step;
+      if (!s) {
+        ctx.fillStyle = MFD_DIM;
+        for (var d = -1; d <= 1; d++) { ctx.beginPath(); ctx.arc(x + d * 4, cy, 1.3, 0, 6.2832); ctx.fill(); }
+        return;
+      }
+      var st = states[k];
+      if (!firstBreak && st !== 'up') firstBreak = s;
+      var ownHere = Cs.satsIn(G, s.id).some(function (q) { return Cs.satLive(q, t); });
+      Ic.draw(ctx, st === 'gone' ? 'sat-gone' : st === 'down' ? 'sat-down' : ownHere ? 'mysat' : 'sat', x, cy, 6.5, INK[st]);
+      ctx.font = 'bold 9px ui-monospace, monospace';
+      ctx.fillStyle = s.id === star ? MFD_HOT : MFD_DIM;
+      ctx.textAlign = 'center';
+      ctx.fillText(clipText(s.name, Math.max(4, Math.floor(step / 6.2))), x, cy + 20);
+      ctx.textAlign = 'left';
+      if (s.id === star) Ic.draw(ctx, 'you', x, cy - 17, 4.2, MFD_HOT);
+    });
+    /* What it means, in a line. */
+    ctx.font = 'bold 10px ui-monospace, monospace';
+    var hops = path.length - 1;
+    ctx.fillStyle = firstBreak ? '#ff9f7a' : '#7dffb0';
+    ctx.fillText(clipText(firstBreak
+      ? 'BROKEN at ' + firstBreak.name + ' - ' + to.name + ' is on the other chain; its news rides the freighters'
+      : why + ', ' + to.name + ': ' + hops + ' hop' + (hops === 1 ? '' : 's') + ', ' + hops * Cs.HOP_H + ' h' +
+        (Cs.liveSats(G, t).length ? '  ·  LIVE' : '  ·  no com-sat of yours: not read'), 74), 12, MFD_BODY_BOTTOM - 4);
   }
 
   function drawSurveyPage(ctx) {
@@ -17474,7 +18377,12 @@
     var bucket = Math.floor(G.t / 60);
     if (!G._tradeScan || G._tradeScan.sys !== G.sys || G._tradeScan.bucket !== bucket) {
       G._tradeScan = { sys: G.sys, bucket: bucket,
-                       a: Eco.systemAnalysis(G.sys, G.t, { accel: G.ship.maxAccel }) };
+                       a: Eco.systemAnalysis(G.sys, G.t, { accel: G.ship.maxAccel,
+                         /* An island's figures as its last courier carried them. */
+                         seenAt: global.Comsats && G.here ? function (p) {
+                           return global.Comsats.seenAt(G, G.sys, G.here.id, p, G.t,
+                                                        G.ship.docked ? G.sys.byId[G.ship.docked] : null);
+                         } : null }) };
     }
     var a = G._tradeScan.a;
     var colW = Math.floor((MFD_W - 24) / 2), lx = 12, rx = 12 + colW + 6;
@@ -18896,7 +19804,16 @@
   var CONTRAIL_LIFE = 9;             // s before a point has blown away
   var MISSILE_TRAIL_LIFE = 4.5;
   var CONTRAIL_MAX_PTS = 42;
-  var CONTRAIL_MAX_TRAILS = 24;
+  /* Room for the tip pairs as well (2026-11-22): three trails a hull now,
+   * when she is pulling in wet air. */
+  var CONTRAIL_MAX_TRAILS = 48;
+  /* THE TIP VORTICES. Short-lived and laid finely: a vortex core is a thin
+   * line that is gone in a couple of seconds, and in a hard turn it curves
+   * fast enough that the hull trail's third of a second would draw it as
+   * a polygon. Below TIP_MIN nothing is laid. */
+  var TIP_LIFE = 2.2;
+  var TIP_STEP = 0.08;
+  var TIP_MIN = 0.08;
   var CONTRAIL_MIN_SPEED = 0.06;     // km/s through the air before one forms
 
   function trailStore() {
@@ -18916,7 +19833,7 @@
    *   - a missile's smoke: YOUR ship's, because the fight is in your frame
    *     and smoke that holds still against the rock and the ships you are
    *     looking at is what reads as left behind. */
-  function layPoint(key, pos, life, vel) {
+  function layPoint(key, pos, life, vel, step) {
     var store = trailStore();
     var tr = store.by[key];
     if (!tr) {
@@ -18927,7 +19844,7 @@
       }
     }
     tr.life = life;
-    if (G.t - tr.last < CONTRAIL_STEP) return tr;
+    if (G.t - tr.last < (step || CONTRAIL_STEP)) return tr;
     tr.last = G.t;
     tr.pts.push({ p: V.clone(pos), t: G.t, v: vel ? V.clone(vel) : null });
     if (tr.pts.length > CONTRAIL_MAX_PTS) tr.pts.shift();
@@ -18938,12 +19855,21 @@
    * Returns the thickness factor, or 0 for nothing — so the same call
    * answers "should there be a trail" and "how heavy is it". */
   function airTrailStrength(pos, vel) {
-    if (!Sim.atmosphereContext) return 0;
+    var air = airAt(pos, vel);
+    if (!air || !(air.rho > 0.02)) return 0;      // the top of the air is thin
+    if (air.through < CONTRAIL_MIN_SPEED) return 0;
+    return Math.max(0, Math.min(1, air.rho * 0.9)) * Math.min(1, air.through / 0.9);
+  }
+  /* The air at a point and how fast a hull is going through it: density,
+   * the air's own velocity (it turns with its world), the hull's velocity
+   * against it. Null outside any air. Shared by the hull's trail and the
+   * vapour off its tips (2026-11-22). */
+  function airAt(pos, vel) {
+    if (!Sim.atmosphereContext) return null;
     var atmo = Sim.atmosphereContext(pos, G.sys, G.t);
-    if (!atmo || !atmo.body || !atmo.body.atmosphere) return 0;
+    if (!atmo || !atmo.body || !atmo.body.atmosphere) return null;
     var alt = V.dist(pos, atmo.pos) - atmo.body.radius;
     var rho = Sim.airDensity(atmo.body, alt);
-    if (!(rho > 0.02)) return 0;                  // the top of the air is thin
     /* THROUGH THE AIR, AND THE AIR TURNS WITH ITS WORLD (2026-11-02). The
      * speed was measured against the world's centre, so a hull held still
      * over the ground - a sea platform's pad carrying her down, at a few
@@ -18960,9 +19886,57 @@
       var rr = V.sub(pos, atmo.pos);
       airVel = V.add(atmo.vel, V.scale(V.cross(ax, rr), om));
     }
-    var through = V.len(V.sub(vel, airVel));
-    if (through < CONTRAIL_MIN_SPEED) return 0;
-    return Math.max(0, Math.min(1, rho * 0.9)) * Math.min(1, through / 0.9);
+    var rel = V.sub(vel, airVel);
+    return { rho: rho, airVel: airVel, rel: rel, through: V.len(rel), body: atmo.body };
+  }
+
+  /* What a lifted NPC feels, from how her velocity is changing: the change
+   * less gravity, which is what her thrust and the air are doing to her.
+   * Her own last velocity is kept beside the trails; the first frame of a
+   * ship reads as level flight. */
+  /* SMOOTHED over about a third of a second: her velocity is stepped by
+   * the sim, not by the frame, so a frame-to-frame difference is zero, then
+   * a spike, then zero - a hull that flickered vapour on alternate frames. */
+  var npcVel = {};
+  function npcFelt(key, pos, vel) {
+    var prev = npcVel[key];
+    if (!prev || !(G.t - prev.t > 1e-4) || G.t - prev.t > 2) {
+      npcVel[key] = { v: V.clone(vel), t: G.t, f: prev && prev.f };
+      return prev ? prev.f || null : null;
+    }
+    var dt = G.t - prev.t;
+    var acc = V.scale(V.sub(vel, prev.v), 1 / dt);
+    var raw = Sim.acceleration ? V.sub(acc, Sim.acceleration(pos, G.sys, G.t)) : acc;
+    var k = Math.min(1, dt / 0.3);
+    var f = prev.f ? V.add(V.scale(prev.f, 1 - k), V.scale(raw, k)) : raw;
+    npcVel[key] = { v: V.clone(vel), t: G.t, f: f };
+    return f;
+  }
+  /* The vapour a flyer is pulling out of the air this moment, or null
+   * outside air. `load` is the felt pull across the airflow in g, with its
+   * direction (`liftDir`, world) for the sheet drawn on the lifting side.
+   * A ship with no felt reading (her first frame) is flying level: 1 g.
+   * The air's wet is looked up at most twice a second per hull - it is
+   * the weather, and the weather does not change between frames. */
+  var humCache = {};
+  function vapourFor(f, felt) {
+    var air = airAt(f.pos, f.vel);
+    if (!air || !(air.rho > 0.02) || !(air.through > 0.03)) return null;
+    var flow = V.scale(air.rel, 1 / air.through);
+    var load = 1, liftDir = null;
+    if (felt) {
+      var across = V.addScaled(felt, flow, -V.dot(felt, flow));
+      var a = V.len(across);
+      load = a / Sim.G0;
+      liftDir = a > 1e-9 ? V.scale(across, 1 / a) : null;
+    }
+    var hc = humCache[f.key];
+    if (!hc || Math.abs(G.t - hc.t) > 0.5) {
+      hc = humCache[f.key] = { t: G.t, h: Weather && Weather.humidity ? Weather.humidity({ pos: f.pos }, G.sys, G.t) : 0.25 };
+    }
+    var v = Weather && Weather.vapourOf ? Weather.vapourOf(load, hc.h, air.through, air.rho) : { tip: 0, sheet: 0 };
+    v.load = load; v.liftDir = liftDir; v.hum = hc.h; v.flow = flow;
+    return v;
   }
 
   function stepContrails() {
@@ -18977,28 +19951,54 @@
      * something that teleports is a line across the sky. */
     var flyers = [];
     if (!G.ship.docked && !G.ship.landed) {
-      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel });
+      flyers.push({ key: 'player', pos: G.ship.pos, vel: G.ship.vel, ship: G.ship,
+                    felt: Sim.feltAccel ? Sim.feltAccel(G.ship, G.sys, G.t) : null });
     }
     var live = (G.encounter && G.encounter.active) || [];
     for (i = 0; i < live.length; i++) {
       var sp = live[i];
       var lp = sp.live || sp;
       if (!lp || !lp.pos || !lp.vel) continue;
-      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel });
+      flyers.push({ key: 'e' + (sp.id || i), pos: lp.pos, vel: lp.vel, ship: lp, spec: sp });
     }
+    var vap = G.vapour || (G.vapour = {});
+    var seen = {};
     for (i = 0; i < flyers.length; i++) {
       var f = flyers[i];
+      var feltV = f.felt || npcFelt(f.key, f.pos, f.vel);
       var strength = airTrailStrength(f.pos, f.vel);
-      if (strength <= 0) continue;
       var dom = Sim.dominantBody ? Sim.dominantBody(f.pos, G.sys, G.t) : null;
       /* A trail is left in the AIR, and drifts with it - the world's spin at
        * that point, not its centre (2026-11-03); on a fast equator the
        * difference is a trail sliding off sideways at a couple of km/s. */
-      var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE,
-                        dom && Sim.surfaceVelocity ? Sim.surfaceVelocity(dom, f.pos, G.sys, G.t)
-                        : (dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null));
-      tr.air = strength;
+      var drift = dom && Sim.surfaceVelocity ? Sim.surfaceVelocity(dom, f.pos, G.sys, G.t)
+                : (dom && Sim.bodyVelocity ? Sim.bodyVelocity(dom, G.sys, G.t) : null);
+      if (strength > 0) {
+        var tr = layPoint(f.key, f.pos, CONTRAIL_LIFE, drift);
+        tr.air = strength;
+      }
+      /* THE TIPS (2026-11-22). See Weather.vapourOf: the pull across the
+       * airflow and the wet of the air decide it. Laid from the hull's own
+       * tips (Sim.hullBox, her true span), a quarter of her length aft of
+       * centre where the tips of every hull in the library sit. */
+      var v = vapourFor(f, feltV);
+      if (v) { vap[f.key] = v; seen[f.key] = 1; }
+      if (!v || !(v.tip > TIP_MIN) || !f.ship.right || !f.ship.fwd) continue;
+      var box = Sim.hullBox ? Sim.hullBox(f.spec || f.ship) : [0.02, 0.006, 0.025];
+      var half = box[0] * 0.5, aft = -box[2] * 0.25;
+      var tl = layPoint(f.key + ':tl', V.addScaled(V.addScaled(f.pos, f.ship.right, -half), f.ship.fwd, aft),
+                        TIP_LIFE, drift, TIP_STEP);
+      var trR = layPoint(f.key + ':tr', V.addScaled(V.addScaled(f.pos, f.ship.right, half), f.ship.fwd, aft),
+                         TIP_LIFE, drift, TIP_STEP);
+      tl.tip = trR.tip = v.tip;
     }
+    /* Nothing kept for a hull that has gone: the caches are bounded by
+     * the flyers there are now. */
+    var alive = {};
+    for (i = 0; i < flyers.length; i++) alive[flyers[i].key] = 1;
+    for (var vk in vap) if (!seen[vk]) delete vap[vk];
+    for (vk in npcVel) if (!alive[vk]) delete npcVel[vk];
+    for (vk in humCache) if (!alive[vk]) delete humCache[vk];
 
     /* Missiles. Their own key so a trail survives the round that laid it,
      * which is the whole reason the store is keyed rather than hung off
@@ -19035,6 +20035,15 @@
       var pts = tr.pts.map(function (q) {
         return q.v ? { p: V.addScaled(q.p, q.v, G.t - q.t), t: q.t } : q;
       });
+      /* A tip vortex is a thin bright core that hardly spreads before it
+       * is gone - not a puffy trail. */
+      if (tr.tip !== undefined) {
+        Render.drawContrail(ctx, cam, pts, G.t, {
+          life: tr.life, width: 0.25 + 0.6 * tr.tip, spread: 1.2,
+          alpha: 0.22 + 0.55 * tr.tip, color: '250,252,255'
+        });
+        continue;
+      }
       Render.drawContrail(ctx, cam, pts, G.t, {
         life: tr.life,
         /* A motor smokes heavier than a wingtip, and a hull in thick air
@@ -19258,6 +20267,8 @@
            * and its domes are drawn on their own hinges after it. */
           Render.drawStationModel(ctx, cam, frame, b.seaPlatform ? Render.SEA_MESH_SCALE : b.radius, sun, model, b.color,
                                   stationDoors(b), indoors ? shipSection(b) : null);
+          /* Where it has been shot (scars.js): from outside only. */
+          if (!indoors && b.scars && b.scars.length) drawPortScars(ctx, cam, frame, b);
           /* A city site's town, where this port's seed put it (Render.citySpot).
            * From outside only: it stands on the surface, out of view of a
            * berth or the hangar under it. */
@@ -19794,6 +20805,9 @@
     if (Math.abs(G.look.yaw) >= 0.42 || Math.abs(G.look.pitch) >= 0.42) return null;
     var lv = G.ship && Sim.localVertical(G.ship.pos, G.sys, G.t);
     if (!lv || !lv.body) return null;
+    /* The labels are placed before the glass is drawn: take this hull's
+     * look now, so the boxes they keep off are where its instruments go. */
+    if (Render.setHudLook) Render.setHudLook(Render.cockpitLook(cockpitShip()).hud);
     return Render.hudReadoutBoxes(w, hv, lv.body.name.toUpperCase(), Math.min(hv, deckTop(h)));
   }
 
@@ -19808,6 +20822,13 @@
     var out = null, nav = navTargetState();
     if (nav && nav.name) (out = out || {})[nav.name] = true;
     if (G.dockTarget && !G.ship.docked && G.dockTarget.name) (out = out || {})[G.dockTarget.name] = true;
+    /* And anything awake: it is boxed on the glass with its name, class and
+     * range (drawHoloTarget, the encounter boxes), so its sky tag only
+     * printed "The Scrag [pirate]" a few pixels off "The Scrag / pirate ·
+     * 2.52 km" (seen 2026-11-22, probe-flights). No label over a label. */
+    if (G.encounter && G.encounter.active) {
+      G.encounter.active.forEach(function (spec) { if (spec && spec.live && spec.name) (out = out || {})[spec.name] = true; });
+    }
     return out;
   }
 
@@ -19956,8 +20977,14 @@
      * a ship reads from far away while it is coming in. */
     Render.drawReentryPlasma(ctx, cam, G.ship, shipLen(),
                              G.ship.reentryGlow || 0, G.ship.windDir, nowSeconds());
+    /* And the vapour she pulls out of wet air in a hard turn (2026-11-22). */
+    var pv = G.vapour && G.vapour.player;
+    if (pv && pv.sheet > 0.03 && Render.drawVapourSheet && Sim.hullBox) {
+      Render.drawVapourSheet(ctx, cam, G.ship, Sim.hullBox(G.ship), pv.sheet, pv.liftDir, pv.flow, nowSeconds());
+    }
     playerShieldShell(ctx, cam);
     drawHullBlooms(ctx, cam, G.ship);
+    drawShipScars(ctx, cam, G.ship, 'hull:' + (G.ship.hullId || 'talon'), shipLen(G.ship), G.ship);
   }
 
   /* THE CANNON'S MOUNT, glowing red through its cooldown and fading back
@@ -20212,6 +21239,8 @@
   }
 
   function panel(ctx, x, y, w, h, solid) {
+    /* Claimed, so nothing on the HUD is placed under it (2026-11-22). */
+    if (Render.claimOverlay) Render.claimOverlay(x, y, w, h);
     ctx.save();
     /* Solid means solid: at 0.975 the say() line and the HUD behind the
      * market still read through it as a ghost of text between the rows
@@ -20974,6 +22003,20 @@
   /* Who is awake and what they want. Shown in both views, because being
    * interdicted is not a thing you should be able to miss by happening to
    * be looking at the orbit display. */
+  /* WHO IS SCANNING YOU (2026-11-22, Astra: "when scanned by another ship,
+   * like a warden, that ship should be highlighted"). A patrol in inspect,
+   * not yet done with you, and close enough to be coming for the look -
+   * or a warship that has ordered you to heave to for questioning. Shown
+   * amber on the glass (a second, breathing set of brackets) and in the
+   * contacts panel: not a threat, but the one ship looking at you. */
+  var SCAN_AMBER = '#ffb84d', SCAN_SHOW_KM = 300;
+  function scanningYou(spec) {
+    if (!spec || !spec.live || spec.dead || spec.disabled || spec.hostileToPlayer) return false;
+    if (spec.questioning && spec.mode === 'inspect') return true;
+    if (spec.kind !== 'police' || spec.mode !== 'inspect' || spec.scanned || spec.target) return false;
+    return V.dist(spec.live.pos, G.ship.pos) < SCAN_SHOW_KM;
+  }
+
   function drawEncounterPanel(ctx, w, h) {
     var enc = G.encounter;
     if (!enc || !enc.active.length) return;
@@ -20986,25 +22029,77 @@
       var what = spec.mode === 'attack' ? 'ATTACKING'
         /* A trader you asked aboard (boarding.js) is not running away. */
         : spec.mode === 'alongside' ? (tt && tt.joined ? (tt.tube >= 1 ? 'tube made fast' : 'running her tube out') : 'coming alongside')
+        /* Shaken down by a crooked cop (aggression.js, slice 4) and let go. */
+        : spec.kind === 'trader' && spec.shakenBy && !spec.threat ? 'waved on'
         : spec.kind === 'trader' ? 'fleeing'
         : spec.kind === 'pirate'
         ? (spec.mode === 'breakoff' ? 'breaking off' : spec.mode === 'demand' ? 'HOLDING YOU UP' : 'closing')
-        : spec.kind === 'police' ? 'inspecting' : 'escorting';
-      return [spec.name + '  (' + spec.className + ')', fmtDist(rng) + '  ' + what,
-              spec.kind === 'pirate' ? '#ff8a7a' : '#7dffb0'];
+        /* The navy at a platform (milsats.js, slice 5). */
+        : spec.questioning ? (spec.mode === 'inspect' ? 'HEAVE TO ORDERED' : 'answering an alarm')
+        : scanningYou(spec) ? 'SCANNING YOU'
+        : spec.escorting ? 'escorting'
+        : spec.kind === 'police' ? 'inspecting'
+        /* Not everything awake is an escort: the old last word was. */
+        : spec.kind === 'tug' || spec.kind === 'tender' ? 'standing by'
+        : spec.kind === 'merc' ? 'escorting' : 'keeping watch';
+      var col = spec.kind === 'pirate' ? '#ff8a7a' : what === 'SCANNING YOU' || what === 'HEAVE TO ORDERED' ? SCAN_AMBER : '#7dffb0';
+      return [spec.name + '  (' + spec.className + ')', fmtDist(rng) + '  ' + what, col];
     });
 
-    var ph = 44 + lines.length * 15 + (demand ? 52 : 0);
-    var px = w / 2 - 190, py = 112;
-    panel(ctx, px, py, 380, ph);
+    var sd = G.shakedown;
+    var ph = 44 + lines.length * 15 + (demand || sd ? 52 : 0);
+    /* WIDE ENOUGH FOR ITS LONGEST LINE (2026-11-22): "The Notary (Syndicate
+     * enforcer)" pushed its status onto a second line, which the height
+     * above does not allow for, so it ran into the row below. The panel
+     * now takes the width its rows need, from 380 up to half the glass. */
+    ctx.save();
+    ctx.font = 'bold 12px ui-monospace, SFMono-Regular, Menlo, monospace';
+    var need = 0;
+    lines.forEach(function (l) { need = Math.max(need, ctx.measureText(l[0]).width + 14 + ctx.measureText(l[1]).width); });
+    ctx.restore();
+    var pw = Math.round(Math.max(380, Math.min(w * 0.5, need + 30)));
+    var px = w / 2 - pw / 2, py = 112;
+    /* NO PANEL OVER THE TAPE (2026-11-22): in the cockpit the heading tape
+     * sits right where this panel always went, and the compass box showed
+     * through "(shuttle)". It takes the first clear spot - where it was,
+     * beside the tape, then under it - off every instrument and every
+     * other box (Render.freeSpot), and stays put if nothing is clear. */
+    if (Render.freeSpot && labelHud) {
+      var tape = null;
+      labelHud.forEach(function (r) { if (r.id === 'tape') tape = r; });
+      var cands = [{ x: px, y: py }];
+      if (tape) {
+        cands.push({ x: tape.x0 - 12 - pw, y: py }, { x: tape.x1 + 12, y: py },
+                   { x: px, y: tape.y1 + 8 },
+                   { x: tape.x0 - 12 - pw, y: tape.y1 + 8 }, { x: tape.x1 + 12, y: tape.y1 + 8 });
+      }
+      var spot = Render.freeSpot(cands, pw, ph, labelHud, G._encBox, w, h);
+      if (spot) { px = spot.x; py = spot.y; }
+    }
+    G._encBox = [px, px + pw, py, py + ph];
+    panel(ctx, px, py, pw, ph);
 
     ctx.save();
     ctx.font = 'bold 13px ui-monospace, monospace';
-    ctx.fillStyle = demand ? '#ff7a6b' : '#7dfaff';
-    ctx.fillText(demand ? 'INTERDICTION' : 'CONTACTS', px + 14, py + 24);
+    ctx.fillStyle = demand ? '#ff7a6b' : sd ? '#ffb86b' : '#7dfaff';
+    ctx.fillText(demand ? 'INTERDICTION' : sd ? 'INSPECTION FEE' : 'CONTACTS', px + 14, py + 24);
     ctx.restore();
-    rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', 352);
+    rows(ctx, px + 14, py + 44, lines, '#a9bcd6', '#cfe0ff', pw - 28);
 
+    /* A crooked cop's "inspection fee" (combat.js, slice 4). */
+    if (sd && !demand) {
+      var sy = py + 44 + lines.length * 15 + 8;
+      ctx.save();
+      ctx.font = 'bold 13px ui-monospace, monospace';
+      ctx.fillStyle = '#ffb86b';
+      ctx.fillText(sd.spec.name + ' wants ' + fmtCredits(sd.fee) + ' to wave you on', px + 14, sy + 12);
+      ctx.font = 'bold 12px ui-monospace, monospace';
+      ctx.fillStyle = 'rgba(200,220,245,0.8)';
+      ctx.fillText('C pay   ·   X refuse   ·   Z report her      ' +
+                   Math.max(0, Math.ceil(sd.until - G.t)) + ' s', px + 14, sy + 30);
+      ctx.restore();
+      return;
+    }
     if (!demand) return;
 
     var d = Sim.pirateDemand(demand, G.ship, Eco);
@@ -21491,8 +22586,12 @@
             : G.ship.docked ? 'your trade analyser  ·  docked here'
             : 'your trade analyser  ·  reading your locked port from ' +
               fmtDist(V.dist(Sim.bodyPosition(port, G.sys, G.t), G.ship.pos));
+    /* AN ISLAND (comsats.js slice 3): its relays are dark, so what you
+     * are reading is what the last courier out of it carried. Amber, and
+     * the age in words, so a stale price is never taken for a live one. */
+    if (data.ageH > 0.05) src = 'ISLAND  ·  ' + global.Comsats.fmtCourier(data.ageH);
     ctx.font = taFont(11);
-    ctx.fillStyle = '#7fd6c0';
+    ctx.fillStyle = data.ageH > 0.05 ? '#ffb86b' : '#7fd6c0';
     ctx.fillText(clipText(src + '  ·  ' + (port.market.roleName || '') , Math.floor((pw - 300) / 6.7)), px + 18, py + 44);
     ctx.textAlign = 'right';
     ctx.fillStyle = '#9fb6d4';
@@ -21674,6 +22773,9 @@
     /* Time ticks: every five days, "now" at the right. */
     ctx.textAlign = 'center';
     var per = 24 / global.TradeAnalyser.STEP_H;
+    /* An island's month ends when its last courier left, not now: the
+     * axis counts back from now all the same, and its end says so. */
+    var offD = a.data && a.data.ageH > 0.05 ? a.data.ageH / 24 : 0;
     for (var d = 0; d <= global.TradeAnalyser.WINDOW_DAYS; d += 5) {
       var k = series.length - 1 - d * per;
       if (k < 0) break;
@@ -21681,7 +22783,7 @@
       ctx.strokeStyle = 'rgba(120,160,220,0.12)';
       ctx.beginPath(); ctx.moveTo(xx, by0); ctx.lineTo(xx, by1 + 4); ctx.stroke();
       ctx.fillStyle = TA_HEAD;
-      ctx.fillText(d === 0 ? 'now' : '−' + d + ' d', xx, by1 + 15);
+      ctx.fillText(d === 0 ? (offD ? 'courier' : 'now') : '−' + Math.round(d + offD) + ' d', xx, by1 + 15);
     }
     ctx.textAlign = 'left';
 
@@ -21744,7 +22846,7 @@
       ctx.fillStyle = col || TA_INK;
       taWrap(ctx, text, maxW).forEach(function (ln) { if (draw) ctx.fillText(ln, x0, ry); ry += 14; });
     }
-    line('now   ask ' + taCr(sel.buy) + '   ·   bid ' + taCr(sel.sell), TA_INK);
+    line((a.data && a.data.ageH > 0.05 ? 'by courier   ask ' : 'now   ask ') + taCr(sel.buy) + '   ·   bid ' + taCr(sel.sell), TA_INK);
     line('avg here ' + taCr(det.portAvg) + '   ·   avg system ' +
          (det.sysN > 1 ? taCr(det.sysAvg) + ' (' + det.sysN + ' ports)' : '— no other port quotes it so'), TA_AVG);
     line(det.basis === 'mid' ? 'averages: mid of ask and bid, ' + days + ' days'
@@ -21762,7 +22864,8 @@
       if (cmp && cmp.bid !== null) {
         var m = cmp.bid - be.price;
         line(cmp.where + ' bids ' + fmtCredits(cmp.bid) +
-             (cmp.ageDays > 0.05 ? ' (' + cmp.ageDays.toFixed(1) + ' d old)' : ' now') +
+             (cmp.courier ? ' (' + global.Comsats.fmtCourier(cmp.ageDays * 24) + ')'
+              : cmp.ageDays > 0.05 ? ' (' + cmp.ageDays.toFixed(1) + ' d old)' : ' now') +
              '   →   ' + (m >= 0 ? '+' : '−') + Math.abs(Math.round(m)).toLocaleString('en-US') + ' cr /t',
              m >= 0 ? MARK_GOOD : MARK_BAD);
       } else if (cmp) {
@@ -21800,8 +22903,13 @@
     ctx.fillText(clipText(sel.name + '  elsewhere', 34), x0, y0 + 4);
     ctx.font = taFont(10);
     ctx.fillStyle = TA_DIM;
-    ctx.fillText(clipText('as last reported: news rides the freighters, ' + TA.reportHoursPerLy().toFixed(1) +
-                          ' h per ly (a class II hull)', Math.floor((x1 - x0) / 6.1)), x0, y0 + 20);
+    /* Your com-sat (comsats.js): live along the relay chain while you are on it. */
+    var CsA = global.Comsats, reachA = CsA ? CsA.reachHere(G, G.galaxy, G.here) : null;
+    ctx.fillText(clipText(reachA && reachA.on
+      ? 'LIVE on the relay chain for ' + reachA.n + ' star' + (reachA.n === 1 ? '' : 's') + ' (an hour a hop); the rest ride the freighters, ' +
+        TA.reportHoursPerLy().toFixed(1) + ' h per ly'
+      : (reachA ? 'your com-sat is off this network - ' : 'as last reported: ') + 'news rides the freighters, ' +
+        TA.reportHoursPerLy().toFixed(1) + ' h per ly (a class II hull)', Math.floor((x1 - x0) / 6.1)), x0, y0 + 20);
     var cands = a.cands || [];
     var narrow = x1 - x0 < 560;
     var cLy = x0 + (narrow ? 120 : 150), cAge = cLy + 52, cBid = x1 - (narrow ? 132 : 190), cAsk = x1 - 4;
@@ -21837,8 +22945,14 @@
       ctx.font = taFont(11);
       ctx.fillStyle = TA_INK;
       ctx.fillText(c.ly.toFixed(1), cLy, y);
-      ctx.fillStyle = TA_DIM;
-      ctx.fillText(TA.reportAgeDays(c.ly).toFixed(1) + ' d', cAge, y);
+      /* By the chain it is hours old, in green; by freighter, days. */
+      if (rep && rep.chain) {
+        ctx.fillStyle = '#7dffb0';
+        ctx.fillText(Math.round(rep.ageDays * 24) + ' h', cAge, y);
+      } else {
+        ctx.fillStyle = TA_DIM;
+        ctx.fillText(TA.reportAgeDays(c.ly).toFixed(1) + ' d', cAge, y);
+      }
       if (!rep) {
         pending++;
         ctx.fillText('reading…', cAsk, y);
@@ -22085,6 +23199,10 @@
     var deck = deckTop(h), best = null;
     ctx.save();
     ctx.font = 'bold 10px ui-monospace, monospace';
+    /* At a standing outpost N empties the whole claim (outposts.js), so the
+     * hint says that rather than one drone's keys. */
+    var OpH = global.Outposts, atOp = OpH && OpH.near ? OpH.near(G, G.sys, G.t) : null;
+    var mineKeys = atOp && OpH.standing(atOp, G.t) ? 'N empty the claim at the outpost' : 'N empty  ·  SHIFT+N pick up';
     list.forEach(function (e) {
       var p = Cl.groundPos(G.sys, e.d, G.t);
       if (!p) return;
@@ -22100,7 +23218,7 @@
         ctx.beginPath(); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y);
         ctx.lineTo(sp.x, sp.y + 6); ctx.lineTo(sp.x - 6, sp.y); ctx.closePath(); ctx.stroke();
         ctx.fillStyle = col; ctx.fillText(label, sp.x + 9, sp.y + 3);
-        if (range <= Cl.NEAR_KM) ctx.fillText(e.mine ? 'N empty  ·  SHIFT+N pick up'
+        if (range <= Cl.NEAR_KM) ctx.fillText(e.mine ? mineKeys
                                                    : 'N take the hopper  ·  SHIFT+N take the drone', sp.x + 9, sp.y + 15);
         best = best || 'shown';
       } else if (best !== 'shown' && (!best || range < best.range)) {
@@ -22117,7 +23235,7 @@
       ctx.fillText(best.label, cx + dx * (rad + 30) - 40, cy + dy * (rad + 30) + 12);
       /* In reach (it is under you once you have landed on it): the keys. */
       if (best.range <= Cl.NEAR_KM) {
-        ctx.fillText(best.mine ? 'N empty  ·  SHIFT+N pick up' : 'N take the hopper  ·  SHIFT+N take the drone',
+        ctx.fillText(best.mine ? mineKeys : 'N take the hopper  ·  SHIFT+N take the drone',
                      cx + dx * (rad + 30) - 40, cy + dy * (rad + 30) + 24);
       }
     }
@@ -22344,6 +23462,50 @@
         if (ok) HOOKS.sound('click');
       }
     };
+  }
+
+  /* ---- A CAREER AS A FILE (2026-11-19) ------------------------------------
+   * Import: pick a .json file; it goes into the highlighted slot if that one
+   * is empty, else the first empty slot (never over a career without your
+   * saying so - clear a slot with Del first), and is loaded at once.
+   * Export: this career, as the same record a slot holds, downloaded. */
+  function importSaveFile() {
+    var S = global.Save;
+    if (!S || !S.parseRecord || typeof document === 'undefined') { G.menu.note = 'No storage available.'; return; }
+    var slots = slotList(), cur = slots[G.menu.sel], n = 0;
+    if (cur && !cur.used) n = cur.n;
+    for (var i = 0; i < slots.length && !n; i++) if (!slots[i].used) n = slots[i].n;
+    if (!n) { G.menu.note = 'Every slot is in use - clear one with Del first.'; return; }
+    var input = document.createElement('input');
+    input.type = 'file';
+    input.accept = '.json,application/json';
+    input.onchange = function () {
+      var f = input.files && input.files[0];
+      if (!f) return;
+      var rd = new FileReader();
+      rd.onload = function () {
+        var p = S.parseRecord(String(rd.result || ''));
+        if (!G.menu) G.menu = { page: 'load', sel: 0, note: null };
+        if (!p.ok) { G.menu.note = p.why.charAt(0).toUpperCase() + p.why.slice(1) + '.'; return; }
+        if (!S.writeRecord(n, p.rec)) { G.menu.note = 'Slot ' + n + ' could not be written - storage refused.'; return; }
+        loadSlot(n);
+      };
+      rd.readAsText(f);
+    };
+    input.click();
+  }
+  function exportSaveFile() {
+    var S = global.Save;
+    if (!S || !S.recordText || typeof document === 'undefined') { G.menu.note = 'No storage available.'; return; }
+    var label = S.autoLabel(G);
+    var blob = new Blob([S.recordText(G, label)], { type: 'application/json' });
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'manifest-' + String(label).replace(/[^\w\- ]+/g, '').trim().replace(/\s+/g, '-').toLowerCase() + '.json';
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    G.menu.note = 'Written out as ' + a.download + '.';
   }
 
   function loadSlot(n) {
@@ -22880,6 +24042,10 @@
         m.note = 'Slot ' + slots[m.sel].n + ' cleared.';
         return;
       }
+      /* A career as a file (save.js recordText): I brings one in on the
+       * load page, X writes this one out on the save page. */
+      if (k === 'i' && m.page === 'load') { importSaveFile(); return; }
+      if (k === 'x' && m.page === 'save') { exportSaveFile(); return; }
       /* The digits pick a slot outright — six slots, six keys, no walking. */
       if (/^[1-6]$/.test(k)) {
         m.sel = parseInt(k, 10) - 1;
@@ -23118,8 +24284,8 @@
     ctx.font = 'bold 11px ui-monospace, monospace';
     ctx.fillStyle = 'rgba(160,185,220,0.55)';
     ctx.fillText((cur && cur.used ? 'written ' + slotWhen(cur) + '   ·   ' : '') +
-                 (saving ? '1-6 or Enter saves  ·  Del clears  ·  Esc back'
-                         : '1-6 or Enter loads  ·  Del clears  ·  Esc back'),
+                 (saving ? '1-6 or Enter saves  ·  X to a file  ·  Del clears  ·  Esc back'
+                         : '1-6 or Enter loads  ·  I from a file  ·  Del clears  ·  Esc back'),
                  box.x + 30, box.y + box.h - 20);
     ctx.restore();
     if (m.note) drawMenuNote(ctx, box, m.note);

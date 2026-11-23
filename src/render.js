@@ -1128,6 +1128,8 @@
       var at = [mt.at[0] * (1 + 0.5 * wrap), mt.at[1], mt.at[2]];
       /* A wrapped mount stepped outboard stays inside her box. */
       if (bare.span) at[0] = Math.max(-0.45 * bare.span[0], Math.min(0.45 * bare.span[0], at[0]));
+      /* Concealed: flush hull, and the shot leaves from the mount itself. */
+      if (guns[h] === '~') { m._muzzles.push([[at[0], at[1], at[2] + 0.1 * mt.len]]); continue; }
       var gun = guns[h] ? itemMesh(guns[h], true) : null;
       if (!gun || !gun.foot) {
         /* An empty acceptor: a plate where a gun bolts on, with a lit
@@ -1174,6 +1176,11 @@
     var keys = C.slotKeys(ship), fit = ship.fit || {}, out = [];
     for (var i = 0; i < keys.length; i++) {
       if (C.slotType(keys[i]) !== 'hardpoint') continue;
+      /* A mount still behind its panel (combat.js HOLD INTO A HARDPOINT)
+       * shows nothing at all - not even the acceptor plate - until the
+       * first shot opens it. '~' keeps its place in the order, and in the
+       * cache key, so its muzzle is still where the gun is. */
+      if (C.isHiddenKey && C.isHiddenKey(ship, keys[i])) { out.push('~'); continue; }
       var id = fit[keys[i]], it = id && C.EQUIPMENT && C.EQUIPMENT[id];
       out.push(it && (it.kind === 'gun' || it.slot === 'hardpoint') && itemKey(id) ? id : null);
     }
@@ -3460,6 +3467,79 @@
     return [Math.max(hx, 0.02), Math.max(hy, 0.02), Math.max(hz, 0.02)];
   }
 
+  /* ---- where a scar sits (scars.js, 2026-11-20) --------------------------
+   * The hull a kind draws, the same pick shellMesh makes. */
+  function hullMeshFor(kind) {
+    var k = kind || 'courier';
+    return k.indexOf('hull:') === 0 ? hullPreviewMesh(k.slice(5))
+                                    : (shipMeshes()[k] || shipMeshes().courier);
+  }
+  /* The nearest face a ray meets, in the mesh's own units: Moller-Trumbore
+   * over every triangle. Only ever asked once per shot or once per scar per
+   * hull kind, never per frame, so the plain loop is the right price.
+   * Returns { t, p: [x,y,z], n: [x,y,z] (the face normal, turned to face
+   * back along the ray) } or null. */
+  function rayMesh(mesh, o, d) {
+    if (!mesh || !mesh.f || !mesh.v) return null;
+    var best = null, bt = Infinity, v = mesh.v;
+    for (var i = 0; i < mesh.f.length; i++) {
+      var f = mesh.f[i];
+      for (var k = 1; k + 1 < f.length; k++) {
+        var a = v[f[0]], b = v[f[k]], c = v[f[k + 1]];
+        var e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+        var e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+        var px = d[1] * e2z - d[2] * e2y, py = d[2] * e2x - d[0] * e2z, pz = d[0] * e2y - d[1] * e2x;
+        var det = e1x * px + e1y * py + e1z * pz;
+        if (det > -1e-12 && det < 1e-12) continue;
+        var inv = 1 / det;
+        var tx = o[0] - a[0], ty = o[1] - a[1], tz = o[2] - a[2];
+        var u = (tx * px + ty * py + tz * pz) * inv;
+        if (u < 0 || u > 1) continue;
+        var qx = ty * e1z - tz * e1y, qy = tz * e1x - tx * e1z, qz = tx * e1y - ty * e1x;
+        var w = (d[0] * qx + d[1] * qy + d[2] * qz) * inv;
+        if (w < 0 || u + w > 1) continue;
+        var tt = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (tt > 1e-9 && tt < bt) {
+          bt = tt;
+          var nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+          var nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+          nx /= nl; ny /= nl; nz /= nl;
+          if (nx * d[0] + ny * d[1] + nz * d[2] > 0) { nx = -nx; ny = -ny; nz = -nz; }
+          best = { t: tt, p: [o[0] + d[0] * tt, o[1] + d[1] * tt, o[2] + d[2] * tt], n: [nx, ny, nz] };
+        }
+      }
+    }
+    return best;
+  }
+  /* A ship scar's place on the plating: in from three hull lengths out
+   * along its direction until the ray meets the hull. A ray that misses
+   * (a direction past a thin hull's edge) falls back to the box-ish shell
+   * the shield is fitted to, pulled in to sit on the plating. Remembered on
+   * the scar per hull kind - a hull does not change shape mid-fight. */
+  function hullScarPoint(kind, sc) {
+    if (sc._pk === kind && sc._p) return sc;
+    var n = sc.n, o = [n.x * 3, n.y * 3, n.z * 3], d = [-n.x, -n.y, -n.z];
+    var hit = rayMesh(hullMeshFor(kind), o, d);
+    if (hit) { sc._p = hit.p; sc._n = hit.n; }
+    else {
+      var e = halfExtents(hullMeshFor(kind)), P = SHELL_P;
+      var tt = Math.pow(Math.pow(Math.abs(n.x / e[0]), P) + Math.pow(Math.abs(n.y / e[1]), P) +
+                        Math.pow(Math.abs(n.z / e[2]), P), -1 / P) * 0.92;
+      sc._p = [n.x * tt, n.y * tt, n.z * tt]; sc._n = [n.x, n.y, n.z];
+    }
+    sc._pk = kind;
+    return sc;
+  }
+  /* The mesh a port's hull is drawn with (drawStationModel's pick, doors
+   * shut), for a shot to land on. */
+  function portHullMesh(model) {
+    var d = portDoors(model);
+    if (d && d.hull) return d.hull;
+    var meshes = stationMeshes(), mesh = meshes[model];
+    if (!mesh) { var lp = libPort(model); if (lp && lp.shell && lp.shell.f.length) mesh = lp.shell; }
+    return mesh || meshes.orbital;
+  }
+
   function shellMesh(kind) {
     var k = kind || 'courier';
     if (SHELL_MESHES[k]) return SHELL_MESHES[k];
@@ -4952,6 +5032,56 @@
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  /* ---- VAPOUR OVER A HULL IN A HARD PULL (2026-11-22) --------------------
+   * Astra: vapour off "leading tips / edges for control surfaces in
+   * atmosphere". The tips lay their own trails (main.js stepContrails);
+   * this is the other half, the one an air-show crowd cheers: a pulling
+   * hull in wet air wears a sheet of cloud over her lifting side, because
+   * that is where the pressure - and so the temperature - has dropped
+   * below the dew point. It lives only while she pulls, and it streams aft
+   * from the leading edge.
+   *
+   * Drawn as soft white blobs strung along her span, raised toward her
+   * lifting side and smeared back along the airflow - five blobs, each a
+   * gradient, about the cost of the re-entry wake. `box` is her true
+   * [span, height, length] in km (Sim.hullBox); `s` is Weather.vapourOf's
+   * `sheet`, 0..1; liftDir and flow are world unit vectors. */
+  function drawVapourSheet(ctx, cam, frame, box, s, liftDir, flow, tSec) {
+    if (!(s > 0.03) || !frame || !frame.right || !liftDir || !flow) return false;
+    var w = box[0], h = box[1], l = box[2];
+    var top = V.addScaled(frame.pos, liftDir, h * 0.45);
+    var a = cam.project(V.addScaled(top, frame.right, -w * 0.48));
+    var b = cam.project(V.addScaled(top, frame.right, w * 0.48));
+    var aft = cam.project(V.addScaled(top, flow, -l * 0.45));
+    var c = cam.project(top);
+    if (!a || !b || !c || !aft) return false;
+    var span = Math.hypot(b.x - a.x, b.y - a.y);
+    if (!(span > 3) || span > 3000) return false;
+    var dx = aft.x - c.x, dy = aft.y - c.y;
+    var flick = 0.85 + 0.15 * Math.sin(tSec * 23.3) * Math.sin(tSec * 7.1);
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+    var K = 5;
+    for (var k = 0; k < K; k++) {
+      var t = (k + 0.5) / K;
+      /* Heavier inboard, where the wing is deepest; it thins to the tips. */
+      var mid = 1 - Math.abs(t - 0.5) * 1.2;
+      for (var j = 0; j < 2; j++) {
+        var u = j * 0.5;
+        var px = a.x + (b.x - a.x) * t + dx * u, py = a.y + (b.y - a.y) * t + dy * u;
+        var r = span * (0.16 + 0.05 * mid) * (1 + 0.3 * u);
+        var al = Math.min(0.6, s * (0.30 + 0.35 * mid) * (1 - 0.45 * u) * flick);
+        var g = ctx.createRadialGradient(px, py, 0, px, py, r);
+        g.addColorStop(0, 'rgba(245,248,252,' + al.toFixed(3) + ')');
+        g.addColorStop(1, 'rgba(245,248,252,0)');
+        ctx.fillStyle = g;
+        ctx.beginPath(); ctx.arc(px, py, r, 0, Math.PI * 2); ctx.fill();
+      }
+    }
+    ctx.restore();
+    return true;
   }
 
   /* ---- FACTION ACCENTS ON A STATION --------------------------------------
@@ -7374,6 +7504,43 @@
    * a quarter, and so is rebuilt almost never. */
   var SECTION_BOWL_LAST = { key: null, mesh: null };
 
+  /* ---- WHAT THE GROUND IS MADE OF (2026-11-22) ---------------------------
+   * Astra, for when ground ports are player-buildable: planets need "a
+   * texture for whatever is under the surface so we aren't building new
+   * ports in a hole that shows China on the bottom". The hole already has
+   * a bottom (the bowl, below) and walls (FRAG_WALL's beds) - but every
+   * world's beds were the same two greys, so a port cut into an iceball
+   * was lined with the same rock as one cut into a desert.
+   *
+   * So the beds are the world's own top layer. A port's pit is a few
+   * hundred metres deep and every world's crust or ice shell is kilometres
+   * thick (Interior.of: 8 km of crust on a molten world, 30-85 km of ice
+   * on an iceball), so what a dig cuts through is always that top layer
+   * and nothing below it - the deeper layers stay in the scanner's
+   * cutaway, where they belong. What the top layer IS decides the palette:
+   * an ice shell is ice wherever it is; a crust is the rock of its kind
+   * of world. `fill` is the loose stuff under the street (soil, sand,
+   * regolith, ash, firn); `a` and `b` the beds below it, alternating. */
+  var GROUND_ROCK = {
+    terran:  { fill: [0.420, 0.325, 0.220], a: [0.376, 0.333, 0.282], b: [0.459, 0.412, 0.349], name: 'sedimentary rock' },
+    ocean:   { fill: [0.302, 0.282, 0.243], a: [0.282, 0.290, 0.290], b: [0.369, 0.365, 0.349], name: 'marine mudstone and limestone' },
+    desert:  { fill: [0.682, 0.522, 0.341], a: [0.596, 0.380, 0.247], b: [0.706, 0.541, 0.373], name: 'red sandstone' },
+    tundra:  { fill: [0.380, 0.345, 0.302], a: [0.329, 0.329, 0.341], b: [0.420, 0.420, 0.431], name: 'frozen ground and grey rock' },
+    rocky:   { fill: [0.451, 0.439, 0.420], a: [0.298, 0.298, 0.310], b: [0.380, 0.369, 0.357], name: 'regolith and impact breccia' },
+    molten:  { fill: [0.133, 0.122, 0.118], a: [0.098, 0.090, 0.090], b: [0.173, 0.141, 0.129], name: 'ash and basalt' },
+    ice:     { fill: [0.780, 0.820, 0.859], a: [0.620, 0.722, 0.800], b: [0.741, 0.816, 0.878], name: 'ice' }
+  };
+  function groundRock(body, sys) {
+    if (!body) return GROUND_ROCK.rocky;
+    var In = global.Interior, it = null;
+    try { it = In && In.of ? In.of(body, sys) : null; } catch (e) { it = null; }
+    var top = it && it.layers && it.layers.length ? it.layers[0].name : null;
+    if (top === 'ice shell') return GROUND_ROCK.ice;
+    var t = (it && it.type) || body.type;
+    if (t === 'iceball' || t === 'iceMoon') return GROUND_ROCK.ice;
+    return GROUND_ROCK[t] || GROUND_ROCK.rocky;
+  }
+
   /* The wall's uniforms, for GLWorld.queueGroundWall. World km, unit
    * vectors; see the long note over that function for each field. */
   function sectionWall(sc, sunDir) {
@@ -7396,7 +7563,8 @@
       ph: [sectionHash(sc.seed, 2) * 6.283, sectionHash(sc.seed, 3) * 6.283, sectionHash(sc.seed, 4) * 6.283],
       sun: sunDir || { x: 0, y: 0, z: 1 },
       planet: sc.planetW ? { pos: sc.planetW, radius: sc.planetKm } : null,
-      rim: sc.rim || 0
+      rim: sc.rim || 0,
+      rock: sc.rock || GROUND_ROCK.terran
     };
   }
 
@@ -7414,9 +7582,12 @@
     var want = Math.max(SECTION_BOWL_KM, (L * sc.r) * 1.6 + 0.4);
     var Rkm = SECTION_BOWL_KM * Math.pow(1.25, Math.ceil(Math.log(want / SECTION_BOWL_KM) / Math.log(1.25)));
     var key = [S[0], S[1], S[2]].map(function (v) { return Math.round(v / 0.002); }).join('|') +
-              '|' + Rkm.toFixed(3) + '|' + sc.r + '|' + sc.seed;
+              '|' + Rkm.toFixed(3) + '|' + sc.r + '|' + sc.seed + '|' + (sc.rock ? sc.rock.name : '');
     if (SECTION_BOWL_LAST.key === key) return SECTION_BOWL_LAST.mesh;
-    var Rb = Rkm / sc.r, lat = 12, lon = 48, rows = [], col = bedColour('#555048', sc.seed, 99);
+    /* The bowl is the deepest bed's rock, the world's own (groundRock). */
+    var rk = (sc.rock || GROUND_ROCK.terran).a;
+    var hex = '#' + rk.map(function (v) { var s = Math.round(Math.max(0, Math.min(1, v * 0.85)) * 255).toString(16); return s.length < 2 ? '0' + s : s; }).join('');
+    var Rb = Rkm / sc.r, lat = 12, lon = 48, rows = [], col = bedColour(hex, sc.seed, 99);
     var mesh = { v: [], f: [], c: [], vn: [], noAccent: true };
     for (var la = 0; la <= lat; la++) {
       var ph = la / lat * Math.PI / 2, cph = Math.cos(ph), sph = Math.sin(ph), row = [];
@@ -12347,7 +12518,7 @@
       // Rather than jitter, say so plainly and skip the ladder this frame.
       ctx.save();
       ctx.font = '11px ui-monospace, monospace';
-      ctx.fillStyle = '#7dfaff';
+      ctx.fillStyle = LADDER_HI();
       ctx.textAlign = 'center';
       ctx.fillText(att.pitchDeg > 0 ? 'PITCH 90° — NADIR BEHIND' : 'PITCH −90° — ZENITH BEHIND',
                    w / 2, h / 2 - 30);
@@ -12382,7 +12553,7 @@
         }
         if (pts.length < 2) return;
 
-        ctx.strokeStyle = p === 0 ? '#7dfaff' : '#5fe3a8';
+        ctx.strokeStyle = p === 0 ? LADDER_HI() : LADDER_LO();
         ctx.lineWidth = p === 0 ? 2 : 1.4;
         ctx.globalAlpha = p === 0 ? 0.95 : 0.8;
         ctx.setLineDash(p < 0 ? [5, 4] : []);
@@ -12403,7 +12574,7 @@
         ctx.stroke();
         if (p !== 0) {
           ctx.globalAlpha = 0.9;
-          ctx.fillStyle = p < 0 ? '#5fe3a8' : '#7dfaff';
+          ctx.fillStyle = p < 0 ? LADDER_LO() : LADDER_HI();
           ctx.fillText(Math.abs(p), end.x + side * 7, end.y + 3);
         }
       });
@@ -13092,9 +13263,9 @@
   /* Under the ladder, centred, where the eye already is: the symbol of the
    * marker you are nearer, and the words. Bright and boxed when you are on
    * it; plain when you are not; nothing to say when you are not moving. */
-  function drawFacingCue(ctx, w, h, info, y) {
+  function drawFacingCue(ctx, w, h, info, y, cxAt) {
     if (!info) return;
-    var cx = w / 2;
+    var cx = cxAt || w / 2;
     inkBegin(ctx);
     ctx.textAlign = 'left';
     var label, col;
@@ -13138,8 +13309,11 @@
    * with a fixed pointer, same convention as a real ADI — the scale turns
    * with the ship's roll, the index stays put, so their alignment reads off
    * the bank angle directly. */
-  function drawBankScale(ctx, w, h, rollDeg, cyOverride) {
-    var cx = w / 2, cy = cyOverride || 92, R = 74;
+  /* `down`: the arc hung under its centre instead of over it (a cockpit
+   * look that keeps the top of the glass clear) — the same scale turned
+   * half round, so it still turns with the roll the same way. */
+  function drawBankScale(ctx, w, h, rollDeg, cyOverride, down, cxAt) {
+    var cx = cxAt || w / 2, cy = cyOverride || 92, R = 74, s = down ? -1 : 1;
     var marks = [-60, -45, -30, -20, -10, 0, 10, 20, 30, 45, 60];
     ctx.save();
     ctx.strokeStyle = 'rgba(180,205,235,0.5)';
@@ -13148,14 +13322,14 @@
     for (var i = 0; i < marks.length; i++) {
       var a = (-marks[i] + rollDeg) * DEG; // 0 = straight up
       var len = (marks[i] % 30 === 0) ? 10 : 6;
-      var sx = cx + Math.sin(a) * R, sy = cy - Math.cos(a) * R;
-      var ex = cx + Math.sin(a) * (R - len), ey = cy - Math.cos(a) * (R - len);
+      var sx = cx + s * Math.sin(a) * R, sy = cy - s * Math.cos(a) * R;
+      var ex = cx + s * Math.sin(a) * (R - len), ey = cy - s * Math.cos(a) * (R - len);
       ctx.beginPath(); ctx.moveTo(sx, sy); ctx.lineTo(ex, ey); ctx.stroke();
     }
     // Fixed index (points at whichever mark currently reads true bank).
     ctx.fillStyle = '#ffe6a8';
     ctx.beginPath();
-    ctx.moveTo(cx, cy - R + 12); ctx.lineTo(cx - 5, cy - R); ctx.lineTo(cx + 5, cy - R);
+    ctx.moveTo(cx, cy - s * (R - 12)); ctx.lineTo(cx - 5, cy - s * R); ctx.lineTo(cx + 5, cy - s * R);
     ctx.closePath(); ctx.fill();
     ctx.restore();
   }
@@ -13213,6 +13387,750 @@
     ctx.lineCap = 'butt';
   }
 
+  /* ---- EACH HULL ITS OWN COCKPIT LOOK (2026-11-21) ----------------------
+   * Astra: "can you re-design the interiors so that each one has a unique
+   * HUD layout and placement of cockpit visual details? Give me a few
+   * examples for each one and I'll tell you which is the best."
+   *
+   * A look is two halves:
+   *   hud    tint    the symbology's colour (HUD_TINTS)
+   *          air     speed and altitude boxes: 'flank' at the horizon,
+   *                  'narrow' hugging the ladder, 'low', 'high'
+   *          tape    heading tape 'top' or 'bottom'
+   *          bank    bank arc 'top', 'bottom' or 'none'
+   *          box     'box' (framed), 'bracket' (corners), 'bare' (text)
+   *   frame  gusset  corner pieces, a size in hull units (0 = none), as
+   *                  'tri' plates or 'brace' bars across the corner
+   *          post    'none', 'post' (centre mullion), 'twin', 'combiner'
+   *                  (a fighter's combiner glass in front of the pilot)
+   *          brow    a light strip along the top of the windscreen
+   * Every frame piece is built off THIS hull's windscreen outline (its
+   * corners and chamfers, at its own glass distance), which is the fix for
+   * what Astra saw: the old gussets and mullion were drawn at fixed numbers
+   * from before the windscreen grew, at a fixed 1.2 m, so on a bubble
+   * canopy whose glass sits elsewhere they hung in space.
+   *
+   * Three candidates a hull, A B C, written out by role. No candidate puts
+   * two instruments in one place: 'low' boxes never share the foot with a
+   * bottom tape, and a bottom bank arc never with one either.
+   * HULL_LOOK_PICK is the one flown; until Astra picks, A. */
+  /* Every one bright: Astra, "all should be bright enough to provide good
+   * contrast". Relative luminance 0.55 or better (cargocost.test.js holds
+   * it), over the ink's dark halo, so each reads on a sunlit planet and on
+   * black. Coral and violet were the two under it (0.42, 0.50) and were
+   * lifted toward white. */
+  var HUD_TINTS = {
+    jade: '#6ef0c0', cyan: '#7fe3ff', amber: '#ffcf6b', ice: '#e2eeff',
+    lime: '#b4f06e', coral: '#ffb39c', violet: '#dccbff'
+  };
+  function LK(tint, air, tape, bank, box, gusset, gstyle, post, brow) {
+    return { hud: { tint: tint, air: air, tape: tape, bank: bank, box: box },
+             frame: { gusset: gusset, gstyle: gstyle, post: post, brow: !!brow } };
+  }
+  var HULL_LOOKS = {
+    talon:        [LK('jade', 'flank', 'top', 'top', 'box', 0.24, 'tri', 'post'), LK('cyan', 'narrow', 'top', 'bottom', 'bracket', 0.18, 'brace', 'none', 1), LK('ice', 'high', 'bottom', 'none', 'bare', 0, 'tri', 'twin')],
+    dart:         [LK('coral', 'narrow', 'top', 'top', 'bracket', 0, 'tri', 'combiner'), LK('amber', 'flank', 'top', 'bottom', 'box', 0.16, 'brace', 'none'), LK('lime', 'high', 'bottom', 'none', 'bare', 0, 'tri', 'post', 1)],
+    kestrel:      [LK('ice', 'flank', 'top', 'top', 'box', 0.28, 'tri', 'post', 1), LK('cyan', 'low', 'top', 'top', 'bracket', 0.20, 'brace', 'twin'), LK('jade', 'narrow', 'bottom', 'top', 'bare', 0.34, 'tri', 'none')],
+    mule:         [LK('amber', 'flank', 'top', 'top', 'box', 0.34, 'tri', 'post'), LK('jade', 'low', 'top', 'none', 'box', 0.40, 'tri', 'twin', 1), LK('ice', 'high', 'bottom', 'none', 'bracket', 0.26, 'brace', 'none')],
+    wren:         [LK('cyan', 'low', 'top', 'none', 'box', 0.22, 'tri', 'none', 1), LK('jade', 'flank', 'bottom', 'top', 'bare', 0.18, 'brace', 'post'), LK('violet', 'narrow', 'top', 'bottom', 'bracket', 0, 'tri', 'twin')],
+    bollard:      [LK('amber', 'low', 'top', 'top', 'box', 0.36, 'tri', 'twin'), LK('lime', 'flank', 'top', 'none', 'bracket', 0.30, 'brace', 'post', 1), LK('jade', 'high', 'bottom', 'none', 'box', 0.42, 'tri', 'none')],
+    samaritan:    [LK('ice', 'flank', 'top', 'top', 'box', 0.26, 'tri', 'none', 1), LK('coral', 'low', 'top', 'none', 'bracket', 0.20, 'brace', 'post'), LK('cyan', 'narrow', 'bottom', 'top', 'bare', 0.30, 'tri', 'twin')],
+    sump:         [LK('lime', 'flank', 'top', 'none', 'box', 0.40, 'tri', 'twin'), LK('amber', 'low', 'top', 'top', 'bare', 0.34, 'brace', 'post'), LK('jade', 'high', 'bottom', 'none', 'bracket', 0.30, 'tri', 'none', 1)],
+    longhaul:     [LK('amber', 'flank', 'top', 'top', 'box', 0.36, 'tri', 'post', 1), LK('ice', 'narrow', 'bottom', 'top', 'bracket', 0.28, 'brace', 'twin'), LK('jade', 'low', 'top', 'none', 'bare', 0.42, 'tri', 'none')],
+    tanker:       [LK('jade', 'flank', 'bottom', 'top', 'box', 0.38, 'tri', 'twin'), LK('amber', 'high', 'bottom', 'none', 'bracket', 0.30, 'brace', 'post', 1), LK('cyan', 'low', 'top', 'top', 'box', 0.44, 'tri', 'none')],
+    cutter:       [LK('cyan', 'narrow', 'top', 'top', 'bracket', 0, 'tri', 'combiner'), LK('ice', 'flank', 'top', 'bottom', 'box', 0.18, 'brace', 'post', 1), LK('coral', 'high', 'bottom', 'none', 'bare', 0.22, 'tri', 'twin')],
+    meridian:     [LK('violet', 'flank', 'top', 'top', 'bare', 0.32, 'tri', 'none', 1), LK('ice', 'low', 'top', 'none', 'box', 0.38, 'brace', 'twin'), LK('amber', 'narrow', 'bottom', 'top', 'bracket', 0.28, 'tri', 'post')],
+    leviathan:    [LK('amber', 'low', 'top', 'none', 'box', 0.46, 'tri', 'twin'), LK('jade', 'flank', 'bottom', 'top', 'box', 0.40, 'brace', 'post', 1), LK('lime', 'high', 'bottom', 'none', 'bare', 0.36, 'tri', 'none')],
+    capital:      [LK('ice', 'flank', 'top', 'top', 'box', 0.30, 'tri', 'post', 1), LK('coral', 'narrow', 'top', 'bottom', 'bracket', 0.22, 'brace', 'twin'), LK('cyan', 'low', 'top', 'none', 'bare', 0.34, 'tri', 'none')],
+    crawler:      [LK('amber', 'flank', 'top', 'top', 'box', 0.40, 'tri', 'twin', 1), LK('coral', 'low', 'top', 'none', 'bracket', 0.34, 'brace', 'post'), LK('jade', 'high', 'bottom', 'none', 'box', 0.44, 'tri', 'none')],
+    heavytug:     [LK('lime', 'low', 'top', 'top', 'box', 0.38, 'tri', 'post'), LK('amber', 'flank', 'bottom', 'top', 'bare', 0.32, 'brace', 'twin', 1), LK('cyan', 'narrow', 'top', 'none', 'bracket', 0.42, 'tri', 'none')],
+    heavyshuttle: [LK('cyan', 'flank', 'top', 'none', 'box', 0.26, 'tri', 'twin'), LK('violet', 'low', 'top', 'top', 'bracket', 0.20, 'brace', 'none', 1), LK('jade', 'high', 'bottom', 'none', 'bare', 0.30, 'tri', 'post')],
+    trader:       [LK('amber', 'narrow', 'top', 'top', 'box', 0.28, 'tri', 'none'), LK('jade', 'flank', 'bottom', 'top', 'bracket', 0.22, 'brace', 'post', 1), LK('ice', 'low', 'top', 'none', 'bare', 0.32, 'tri', 'twin')],
+    runner:       [LK('coral', 'flank', 'top', 'bottom', 'bracket', 0, 'tri', 'combiner'), LK('amber', 'narrow', 'top', 'top', 'bare', 0.16, 'brace', 'none', 1), LK('lime', 'high', 'bottom', 'none', 'box', 0.20, 'tri', 'post')],
+    enforcer:     [LK('coral', 'narrow', 'top', 'top', 'box', 0.18, 'brace', 'combiner'), LK('violet', 'flank', 'bottom', 'top', 'bracket', 0, 'tri', 'post', 1), LK('amber', 'low', 'top', 'none', 'bare', 0.22, 'tri', 'twin')],
+    enforcerheavy:[LK('coral', 'low', 'top', 'top', 'bracket', 0.26, 'tri', 'twin', 1), LK('amber', 'flank', 'top', 'bottom', 'box', 0.20, 'brace', 'post'), LK('ice', 'high', 'bottom', 'none', 'bare', 0.30, 'tri', 'none')],
+    fighter:      [LK('lime', 'narrow', 'top', 'top', 'bracket', 0, 'tri', 'combiner'), LK('cyan', 'flank', 'top', 'bottom', 'box', 0.14, 'brace', 'none'), LK('coral', 'high', 'bottom', 'none', 'bare', 0, 'tri', 'post', 1)],
+    carrier:      [LK('ice', 'flank', 'top', 'top', 'box', 0.42, 'tri', 'twin', 1), LK('cyan', 'low', 'top', 'none', 'bracket', 0.36, 'brace', 'post'), LK('amber', 'narrow', 'bottom', 'top', 'box', 0.46, 'tri', 'none')]
+  };
+  /* The look each hull flies with: 0 = A, 1 = B, 2 = C. Astra's picks go here. */
+  var HULL_LOOK_PICK = {};
+  /* A probe (tools/probe-cockpit-looks.js) asks for one candidate at a time. */
+  var LOOK_TRY = null;
+  var LOOK_DEFAULT = LK('jade', 'flank', 'top', 'top', 'box', 0.24, 'tri', 'post');
+  function cockpitLook(ship) {
+    var id = ship && ship.hullId, list = HULL_LOOKS[id];
+    if (!list) return LOOK_DEFAULT;
+    /* The probe's ask, else the fit this ship was bought or refitted with
+     * (ship.cockpitLook, Combat.buyHull / refitCockpit), else A. */
+    return list[lookIndexOf(ship)];
+  }
+  function setLookTry(map) { LOOK_TRY = map || null; }
+  /* Which of the hull's fits this ship flies: 0, 1 or 2. */
+  function lookIndexOf(ship) {
+    var id = ship && ship.hullId, list = HULL_LOOKS[id];
+    if (!list) return 0;
+    var i = LOOK_TRY && LOOK_TRY[id] !== undefined ? LOOK_TRY[id]
+          : ship.cockpitLook !== undefined && ship.cockpitLook !== null ? ship.cockpitLook
+          : (HULL_LOOK_PICK[id] || 0);
+    return Math.max(0, Math.min(list.length - 1, i | 0));
+  }
+
+  /* ---- THE CABIN EACH FIT COMES WITH (2026-11-21) ------------------------
+   * Astra: "I'd appreciate more variety with the location of the pilot's
+   * seat and the MFD panels" - and, of the bigger ships, "some of the bigger
+   * ones can have two seats, like an airplane" - "Changing the canopy shape
+   * is also permitted. It doesn't have to match the exterior, I can alter
+   * those models later as long as you give me the parameters."
+   *
+   * So a fit is a whole cabin as well as a HUD:
+   *   seat    where the pilot's eye sits, in metres off the room's centre
+   *           line (x, toward the right), up (y) and forward (z), scaled
+   *           with the room. A large hull's B fit seats you on the left of
+   *           two, as on an airliner: the glass and the room stay centred
+   *           on the ship, your own screens move over in front of you, and
+   *           the co-pilot's chair is its mirror across the aisle
+   *           (shipdeck.js TWO ABREAST: the deck plan moves the helm to
+   *           this seat, and a hired pilot sits in the other).
+   *   mfd     how the forward screens are mounted: 'arc' (as they were),
+   *           'wide' (splayed further round and lower, a flight deck's
+   *           spread), 'high' (stood up and brought up toward the eye, a
+   *           fighter's instrument stack).
+   *   wrap, brow, rake
+   *           the canopy's shape, as multipliers and an offset on the
+   *           hull's own (COCKPIT_ARCH): how far round the glass reaches,
+   *           how much structure sits above it, how far it leans back.
+   * Fit A is the cabin every ship had, untouched; B opens it up; C closes
+   * it in. cabinParams() prints the numbers for the exterior models. */
+  function cabinOf(hullId, i) {
+    var C = global.Combat, h = C && C.HULLS && C.HULLS[hullId];
+    var size = (h && h.size) || 'M', big = size === 'L' || size === 'XL';
+    if (i === 1) {
+      return big
+        ? { wrap: 1.06, brow: 0.94, rake: 0.03, seat: { x: -0.46, y: 0, z: 0 }, mfd: 'wide',
+            words: ['left seat of two', 'wide console', 'wider glass'] }
+        /* Raised 5 cm, not more: at 9 cm (the first try) the console sank
+         * out of the bottom of the view and the pilot had no screens. */
+        : { wrap: 1.08, brow: 0.90, rake: 0.05, seat: { x: 0, y: 0.05, z: 0.03 }, mfd: 'wide',
+            words: ['raised seat', 'wide console', 'wider glass, slimmer brow'] };
+    }
+    if (i === 2) {
+      return { wrap: 0.93, brow: 1.12, rake: -0.04, seat: { x: 0, y: -0.06, z: 0.05 }, mfd: 'high',
+               words: ['low seat, forward', 'instrument stack', 'narrower glass, heavier brow'] };
+    }
+    return { wrap: 1, brow: 1, rake: 0, seat: { x: 0, y: 0, z: 0 }, mfd: 'arc',
+             words: ['centre seat', 'arc console', 'standard glass'] };
+  }
+  /* A forward screen moved to suit the fit's console and seat. */
+  function cabinMount(m, spec) {
+    var cab = spec && spec.cabin;
+    if (!cab || Math.abs(m.bearing) >= Math.PI / 2) return m;
+    var o = {}, k;
+    for (k in m) o[k] = m[k];
+    /* Wide: splayed round, and stood a little higher than the arc so the
+     * spread stays in view over the sill. */
+    if (cab.mfd === 'wide') { o.bearing = m.bearing * 1.32; o.y = m.y + 0.02; o.lean = m.lean + 0.04; }
+    else if (cab.mfd === 'high') { o.y = m.y + 0.05; o.r = m.r * 0.95; o.lean = m.lean - 0.12; }
+    return o;
+  }
+  /* The canopy and seat numbers for every hull and fit, for the exterior
+   * models: arch is the hull's own, the fit's multipliers applied. */
+  function cabinParams() {
+    var out = [];
+    Object.keys(HULL_LOOKS).forEach(function (id) {
+      var a = COCKPIT_ARCH[id] || COCKPIT_ARCH.talon;
+      for (var i = 0; i < HULL_LOOKS[id].length; i++) {
+        var c = cabinOf(id, i);
+        out.push({ hull: id, fit: 'ABC'[i], wrap: +(a.wrap * c.wrap).toFixed(3), brow: +(a.brow * c.brow).toFixed(3),
+                   rakeOffset: c.rake, room: a.room, seat: c.seat, console: c.mfd, words: c.words });
+      }
+    });
+    return out;
+  }
+  /* A look in a line, for the yard: "amber HUD · readouts wide · tape top ·
+   * bank arc above · framed · deep bolted frame · window posts". */
+  function lookSummary(lk, hullId, i) {
+    if (hullId !== undefined && i !== undefined) {
+      /* With the hull and fit named, the cabin leads: where you sit says
+       * more about a cockpit than the colour of its symbology. */
+      return cabinOf(hullId, i).words.join(' · ') + ' · ' + lookSummary(lk);
+    }
+    var h = lk.hud, f = lk.frame;
+    var air = { flank: 'readouts wide', narrow: 'readouts close in', low: 'readouts low', high: 'readouts high' };
+    var bank = { top: 'bank arc above', bottom: 'bank arc below', none: 'no bank arc' };
+    var box = { box: 'framed', bracket: 'bracketed', bare: 'bare numbers' };
+    var parts = [h.tint + ' HUD', air[h.air], 'tape ' + h.tape, bank[h.bank], box[h.box],
+                 (f.gusset >= 0.3 ? 'deep' : f.gusset > 0 ? 'medium' : 'slim') + ' frame, ' +
+                 (f.gstyle === 'brace' ? 'close-bolted' : 'bolted')];
+    if (f.post === 'post' || f.post === 'twin') parts.push('window posts on large hulls');
+    if (f.brow) parts.push('lit seal');
+    return parts.join(' · ');
+  }
+  /* The HUD half of the look this frame's glass is drawn with. Set by
+   * main.js from the ship whose cockpit is drawn, before the labels are
+   * placed (they keep off hudReadoutBoxes) and again before the glass. */
+  var HUD = LOOK_DEFAULT.hud;
+  function setHudLook(hud) { HUD = hud || LOOK_DEFAULT.hud; }
+  function hudTint() { return HUD_TINTS[HUD.tint] || HUD_TINTS.jade; }
+  /* The pitch ladder keeps its old cyan-and-green outside a hull's look
+   * (the external view draws it too); inside one it takes the look's tint,
+   * the dash and line weight still telling climb from dive. */
+  function LADDER_HI() { return HUD === LOOK_DEFAULT.hud ? '#7dfaff' : hudTint(); }
+  function LADDER_LO() { return HUD === LOOK_DEFAULT.hud ? '#5fe3a8' : hudTint(); }
+  /* Where each instrument stands, from the one place, so the readout boxes
+   * the labels keep off are always the instruments' own. */
+  /* `foot`: where the flight panel's top cuts the view (main.js deckTop);
+   * nothing at the foot of the glass goes under it. */
+  function hudGeom(w, hv, foot) {
+    var off0 = Math.max(190, Math.min(w * 0.27, 420));
+    var g = { cx: w / 2, airY: hv / 2, off: off0, tapeY: Math.max(40, hv * 0.30 - 74 - 44),
+              bankY: hv * 0.30, bankDown: false, bank: HUD.bank !== 'none' };
+    /* ON THE GLASS, NOT THE EYE (2026-11-21). Astra: "HUD should be
+     * centered on the cockpit glass, not the player's view. In ships with
+     * seating off to one side, reconfigure the HUD elements so that less
+     * vital information is off to the side, and that the most crucial
+     * information is centered between the HUD and the seat position." So
+     * the instruments stand half way between the windscreen's middle and
+     * the pilot's line of sight. From a centre seat those are the same
+     * place and nothing moves. The pitch ladder and the flight-path marker
+     * are not placed here: they mark real directions in the sky, and have
+     * to stay true to the eye. */
+    if (HUD_ROOM) {
+      var gx0 = Infinity, gx1 = -Infinity;
+      for (var gi = 0; gi < HUD_ROOM.length; gi++) { gx0 = Math.min(gx0, HUD_ROOM[gi].x); gx1 = Math.max(gx1, HUD_ROOM[gi].x); }
+      var glassMid = (gx0 + gx1) / 2;
+      /* "The seat position" on screen: where straight ahead from the seat
+       * lands (main.js setHudRoom), not the middle of the view, so a turn
+       * of the head moves the glass and that point together and the HUD
+       * stays on the glass instead of sliding across it. */
+      var eyeX = HUD_SEATX !== null ? HUD_SEATX : w / 2;
+      g.glassMid = glassMid; g.eyeX = eyeX;
+      if (Math.abs(glassMid - eyeX) > 12) g.cx = (glassMid + eyeX) / 2;
+      else g.cx = eyeX;
+    }
+    if (HUD.air === 'narrow') g.off = Math.max(165, off0 * 0.62);
+    else if (HUD.air === 'low') { g.off = Math.max(165, off0 * 0.72); g.airY = hv * 0.64; }
+    else if (HUD.air === 'high') { g.off = Math.max(180, off0 * 0.85); g.airY = hv * 0.37; }
+    if (HUD.tape === 'bottom') g.tapeY = hv * 0.76;
+    if (HUD.bank === 'bottom') { g.bankY = hv * 0.62; g.bankDown = true; }
+    if (foot) {
+      /* The key-hint line sits at foot - 8; the tape's box and bug need
+       * about 40 px above that, the hung bank arc 84. */
+      if (HUD.tape === 'bottom') g.tapeY = Math.min(g.tapeY, foot - 52);
+      if (HUD.bank === 'bottom') g.bankY = Math.min(g.bankY, foot - 92);
+      if (HUD.air === 'low') g.airY = Math.min(g.airY, foot - 80);
+    }
+    /* INSIDE THIS WINDOW. The glass is clipped to the windscreen, and on a
+     * hull whose windscreen is narrower than the screen (the tanker's is
+     * about half of it) boxes at the old fixed spread were drawn under the
+     * frame and cut in half. Brought in until the box and the lines under
+     * it (about 140 px out from the anchor) fit the opening at their rows. */
+    if (HUD_ROOM) {
+      /* And up and down: the tape, the bank arc and low boxes kept between
+       * this window's top and sill, at the centre line where they stand. */
+      var vs = vspanAt(HUD_ROOM, g.cx);
+      if (vs) {
+        /* ...but never up into the attitude line and facing cue under the
+         * horizon (hv/2 + 40 and + 66). */
+        if (HUD.tape === 'bottom') g.tapeY = Math.max(hv / 2 + 96, Math.min(g.tapeY, vs.bot - 40));
+        else g.tapeY = Math.max(g.tapeY, vs.top + 34);
+        if (HUD.bank === 'bottom') g.bankY = Math.min(g.bankY, vs.bot - 84);
+        else if (HUD.tape === 'top') g.bankY = Math.max(g.bankY, g.tapeY + 118);
+        else g.bankY = Math.max(g.bankY, vs.top + 84);
+        if (HUD.air === 'low') g.airY = Math.min(g.airY, vs.bot - 72);
+      }
+      var room = Math.min(spanAt(HUD_ROOM, g.airY, g.cx), spanAt(HUD_ROOM, g.airY + 60, g.cx));
+      /* A big ship's window posts split the glass: the boxes stay in the
+       * middle pane, between them. */
+      for (var pi = 0; pi < HUD_POSTS.length; pi++) room = Math.min(room, Math.abs(HUD_POSTS[pi] - g.cx) - 12);
+      if (room < Infinity) g.off = Math.max(120, Math.min(g.off, room - 145));
+    }
+    g.role = rolePanelAt(g, w, hv, foot);
+    return g;
+  }
+  /* What each hull is FOR, which decides the panel its glass leads with
+   * (main.js roleReadout); fitted gear adds its own lines to any of them. */
+  var HULL_ROLE = {
+    dart: 'fight', fighter: 'fight', runner: 'fight', enforcer: 'fight', enforcerheavy: 'fight',
+    cutter: 'fight', capital: 'fight', carrier: 'fight', kestrel: 'fight',
+    talon: 'freight', mule: 'freight', longhaul: 'freight', tanker: 'freight', trader: 'freight',
+    sump: 'freight', leviathan: 'freight',
+    bollard: 'work', heavytug: 'work', crawler: 'work', samaritan: 'work',
+    wren: 'passage', heavyshuttle: 'passage', meridian: 'passage'
+  };
+  /* ---- TRADE ON THE GLASS (2026-11-21) ----------------------------------
+   * Astra: "Use icons for trade. Trade HUD should show the cargo in your
+   * hull, how much you'll make or lose taking it to your destination in
+   * either bright green or bright red, fading through orange and yellow for
+   * deals which are less and less bad."
+   *
+   * A deal's colour from its margin (gain over what the cargo cost): a
+   * ramp of stops, interpolated, every one bright enough to read on a sunlit
+   * planet and on black. Cargo that cost nothing (mined, scooped, salvaged)
+   * has no margin to speak of and is simply green. */
+  var DEAL_STOPS = [
+    [-0.30, [255, 59, 59]],    // a real loss: bright red
+    [-0.10, [255, 140, 40]],   // losing: orange
+    [0.00, [255, 226, 74]],    // about even: yellow
+    [0.08, [200, 255, 70]],    // a little in it: yellow-green
+    [0.20, [61, 255, 110]]     // a good run: bright green
+  ];
+  function dealColour(margin) {
+    if (margin === null || margin === undefined || !isFinite(margin)) return 'rgb(61,255,110)';
+    var s = DEAL_STOPS;
+    if (margin <= s[0][0]) return 'rgb(' + s[0][1].join(',') + ')';
+    for (var i = 1; i < s.length; i++) {
+      if (margin <= s[i][0]) {
+        var a = s[i - 1], b = s[i], t = (margin - a[0]) / (b[0] - a[0]);
+        return 'rgb(' + [0, 1, 2].map(function (k) { return Math.round(a[1][k] + (b[1][k] - a[1][k]) * t); }).join(',') + ')';
+      }
+    }
+    return 'rgb(' + s[s.length - 1][1].join(',') + ')';
+  }
+
+  /* What a commodity is, as a mark small enough for a HUD line: a dozen
+   * shapes that sort the two dozen goods into what they look like in a
+   * hold - drums of liquid, sacks, crates of machines, rock. Stroked in
+   * the line's own colour over the HUD's dark halo. */
+  var COM_ICON = {
+    water: 'drop', hydrogen: 'drop', chemicals: 'flask', wine: 'bottle', milfuel: 'drop',
+    grain: 'sheaf', fruit: 'fruit', livestock: 'beast', timber: 'logs', fish: 'fish',
+    ores: 'rock', rare: 'gem', fissile: 'atom', fusion: 'atom', alloys: 'ingot',
+    textiles: 'bolt', farmmach: 'gear', robotics: 'gear', computers: 'chip', aicores: 'chip',
+    medical: 'cross', genetech: 'helix', luxuries: 'gem', waste: 'hazard'
+  };
+  function drawComIcon(ctx, cid, x, y, r, col) {
+    var kind = COM_ICON[cid] || 'crate';
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    function path() {
+      ctx.beginPath();
+      switch (kind) {
+        case 'drop':
+          ctx.moveTo(x, y - r); ctx.quadraticCurveTo(x + r, y + r * 0.1, x, y + r);
+          ctx.quadraticCurveTo(x - r, y + r * 0.1, x, y - r); break;
+        case 'flask':
+          ctx.moveTo(x - r * 0.3, y - r); ctx.lineTo(x - r * 0.3, y - r * 0.2); ctx.lineTo(x - r, y + r);
+          ctx.lineTo(x + r, y + r); ctx.lineTo(x + r * 0.3, y - r * 0.2); ctx.lineTo(x + r * 0.3, y - r); break;
+        case 'bottle':
+          ctx.moveTo(x - r * 0.2, y - r); ctx.lineTo(x + r * 0.2, y - r); ctx.lineTo(x + r * 0.2, y - r * 0.4);
+          ctx.lineTo(x + r * 0.5, y - r * 0.1); ctx.lineTo(x + r * 0.5, y + r); ctx.lineTo(x - r * 0.5, y + r);
+          ctx.lineTo(x - r * 0.5, y - r * 0.1); ctx.lineTo(x - r * 0.2, y - r * 0.4); ctx.closePath(); break;
+        case 'sheaf':
+          ctx.moveTo(x, y + r); ctx.lineTo(x, y - r); ctx.moveTo(x, y + r); ctx.lineTo(x - r * 0.7, y - r * 0.6);
+          ctx.moveTo(x, y + r); ctx.lineTo(x + r * 0.7, y - r * 0.6); ctx.moveTo(x - r * 0.5, y + r * 0.2); ctx.lineTo(x + r * 0.5, y + r * 0.2); break;
+        case 'fruit':
+          ctx.arc(x, y + r * 0.15, r * 0.8, 0, Math.PI * 2); ctx.moveTo(x, y - r * 0.6); ctx.lineTo(x + r * 0.3, y - r); break;
+        case 'beast':
+          ctx.moveTo(x - r, y - r * 0.1); ctx.lineTo(x + r * 0.6, y - r * 0.1); ctx.lineTo(x + r, y - r * 0.6);
+          ctx.moveTo(x - r, y - r * 0.1); ctx.lineTo(x - r, y + r * 0.4); ctx.lineTo(x + r * 0.6, y + r * 0.4); ctx.lineTo(x + r * 0.6, y - r * 0.1);
+          ctx.moveTo(x - r * 0.8, y + r * 0.4); ctx.lineTo(x - r * 0.8, y + r); ctx.moveTo(x + r * 0.4, y + r * 0.4); ctx.lineTo(x + r * 0.4, y + r); break;
+        case 'logs':
+          ctx.arc(x - r * 0.45, y + r * 0.35, r * 0.45, 0, Math.PI * 2);
+          ctx.moveTo(x + r * 0.9, y + r * 0.35); ctx.arc(x + r * 0.45, y + r * 0.35, r * 0.45, 0, Math.PI * 2);
+          ctx.moveTo(x + r * 0.45, y - r * 0.4); ctx.arc(x, y - r * 0.4, r * 0.45, 0, Math.PI * 2); break;
+        case 'fish':
+          ctx.moveTo(x - r * 0.5, y); ctx.quadraticCurveTo(x + r * 0.2, y - r * 0.8, x + r, y);
+          ctx.quadraticCurveTo(x + r * 0.2, y + r * 0.8, x - r * 0.5, y);
+          ctx.lineTo(x - r, y - r * 0.5); ctx.lineTo(x - r, y + r * 0.5); ctx.closePath(); break;
+        case 'rock':
+          ctx.moveTo(x - r, y + r * 0.6); ctx.lineTo(x - r * 0.6, y - r * 0.5); ctx.lineTo(x + r * 0.1, y - r);
+          ctx.lineTo(x + r, y - r * 0.2); ctx.lineTo(x + r * 0.7, y + r * 0.8); ctx.closePath(); break;
+        case 'gem':
+          ctx.moveTo(x - r, y - r * 0.3); ctx.lineTo(x - r * 0.5, y - r); ctx.lineTo(x + r * 0.5, y - r);
+          ctx.lineTo(x + r, y - r * 0.3); ctx.lineTo(x, y + r); ctx.closePath(); ctx.moveTo(x - r, y - r * 0.3); ctx.lineTo(x + r, y - r * 0.3); break;
+        case 'atom':
+          ctx.ellipse(x, y, r, r * 0.38, 0, 0, Math.PI * 2);
+          ctx.moveTo(x + r * 0.5, y + r * 0.87); ctx.ellipse(x, y, r, r * 0.38, Math.PI / 3, 0, Math.PI * 2);
+          ctx.moveTo(x + r * 0.5, y - r * 0.87); ctx.ellipse(x, y, r, r * 0.38, -Math.PI / 3, 0, Math.PI * 2); break;
+        case 'ingot':
+          ctx.moveTo(x - r, y + r * 0.6); ctx.lineTo(x - r * 0.6, y - r * 0.4); ctx.lineTo(x + r * 0.6, y - r * 0.4);
+          ctx.lineTo(x + r, y + r * 0.6); ctx.closePath(); break;
+        case 'bolt':
+          ctx.rect(x - r, y - r * 0.5, r * 2, r * 1.2); ctx.moveTo(x - r * 0.4, y - r * 0.5); ctx.lineTo(x - r * 0.4, y + r * 0.7);
+          ctx.moveTo(x + r * 0.2, y - r * 0.5); ctx.lineTo(x + r * 0.2, y + r * 0.7); break;
+        case 'gear':
+          for (var g = 0; g < 8; g++) {
+            var a0 = g * Math.PI / 4, rr = g % 2 ? r * 0.7 : r;
+            var px = x + Math.cos(a0) * rr, py = y + Math.sin(a0) * rr;
+            if (g) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+          }
+          ctx.closePath(); ctx.moveTo(x + r * 0.3, y); ctx.arc(x, y, r * 0.3, 0, Math.PI * 2); break;
+        case 'chip':
+          ctx.rect(x - r * 0.6, y - r * 0.6, r * 1.2, r * 1.2);
+          [-0.3, 0.3].forEach(function (o) {
+            ctx.moveTo(x + o * r, y - r * 0.6); ctx.lineTo(x + o * r, y - r);
+            ctx.moveTo(x + o * r, y + r * 0.6); ctx.lineTo(x + o * r, y + r);
+            ctx.moveTo(x - r * 0.6, y + o * r); ctx.lineTo(x - r, y + o * r);
+            ctx.moveTo(x + r * 0.6, y + o * r); ctx.lineTo(x + r, y + o * r);
+          }); break;
+        case 'cross':
+          ctx.moveTo(x - r * 0.3, y - r); ctx.lineTo(x + r * 0.3, y - r); ctx.lineTo(x + r * 0.3, y - r * 0.3);
+          ctx.lineTo(x + r, y - r * 0.3); ctx.lineTo(x + r, y + r * 0.3); ctx.lineTo(x + r * 0.3, y + r * 0.3);
+          ctx.lineTo(x + r * 0.3, y + r); ctx.lineTo(x - r * 0.3, y + r); ctx.lineTo(x - r * 0.3, y + r * 0.3);
+          ctx.lineTo(x - r, y + r * 0.3); ctx.lineTo(x - r, y - r * 0.3); ctx.lineTo(x - r * 0.3, y - r * 0.3); ctx.closePath(); break;
+        case 'helix':
+          for (var hs = 0; hs <= 12; hs++) {
+            var hy = y - r + hs * r / 6, hx = Math.sin(hs / 12 * Math.PI * 2) * r * 0.6;
+            if (hs) ctx.lineTo(x + hx, hy); else ctx.moveTo(x + hx, hy);
+          }
+          for (var hs2 = 0; hs2 <= 12; hs2++) {
+            var hy2 = y - r + hs2 * r / 6, hx2 = -Math.sin(hs2 / 12 * Math.PI * 2) * r * 0.6;
+            if (hs2) ctx.lineTo(x + hx2, hy2); else ctx.moveTo(x + hx2, hy2);
+          } break;
+        case 'hazard':
+          ctx.moveTo(x, y - r); ctx.lineTo(x + r, y + r * 0.8); ctx.lineTo(x - r, y + r * 0.8); ctx.closePath();
+          ctx.moveTo(x, y - r * 0.3); ctx.lineTo(x, y + r * 0.25); break;
+        default:
+          ctx.rect(x - r * 0.8, y - r * 0.8, r * 1.6, r * 1.6); ctx.moveTo(x - r * 0.8, y - r * 0.8); ctx.lineTo(x + r * 0.8, y + r * 0.8);
+      }
+    }
+    path(); ctx.strokeStyle = INK_HALO; ctx.lineWidth = 3.4; ctx.globalAlpha = 1; ctx.stroke();
+    path(); ctx.strokeStyle = col; ctx.lineWidth = 1.4; ctx.stroke();
+    ctx.restore();
+  }
+
+  /* ---- THE ROLE PANEL'S CORNER (2026-11-21) ------------------------------
+   * Astra: "Maybe you can make different interfaces for each ship type?
+   * Like a fighter shows missiles and guns selected, a freighter shows the
+   * current prices of your cargo at your selected destination." A panel of
+   * a title and up to five lines, in whichever corner of THIS window is
+   * clear of THIS look's instruments - tried top-left, top-right, then the
+   * bottom two - so it never lands on the tape, the arc or a box, whatever
+   * the look put where. */
+  var ROLE_W = 248, ROLE_H = 18 + 6 * 14;
+  /* NO PANEL OVERLAPS ANOTHER, ON THE VIEW TOO (2026-11-22). Every box
+   * drawn over the view (main.js `panel`: the captain's card, the transit
+   * readout, a hail) claims its rectangle as it is drawn; the HUD reads
+   * the claims of the frame before, since the HUD is drawn first and the
+   * boxes come and go far slower than frames. The role panel keeps out
+   * of all of them (rolePanelAt), and moves to where it is clear. */
+  var OVERLAYS = [], OVERLAYS_SEEN = [];
+  function claimOverlay(x, y, w, h) { if (w > 0 && h > 0) OVERLAYS.push([x, x + w, y, y + h]); }
+  function overlayFrame() { OVERLAYS_SEEN = OVERLAYS; OVERLAYS = []; }
+  /* A box that has to go SOMEWHERE (the contacts and interdiction panel,
+   * 2026-11-22): the first of `cands` [{x, y}] whose w x h rectangle is
+   * off every instrument in `hud` and every box claimed last frame other
+   * than `self` (its own last rectangle, [x0, x1, y0, y1]) and on the
+   * view. Null when none is - the caller keeps its old place. */
+  function freeSpot(cands, pw, ph, hud, self, vw, vh) {
+    var boxes = (hud || []).map(function (r) { return [r.x0, r.x1, r.y0, r.y1]; });
+    OVERLAYS_SEEN.forEach(function (o) {
+      if (self && Math.abs(o[0] - self[0]) < 1 && Math.abs(o[2] - self[2]) < 1 && Math.abs(o[1] - self[1]) < 1) return;
+      boxes.push(o);
+    });
+    for (var i = 0; i < cands.length; i++) {
+      var c = cands[i];
+      if (c.x < 4 || c.y < 4 || (vw && c.x + pw > vw - 4) || (vh && c.y + ph > vh - 4)) continue;
+      var hit = false;
+      for (var j = 0; j < boxes.length && !hit; j++) {
+        var b = boxes[j];
+        if (c.x < b[1] && c.x + pw > b[0] && c.y < b[3] && c.y + ph > b[2]) hit = true;
+      }
+      if (!hit) return c;
+    }
+    return null;
+  }
+  function rolePanelAt(g, w, hv, foot) {
+    var cx = g.cx, cy = hv / 2;
+    var half = Math.min(170, w * 0.18);
+    var taken = [
+      [cx - half - 16, cx + half + 130, g.tapeY - 30, g.tapeY + 34],
+      [cx - g.off - 130, cx - g.off + 4, g.airY - 16, g.airY + 62],
+      [cx + g.off - 4, cx + g.off + 210, g.airY - 16, g.airY + 80],
+      [cx - 210, cx + 210, cy + 26, cy + 76],
+      [cx - 70, cx + 70, cy - 70, cy + 24]
+    ];
+    if (g.bank) taken.push(g.bankDown ? [cx - 82, cx + 82, g.bankY, g.bankY + 80] : [cx - 82, cx + 82, g.bankY - 80, g.bankY]);
+    var top = hv * 0.07, bot = (foot || hv) - 28;
+    var vs = HUD_ROOM ? vspanAt(HUD_ROOM, cx) : null;
+    if (vs) { top = Math.max(top, vs.top + 14); bot = Math.min(bot, vs.bot - 14); }
+    function halfAt(y0, y1) {
+      var r = w * 0.46;
+      if (HUD_ROOM) r = Math.min(r, spanAt(HUD_ROOM, y0, cx), spanAt(HUD_ROOM, y1, cx));
+      for (var i = 0; i < HUD_POSTS.length; i++) r = Math.min(r, Math.abs(HUD_POSTS[i] - cx) - 10);
+      return r;
+    }
+    var best = null, bestHit = Infinity;
+    /* The corners first; then just under a top tape, and just over a foot
+     * one, for a window too narrow to have the panel beside it. */
+    var spots = [[0, top], [1, top], [0, bot - ROLE_H], [1, bot - ROLE_H]];
+    if (HUD.tape === 'top') spots.push([0, g.tapeY + 38], [1, g.tapeY + 38]);
+    else spots.push([0, g.tapeY - 34 - ROLE_H], [1, g.tapeY - 34 - ROLE_H]);
+    /* Seated off to one side, the panel - less vital than the flying
+     * instruments - goes out to the far side of the glass first, away from
+     * the pilot, and the middle stays the instruments'. */
+    var farRight = g.glassMid !== undefined && g.glassMid > g.eyeX + 12;
+    var farLeft = g.glassMid !== undefined && g.glassMid < g.eyeX - 12;
+    if (farRight || farLeft) {
+      var want = farRight ? 1 : 0;
+      spots.sort(function (a, b) { return (b[0] === want) - (a[0] === want); });
+    }
+    /* ...and measured from the glass's own middle out, not the
+     * instruments', so "the far side" is the glass's far edge. */
+    if (farRight || farLeft) cx = g.glassMid;
+    /* A box over the view: never under it. A spot that touches one costs
+     * a hundred times what touching an instrument does, and each box adds
+     * the spots just clear of it - below it, then beside it - so there is
+     * somewhere to go. */
+    var boxes = OVERLAYS_SEEN.map(function (o) { return [o[0] - 8, o[1] + 8, o[2] - 8, o[3] + 8]; });
+    boxes.forEach(function (o) { spots.push([0, o[3] + 2], [1, o[3] + 2]); });
+    var extraX = [];
+    boxes.forEach(function (o) { extraX.push([o[0] - ROLE_W - 2, o[2]], [o[1] + 2, o[2]]); });
+    function cost(x, y) {
+      var hit = 0, i, t, ox, oy;
+      for (i = 0; i < taken.length; i++) {
+        t = taken[i];
+        ox = Math.min(x + ROLE_W, t[1]) - Math.max(x, t[0]);
+        oy = Math.min(y + ROLE_H, t[3]) - Math.max(y, t[2]);
+        if (ox > 0 && oy > 0) hit += ox * oy;
+      }
+      for (i = 0; i < boxes.length; i++) {
+        t = boxes[i];
+        ox = Math.min(x + ROLE_W, t[1]) - Math.max(x, t[0]);
+        oy = Math.min(y + ROLE_H, t[3]) - Math.max(y, t[2]);
+        if (ox > 0 && oy > 0) hit += 100 * ox * oy;
+      }
+      return hit;
+    }
+    spots.forEach(function (c) {
+      var y = c[1], R = halfAt(y, y + ROLE_H);
+      if (y < top - 1 || y + ROLE_H > bot + 1) return;
+      if (!(R < Infinity) || R < ROLE_W / 2 + 20) return;
+      var x = c[0] ? cx + R - 14 - ROLE_W : cx - R + 14;
+      var hit = cost(x, y);
+      if (hit < bestHit) { best = { x: x, y: y }; bestHit = hit; }
+    });
+    /* Beside a box, at its own height, if the glass is wide enough there. */
+    extraX.forEach(function (c) {
+      var x = c[0], y = Math.max(top, c[1]);
+      if (y + ROLE_H > bot + 1) return;
+      var R = halfAt(y, y + ROLE_H);
+      if (x < cx - R + 10 || x + ROLE_W > cx + R - 10) return;
+      var hit = cost(x, y);
+      if (hit < bestHit) { best = { x: x, y: y }; bestHit = hit; }
+    });
+    return best;
+  }
+  /* The panel itself, in the look's ink and box style. `p` is
+   * { title, lines: [{ t, warn }] } from main.js roleReadout. */
+  function drawRolePanel(ctx, w, hv, p, g) {
+    if (!p || !g || !g.role) return;
+    var x = g.role.x, y = g.role.y, ink = hudTint();
+    var warn = HUD.tint === 'amber' || HUD.tint === 'coral' ? '#ff7a6a' : '#ffcf6b';
+    var n = Math.min(5, (p.lines || []).length), h = 18 + (n + 1) * 14;
+    inkBegin(ctx);
+    if (HUD.box !== 'bare') {
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = 'rgba(0,14,10,0.45)';
+      ctx.fillRect(x, y, ROLE_W, h);
+    }
+    ctx.strokeStyle = ink; ctx.lineWidth = 1.2; ctx.globalAlpha = 0.85;
+    if (HUD.box === 'box') ctx.strokeRect(x + 0.5, y + 0.5, ROLE_W - 1, h - 1);
+    else if (HUD.box === 'bracket') {
+      var c = 9;
+      ctx.beginPath();
+      ctx.moveTo(x, y + c); ctx.lineTo(x, y); ctx.lineTo(x + c, y);
+      ctx.moveTo(x + ROLE_W - c, y); ctx.lineTo(x + ROLE_W, y); ctx.lineTo(x + ROLE_W, y + c);
+      ctx.moveTo(x + ROLE_W, y + h - c); ctx.lineTo(x + ROLE_W, y + h); ctx.lineTo(x + ROLE_W - c, y + h);
+      ctx.moveTo(x + c, y + h); ctx.lineTo(x, y + h); ctx.lineTo(x, y + h - c);
+      ctx.stroke();
+    } else inkSeg(ctx, x, y + 2, x, y + h - 2, ink, 1.4, 0.8);
+    ctx.textAlign = 'left';
+    inkText(ctx, p.title, x + 8, y + 15, 'bold 11px ui-monospace, monospace', ink, 1);
+    for (var i = 0; i < n; i++) {
+      var L = p.lines[i], ly = y + 31 + i * 14, tx = x + 8;
+      /* A trade line: the commodity's mark, then its name and tonnes, and
+       * the money right-aligned in the deal's own colour (dealColour). */
+      if (L.icon) { drawComIcon(ctx, L.icon, x + 13, ly - 4, 4.6, L.col || ink); tx = x + 24; }
+      inkText(ctx, L.t, tx, ly, '11px ui-monospace, monospace', L.warn ? warn : (L.col && !L.r ? L.col : ink), L.dim ? 0.7 : 0.95);
+      if (L.r) {
+        ctx.textAlign = 'right';
+        inkText(ctx, L.r, x + ROLE_W - 8, ly, 'bold 11px ui-monospace, monospace', L.col || ink, 1);
+        ctx.textAlign = 'left';
+      }
+    }
+    ctx.restore();
+  }
+
+  /* The opening's top and bottom at screen column x, or null. */
+  function vspanAt(pts, x) {
+    var top = Infinity, bot = -Infinity;
+    for (var i = 0; i < pts.length; i++) {
+      var a = pts[i], b = pts[(i + 1) % pts.length];
+      if ((a.x <= x) === (b.x <= x)) continue;
+      var y = a.y + (x - a.x) / (b.x - a.x) * (b.y - a.y);
+      top = Math.min(top, y); bot = Math.max(bot, y);
+    }
+    return bot > top ? { top: top, bot: bot } : null;
+  }
+  /* The windscreen as drawn this frame (screen points), for hudGeom. Set
+   * by main.js after the shell; null when there is no frame to fit. */
+  var HUD_ROOM = null, HUD_POSTS = [], HUD_SEATX = null;
+  /* `seatX`: the screen x of the point straight ahead of the seat. */
+  function setHudRoom(pts, seatX) {
+    HUD_ROOM = pts && pts.length > 2 ? pts : null;
+    HUD_SEATX = HUD_ROOM && isFinite(seatX) ? seatX : null;
+    if (!HUD_ROOM) HUD_POSTS = [];
+  }
+  /* Half the opening's width at screen row y, measured from cx to the
+   * nearer edge; Infinity if the row misses it. */
+  function spanAt(pts, y, cx) {
+    var lo = -Infinity, hi = Infinity, hit = false;
+    for (var i = 0; i < pts.length; i++) {
+      var a = pts[i], b = pts[(i + 1) % pts.length];
+      if ((a.y <= y) === (b.y <= y)) continue;
+      var x = a.x + (y - a.y) / (b.y - a.y) * (b.x - a.x);
+      hit = true;
+      if (x <= cx) lo = Math.max(lo, x); else hi = Math.min(hi, x);
+    }
+    if (!hit) return Infinity;
+    return Math.min(cx - lo, hi - cx);
+  }
+
+  /* The windscreen's own furniture, built off this hull's glass (2026-11-21).
+   *
+   * Astra, after the first gallery: "I'm going to ask that you don't use
+   * flat rectangles in the player's visual field. Maybe what's missing is
+   * textures on the interior of the cockpit edges?" So nothing here is a
+   * flat cut-out laid on the glass any more:
+   *
+   *   EVERY PANE'S EDGE is a reveal - the frame's inner face, running from
+   *   the glass back toward the pilot, so it foreshortens as the head turns
+   *   like a real window reveal does. Lit from above (a sill's face catches
+   *   the light, a header's underside is in shadow), with a seal line where
+   *   it meets the glass and bolts along it. A look sets the reveal's depth
+   *   (`gusset`, kept as the old name: it was the corner-piece size), the
+   *   bolt spacing (`gstyle`: 'brace' close, 'tri' wide) and a lamp line in
+   *   the hull's accent down the seal (`brow`).
+   *   STRUTS only where a ship would have them: the large and the very
+   *   large hulls carry two real window posts (`post` 'post' or 'twin'),
+   *   prisms with a lit face and a shadowed one, standing from the header
+   *   to the sill at the upper corners, so a big ship's windscreen reads as
+   *   three panes. Smaller hulls get none: a strut that ends in mid-air is
+   *   what started this. The combiner glass is gone for the same reason.
+   * Everything is in hull units off canopySegments, at the hull's own glass
+   * distance. Returns the struts' screen x, for hudGeom to keep clear of. */
+  function hullClass(ship) {
+    var C = global.Combat, h = C && C.HULLS && C.HULLS[ship.hullId];
+    return (h && h.size) || 'M';
+  }
+  function paneNormal(p) {
+    /* Newell's method, then turned to face the eye at the origin. */
+    var nx = 0, ny = 0, nz = 0, cx = 0, cy = 0, cz = 0;
+    for (var i = 0; i < p.length; i++) {
+      var a = p[i], b = p[(i + 1) % p.length];
+      nx += (a[1] - b[1]) * (a[2] + b[2]);
+      ny += (a[2] - b[2]) * (a[0] + b[0]);
+      nz += (a[0] - b[0]) * (a[1] + b[1]);
+      cx += a[0]; cy += a[1]; cz += a[2];
+    }
+    var l = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    nx /= l; ny /= l; nz /= l;
+    cx /= p.length; cy /= p.length; cz /= p.length;
+    if (nx * cx + ny * cy + nz * cz > 0) { nx = -nx; ny = -ny; nz = -nz; }
+    return { n: [nx, ny, nz], c: [cx, cy, cz] };
+  }
+  function shadeHex(rgb, f) {
+    f = Math.max(0, Math.min(1.6, f));
+    return 'rgb(' + Math.round(rgb[0] * f) + ',' + Math.round(rgb[1] * f) + ',' + Math.round(rgb[2] * f) + ')';
+  }
+  /* Brushed grey-blue metal: light enough that lit and shadowed faces read
+   * apart against black space, dark enough not to glow. */
+  var REVEAL_RGB = [74, 86, 102];
+  function drawPaneReveal(ctx, cam, ship, pane, k, fr, acc) {
+    var pn = paneNormal(pane), n = pn.n, c = pn.c;
+    var w = (0.030 + (fr.gusset || 0) * 0.05) * k;      // across the glass
+    var d = (0.050 + (fr.gusset || 0) * 0.10) * k;      // back toward the eye
+    var outer = [], inner = [];
+    for (var i = 0; i < pane.length; i++) {
+      var v = pane[i];
+      var tx = c[0] - v[0], ty = c[1] - v[1], tz = c[2] - v[2];
+      var tl = Math.sqrt(tx * tx + ty * ty + tz * tz) || 1;
+      outer.push([v[0] + n[0] * 0.004 * k, v[1] + n[1] * 0.004 * k, v[2] + n[2] * 0.004 * k]);
+      inner.push([v[0] + tx / tl * w + n[0] * d, v[1] + ty / tl * w + n[1] * d, v[2] + tz / tl * w + n[2] * d]);
+    }
+    var bolts = fr.gstyle === 'brace' ? 0.11 * k : 0.22 * k;
+    for (var e = 0; e < pane.length; e++) {
+      var j = (e + 1) % pane.length;
+      /* Which way this face looks: its inward direction across the pane.
+       * Up-facing faces (the sill) are lit, down-facing (the header) dark. */
+      var mx = (inner[e][1] + inner[j][1]) / 2 - (outer[e][1] + outer[j][1]) / 2;
+      var mxx = (inner[e][0] + inner[j][0]) / 2 - (outer[e][0] + outer[j][0]) / 2;
+      var ml = Math.sqrt(mx * mx + mxx * mxx) || 1;
+      var up = mx / ml, side = mxx / ml;
+      var f = 0.80 + 0.50 * up + 0.12 * side;
+      var sp = clipProject(cam, localPoly(ship, [outer[e], outer[j], inner[j], inner[e]]));
+      if (sp) fillPoly(ctx, sp, shadeHex(REVEAL_RGB, f), 'rgba(150,175,205,' + (0.10 + 0.10 * Math.max(0, up)) + ')');
+      /* The seal where the frame meets the glass. */
+      var sl0 = projLocal(cam, ship, outer[e]), sl1 = projLocal(cam, ship, outer[j]), sl = [sl0, sl1];
+      if (sl0 && sl1 && sl0.depth > 0 && sl1.depth > 0) {
+        ctx.save();
+        ctx.strokeStyle = fr.brow ? acc : 'rgba(10,12,16,0.85)';
+        ctx.globalAlpha = fr.brow ? 0.55 : 1;
+        ctx.lineWidth = fr.brow ? 1.6 : 2;
+        ctx.beginPath(); ctx.moveTo(sl[0].x, sl[0].y); ctx.lineTo(sl[1].x, sl[1].y); ctx.stroke();
+        ctx.restore();
+      }
+      /* Bolts down the middle of the face, each a dark head with a lit rim. */
+      var ax = (outer[e][0] + inner[e][0]) / 2, ay = (outer[e][1] + inner[e][1]) / 2, az = (outer[e][2] + inner[e][2]) / 2;
+      var bx = (outer[j][0] + inner[j][0]) / 2, by = (outer[j][1] + inner[j][1]) / 2, bz = (outer[j][2] + inner[j][2]) / 2;
+      var len = Math.sqrt((bx - ax) * (bx - ax) + (by - ay) * (by - ay) + (bz - az) * (bz - az));
+      var nb = Math.floor(len / bolts);
+      for (var b = 1; b < nb; b++) {
+        var t = b / nb;
+        var bq = projLocal(cam, ship, [ax + (bx - ax) * t, ay + (by - ay) * t, az + (bz - az) * t]);
+        if (!bq || !(bq.depth > 0)) continue;
+        var bp = [bq];
+        /* Sized by distance: a bolt a centimetre across at the glass. */
+        var r = Math.max(1.3, Math.min(3.2, 0.012 * k * bq.scale * M));
+        ctx.save();
+        ctx.fillStyle = shadeHex(REVEAL_RGB, f * 0.55);
+        ctx.beginPath(); ctx.arc(bp[0].x, bp[0].y, r, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = shadeHex(REVEAL_RGB, f * 1.45);
+        ctx.beginPath(); ctx.arc(bp[0].x - r * 0.35, bp[0].y - r * 0.35, r * 0.45, 0, Math.PI * 2); ctx.fill();
+        ctx.restore();
+      }
+    }
+  }
+  function drawStrut(ctx, cam, ship, top, foot, k, n) {
+    /* A post with thickness: its glass-side line, a face toward the pilot,
+     * and two cheeks running back from the glass, one lit and one not. */
+    var hw = 0.040 * k, d = 0.07 * k;
+    function at(p, dx, dd) { return [p[0] + dx + n[0] * dd, p[1] + n[1] * dd, p[2] + n[2] * dd]; }
+    var cheekL = [at(top, -hw, 0), at(foot, -hw, 0), at(foot, -hw * 0.6, d), at(top, -hw * 0.6, d)];
+    var cheekR = [at(top, hw, 0), at(top, hw * 0.6, d), at(foot, hw * 0.6, d), at(foot, hw, 0)];
+    var face = [at(top, -hw * 0.6, d), at(foot, -hw * 0.6, d), at(foot, hw * 0.6, d), at(top, hw * 0.6, d)];
+    [[cheekL, 0.75], [cheekR, 1.15], [face, 0.95]].forEach(function (q) {
+      var sp = clipProject(cam, localPoly(ship, q[0]));
+      if (sp) fillPoly(ctx, sp, shadeHex(REVEAL_RGB, q[1]), 'rgba(150,175,205,0.14)');
+    });
+    var c0 = projLocal(cam, ship, at(top, 0, d)), c1 = projLocal(cam, ship, at(foot, 0, d));
+    return c0 && c1 && c0.depth > 0 && c1.depth > 0 ? (c0.x + c1.x) / 2 : null;
+  }
+  function drawCanopyFurnitureFor(ctx, cam, ship) {
+    HUD_POSTS = drawCanopyFurniture(ctx, cam, ship, cockpitLook(ship));
+    return HUD_POSTS;
+  }
+  function drawCanopyFurniture(ctx, cam, ship, look) {
+    var fr = look.frame, spec = cockpitSpec(ship), k = spec.size || 1;
+    var segs = canopySegments(spec), m = segs[0];
+    var acc = (GREEBLE_HULLS[ship.hullId] || {}).accent || hudTint();
+    for (var s = 0; s < segs.length; s++) drawPaneReveal(ctx, cam, ship, segs[s], k, fr, acc);
+    var xs = [];
+    var big = hullClass(ship) === 'L' || hullClass(ship) === 'XL';
+    if (big && (fr.post === 'post' || fr.post === 'twin')) {
+      var n = paneNormal(m).n;
+      /* From each top corner straight down to the sill under it. */
+      var sill = Infinity;
+      for (var i = 0; i < m.length; i++) sill = Math.min(sill, m[i][1]);
+      [m[0], m[1]].forEach(function (p) {
+        var x = drawStrut(ctx, cam, ship, [p[0], p[1], p[2]], [p[0], sill, p[2]], k, n);
+        if (x !== null) xs.push(x);
+      });
+    }
+    return xs;
+  }
+
   /* Air-data boxes: speed on the left, altitude on the right, at horizon
    * height either side of the ladder, as on every fighter HUD since the
    * seventies. Boxes, not tapes (the F-35 call): our speeds run from
@@ -13232,9 +14150,9 @@
    * the ladder. Returns { left, right } x extents for anything placed
    * beside them. */
   function drawAirData(ctx, w, h, d) {
-    var GREEN = '#6ef0c0';
-    var cx = w / 2, cy = d.cy || h / 2;
-    var off = Math.max(190, Math.min(w * 0.27, 420));
+    var GREEN = hudTint();
+    var cx = d.cx || w / 2, cy = d.cy || h / 2;
+    var off = d.off || Math.max(190, Math.min(w * 0.27, 420));
     var BH = 26, FONT = 'bold 18px ui-monospace, monospace';
     var SMALL = '12px ui-monospace, monospace';
     inkBegin(ctx);
@@ -13245,10 +14163,27 @@
       var bw = Math.max(70, tw + 18);
       var x0 = side < 0 ? xAnchor - bw : xAnchor;
       ctx.globalAlpha = 1;
-      ctx.fillStyle = 'rgba(0,14,10,0.55)';
-      ctx.fillRect(x0, cy - BH / 2, bw, BH);
+      var yt = cy - BH / 2;
+      if (HUD.box !== 'bare') {
+        ctx.fillStyle = 'rgba(0,14,10,0.55)';
+        ctx.fillRect(x0, yt, bw, BH);
+      }
       ctx.strokeStyle = GREEN; ctx.lineWidth = 1.5;
-      ctx.strokeRect(x0 + 0.5, cy - BH / 2 + 0.5, bw - 1, BH - 1);
+      if (HUD.box === 'box') ctx.strokeRect(x0 + 0.5, yt + 0.5, bw - 1, BH - 1);
+      else if (HUD.box === 'bracket') {
+        /* Corner brackets: the box's four corners and nothing between. */
+        var c = 7, xa = x0 + 0.5, xb = x0 + bw - 0.5, ya = yt + 0.5, yb = yt + BH - 0.5;
+        ctx.beginPath();
+        ctx.moveTo(xa, ya + c); ctx.lineTo(xa, ya); ctx.lineTo(xa + c, ya);
+        ctx.moveTo(xb - c, ya); ctx.lineTo(xb, ya); ctx.lineTo(xb, ya + c);
+        ctx.moveTo(xb, yb - c); ctx.lineTo(xb, yb); ctx.lineTo(xb - c, yb);
+        ctx.moveTo(xa + c, yb); ctx.lineTo(xa, yb); ctx.lineTo(xa, yb - c);
+        ctx.stroke();
+      } else {
+        /* Bare: one upright rule beside the number, on the ladder's side. */
+        var rx = side < 0 ? x0 + bw : x0;
+        inkSeg(ctx, rx, yt, rx, yt + BH, GREEN, 1.5, 0.9);
+      }
       ctx.textAlign = 'center';
       inkText(ctx, v.value, x0 + bw / 2, cy + 6, FONT, GREEN, 1);
       ctx.textAlign = side < 0 ? 'right' : 'left';
@@ -13306,15 +14241,17 @@
   var HUD_CHAR_11 = 6.7;   // px per glyph at 11 px monospace
   function hudReadoutBoxes(w, hv, ref, foot) {
     foot = foot || hv;
-    var cx = w / 2, cy = hv / 2;
-    var off = Math.max(190, Math.min(w * 0.27, 420));
-    var half = Math.min(170, w * 0.18), T = Math.max(40, hv * 0.30 - 74 - 44);
+    /* The instruments stand where this hull's look puts them (hudGeom),
+     * centred on the glass rather than the eye when the seat is off it. */
+    var g = hudGeom(w, hv, foot), off = g.off, ay = g.airY;
+    var cx = g.cx, cy = hv / 2;
+    var half = Math.min(170, w * 0.18), T = g.tapeY;
     var refW = ref ? (4 + ref.length) * HUD_CHAR_11 : 0;
     var lineHalf = (31 + (ref ? ref.length : 8)) * HUD_CHAR_11 / 2 + 8;
-    return [
+    var out = [
       { id: 'tape', x0: cx - half - 14, x1: cx + half + 26 + refW, y0: T - 30, y1: T + 34 },
-      { id: 'speed', x0: cx - off - 130, x1: cx - off + 4, y0: cy - 16, y1: cy + 62 },
-      { id: 'alt', x0: cx + off - 4, x1: cx + off + 210, y0: cy - 16, y1: cy + 80 },
+      { id: 'speed', x0: cx - off - 130, x1: cx - off + 4, y0: ay - 16, y1: ay + 62 },
+      { id: 'alt', x0: cx + off - 4, x1: cx + off + 210, y0: ay - 16, y1: ay + 80 },
       { id: 'attitude', x0: cx - lineHalf, x1: cx + lineHalf, y0: cy + 28, y1: cy + 46 },
       { id: 'facing', x0: cx - 175, x1: cx + 175, y0: cy + 49, y1: cy + 74 },
       /* The key-hint line and everything under it (main.js: the line is
@@ -13323,6 +14260,12 @@
        * pushed down off the speed box landed in it, half under the deck. */
       { id: 'foot', x0: 0, x1: w, y0: foot - 21, y1: Math.max(foot, hv) + 40 }
     ];
+    if (g.role) out.push({ id: 'role', x0: g.role.x - 4, x1: g.role.x + ROLE_W + 4, y0: g.role.y - 4, y1: g.role.y + ROLE_H + 4 });
+    /* The bank arc, where this look has one (the same box rolePanelAt keeps
+     * off): the contacts panel, moved off the tape, sat on it. */
+    if (g.bank) out.push(g.bankDown ? { id: 'bank', x0: cx - 82, x1: cx + 82, y0: g.bankY, y1: g.bankY + 80 }
+                                    : { id: 'bank', x0: cx - 82, x1: cx + 82, y0: g.bankY - 80, y1: g.bankY });
+    return out;
   }
 
   /* A label's baseline, moved up or down — whichever is nearer and still
@@ -13442,10 +14385,10 @@
   var INTERCARD = { 45: 'NE', 135: 'SE', 225: 'SW', 315: 'NW' };
   function drawHeadingTape(ctx, w, h, hd, opts) {
     opts = opts || {};
-    var cx = w / 2, T = opts.cy || 60;
+    var cx = opts.cx || w / 2, T = opts.cy || 60;
     var half = Math.min(170, w * 0.18);
     var ppd = half / TAPE_SPAN;
-    var GREEN = '#6ef0c0', HALO = 'rgba(0,14,10,0.62)';
+    var GREEN = hudTint(), HALO = 'rgba(0,14,10,0.62)';
     ctx.save();
     ctx.globalCompositeOperation = 'source-over';
     ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
@@ -14389,6 +15332,106 @@
    * vertical rotated back about that same axis by `lean`, so the top of the
    * screen tips away from the pilot the way a real console does. */
   function mfdCorners(m, grow, spec) {
+    var c = mfdCornersAt(m, grow, spec);
+    var lift = spec ? mfdLayout(spec).lift[m.id] : 0;
+    if (lift) for (var i = 0; i < 4; i++) c[i][1] += lift;
+    return c;
+  }
+
+  /* NO PANEL OVERLAPS ANOTHER (2026-11-22). Astra: "can you make a rule so
+   * no panel overlaps another, even if it means moving it up (if it's
+   * moved off the 'dashboard' then it's on a support, on a wall, etc." The
+   * cockpit suite already held the three dash screens apart in the cabin
+   * every ship had, but a fit's cabin (cabinOf: spread wide, stood up high,
+   * seated to one side) moves them, and fit C's instrument stack put its
+   * housings edge to edge on every hull.
+   *
+   * So the screens are laid out, per cabin, in the order they matter: the
+   * centre screen where it is, then left, right, the overhead and the two
+   * on the bulkhead. Each is held to a clear gap (MFD_CLEAR) from every
+   * one already placed - housings, bezel and all, as the seated eye sees
+   * them - and a screen that would come closer is LIFTED, a centimetre at
+   * a time, until it clears. A dash screen lifted off the dash stands on a
+   * support down to where it was mounted (`support`, drawn with it); one
+   * on a wall or hanging overhead just moves up its wall. Cached on the
+   * spec, which is per hull and fit. */
+  var MFD_CLEAR = 0.8 * Math.PI / 180, MFD_LIFT_MAX = 0.40, MFD_GROW = 0.022;
+  var MFD_ORDER = ['centre', 'left', 'right', 'overhead', 'rear-left', 'rear-right'];
+  function mfdEye(spec) {
+    var k = spec && spec.size || 1, st = spec && spec.cabin && spec.seat || { x: 0, y: 0, z: 0 };
+    return [st.x * k, st.y * k, BAR_EYE[2] + st.z * k];
+  }
+  /* How far apart two housings are, as an angle from the eye: >0 apart,
+   * <0 overlapping. Projected onto the plane square to the line between
+   * them (gnomonic, so straight edges stay straight) and separated by axis
+   * as cockpit.test.js does on the screen. */
+  function mfdGap(a, b, eye) {
+    function dir(p) { return [p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]]; }
+    function mid(q) { var s = [0, 0, 0]; q.forEach(function (p) { var d = dir(p); s[0] += d[0]; s[1] += d[1]; s[2] += d[2]; }); return s; }
+    var ma = mid(a), mb = mid(b), la = Math.hypot(ma[0], ma[1], ma[2]), lb = Math.hypot(mb[0], mb[1], mb[2]);
+    var f = [ma[0] / la + mb[0] / lb, ma[1] / la + mb[1] / lb, ma[2] / la + mb[2] / lb];
+    var lf = Math.hypot(f[0], f[1], f[2]);
+    if (lf < 1e-6) return Math.PI;                              // opposite sides of the room
+    f = [f[0] / lf, f[1] / lf, f[2] / lf];
+    var up = Math.abs(f[1]) > 0.95 ? [0, 0, 1] : [0, 1, 0];
+    var r = [up[1] * f[2] - up[2] * f[1], up[2] * f[0] - up[0] * f[2], up[0] * f[1] - up[1] * f[0]];
+    var lr = Math.hypot(r[0], r[1], r[2]); r = [r[0] / lr, r[1] / lr, r[2] / lr];
+    var u = [f[1] * r[2] - f[2] * r[1], f[2] * r[0] - f[0] * r[2], f[0] * r[1] - f[1] * r[0]];
+    function proj(q) {
+      var out = [];
+      for (var i = 0; i < q.length; i++) {
+        var d = dir(q[i]), z = d[0] * f[0] + d[1] * f[1] + d[2] * f[2];
+        if (z < 0.05) return null;                              // behind the eye
+        out.push([(d[0] * r[0] + d[1] * r[1] + d[2] * r[2]) / z, (d[0] * u[0] + d[1] * u[1] + d[2] * u[2]) / z]);
+      }
+      return out;
+    }
+    var pa = proj(a), pb = proj(b);
+    if (!pa || !pb) return Math.PI;
+    var best = -Infinity;
+    [pa, pb].forEach(function (p) {
+      for (var i = 0; i < p.length; i++) {
+        var q = p[(i + 1) % p.length], nx = -(q[1] - p[i][1]), ny = q[0] - p[i][0], l = Math.hypot(nx, ny);
+        if (l < 1e-12) continue; nx /= l; ny /= l;
+        var a0 = Infinity, a1 = -Infinity, b0 = Infinity, b1 = -Infinity;
+        pa.forEach(function (v) { var d = v[0] * nx + v[1] * ny; a0 = Math.min(a0, d); a1 = Math.max(a1, d); });
+        pb.forEach(function (v) { var d = v[0] * nx + v[1] * ny; b0 = Math.min(b0, d); b1 = Math.max(b1, d); });
+        best = Math.max(best, b0 - a1, a0 - b1);
+      }
+    });
+    return Math.atan(best);                                     // near the line of sight, tan ≈ angle
+  }
+  function mfdLayout(spec) {
+    if (spec._mfdLayout) return spec._mfdLayout;
+    var out = { lift: {}, support: {}, gaps: {} }, eye = mfdEye(spec), placed = [];
+    var byId = {};
+    MFD_MOUNTS.forEach(function (m) { byId[m.id] = m; });
+    MFD_ORDER.forEach(function (id) {
+      var m = byId[id];
+      if (!m) return;
+      var base = mfdCornersAt(m, MFD_GROW, spec), lift = 0, q;
+      function at(l) { return base.map(function (p) { return [p[0], p[1] + l, p[2]]; }); }
+      function worst(qq) {
+        var g = Infinity;
+        placed.forEach(function (o) { g = Math.min(g, mfdGap(qq, o, eye)); });
+        return g;
+      }
+      q = at(0);
+      while (worst(q) < MFD_CLEAR && lift < MFD_LIFT_MAX - 1e-9) { lift += 0.01; q = at(lift); }
+      out.lift[id] = lift;
+      out.gaps[id] = placed.length ? worst(q) : Infinity;
+      /* Off the dash: a forward screen stands on a support; the overhead
+       * and the bulkhead screens are on their walls already. */
+      if (lift > 0 && Math.abs(m.bearing) < 60 * Math.PI / 180) out.support[id] = lift;
+      placed.push(q);
+    });
+    spec._mfdLayout = out;
+    return out;
+  }
+
+  function mfdCornersAt(m, grow, spec) {
+    /* The fit's console (cabinMount): spread wide, or stood up high. */
+    m = cabinMount(m, spec);
     var s = Math.sin(m.bearing), c = Math.cos(m.bearing);
     var hw = m.hw + (grow || 0), hh = m.hh + (grow || 0) * 0.4;
     /* The console grows with the bridge, but the SCREENS grow more slowly
@@ -14419,6 +15462,9 @@
     }
     hw *= f; hh *= f;
     var cx = s * m.r * k * f, cz = c * m.r * k * f;
+    /* A pilot seated off the centre line has her own screens in front of
+     * her: the forward ones move over with the seat. */
+    if (spec && spec.cabin && spec.seat && spec.seat.x && Math.abs(m.bearing) < Math.PI / 2) cx += spec.seat.x * k;
     /* The rear screens stand off the bulkhead, which on a raised cockpit
      * (shipdeck.js RAISED) is at the foot of the stair behind the seat:
      * there with it, rather than hanging over the top step. */
@@ -15552,8 +16598,11 @@
    * you. `bornId` is stamped once when the hull is bought and never touched
    * again, so the room you learned is the room you keep. */
   function cockpitSeed(ship) {
+    /* And the fit: a refit rebuilds the cabin (cabinOf). Fit A keeps the
+     * key it always had, so every ship that has not chosen keeps its room. */
+    var li = lookIndexOf(ship);
     return 'cockpit|' + (ship.hullId || 'talon') + '|' +
-           (ship.bornId || ship.hullId || 'origin');
+           (ship.bornId || ship.hullId || 'origin') + (li ? '|fit' + li : '');
   }
 
   /* The stair of a raised cockpit (shipdeck.js RAISED) when it is right
@@ -15576,6 +16625,13 @@
     if (ship._cockpit && ship._cockpit.key === key) return ship._cockpit;
 
     var arch = COCKPIT_ARCH[ship.hullId] || COCKPIT_ARCH.talon;
+    /* THE FIT'S CABIN (cabinOf): its canopy shape laid over the hull's
+     * own. Fit A multiplies by one and adds nothing. */
+    var cabin = cabinOf(ship.hullId, lookIndexOf(ship));
+    if (cabin.wrap !== 1 || cabin.brow !== 1 || cabin.rake) {
+      arch = { wrap: arch.wrap * cabin.wrap, room: arch.room, brow: arch.brow * cabin.brow,
+               rake: arch.rake + cabin.rake };
+    }
     /* Size, from the one number every hull has. The Talon's 42 t is the
      * pivot, so it comes out at exactly 1.0 and the tuned cockpit is
      * untouched. The cube root because this is a volume becoming a length —
@@ -15609,7 +16665,7 @@
      * hull has no model loaded, which is every hull under the test harness. */
     var fine = hullFineness(ship.hullId);
     var rake = (fine === null) ? arch.rake
-      : Math.max(0.18, Math.min(0.72, 0.10 + (fine - 1.6) * 0.14));
+      : Math.max(0.18, Math.min(0.72, 0.10 + (fine - 1.6) * 0.14 + cabin.rake));
 
     /* How far the whole band tips. Small on purpose: this shifts what you
      * are looking at, so a big value would aim a freighter at the floor.
@@ -15640,6 +16696,11 @@
       topAngle: Math.atan(0.62 / (CANOPY_Z * arch.room) / arch.brow) - rakeBias,
       botAngle: -Math.atan(0.46 / (CANOPY_Z * arch.room)) - rakeBias,
       mfdScale: size,
+      /* The fit's cabin: the seat the eye is moved to (main.js, after the
+       * camera is built) and how the forward screens are mounted
+       * (cabinMount, in mfdCorners). Null for fit A, which is as it was. */
+      cabin: (cabin.mfd !== 'arc' || cabin.seat.x || cabin.seat.y || cabin.seat.z) ? cabin : null,
+      seat: cabin.seat,
       /* A cockpit up in her nose, a stair aft of it down to the deck
        * (shipdeck.js RAISED): its bulkhead and the rear screens on it are
        * at the stair's foot, not where the seat's old bulkhead was. */
@@ -15694,8 +16755,12 @@
     var z = spec.reach / CANOPY_Z;        // the aperture was authored at CANOPY_Z
     var out = [];
     var main = [];
+    /* The fit's canopy (cabinOf): wider glass widens the pane, a heavier
+     * brow pulls its top edge down. Fit A has no cabin and is untouched. */
+    var cab = spec.cabin, cw = cab ? Math.sqrt(cab.wrap) : 1, cb = cab ? 1 / cab.brow : 1;
     for (var i = 0; i < APERTURE.length; i++) {
-      main.push([APERTURE[i][0] * k, APERTURE[i][1] * k - spec.rakeBias * 2,
+      var ay = APERTURE[i][1] > 0 ? APERTURE[i][1] * cb : APERTURE[i][1];
+      main.push([APERTURE[i][0] * cw * k, ay * k - spec.rakeBias * 2,
                  CANOPY_Z * z * k]);
     }
     out.push(main);
@@ -16035,6 +17100,49 @@
     return out;
   }
 
+  /* The dash surface's height at depth z (the fitted dash, far edge to
+   * near, as dashLerp runs it), held to its two edges. */
+  function dashYAt(g, z) {
+    var d = g.dash, zf = (d.fl[2] + d.fr[2]) / 2, zn = (d.nl[2] + d.nr[2]) / 2;
+    var yf = (d.fl[1] + d.fr[1]) / 2, yn = (d.nl[1] + d.nr[1]) / 2;
+    var t = Math.max(0, Math.min(1, (zf - z) / ((zf - zn) || 1)));
+    return yf + (yn - yf) * t;
+  }
+  /* A screen's support: a square column from the middle of the housing's
+   * bottom edge straight down to the dash at `footY`, its two faces the
+   * eye can see shaded apart, and a foot plate - with thickness, an edge
+   * as well as a top - and two bolts where it meets the dash. `h` is the
+   * housing, corners as mfdCorners gives them. */
+  function drawMfdSupport(ctx, cam, ship, h, footY) {
+    var bl = h[3], br = h[2];
+    var mx = (bl[0] + br[0]) / 2, my = Math.min(bl[1], br[1]), mz = (bl[2] + br[2]) / 2;
+    if (!(my - footY > 0.008)) return;                    // sitting on the dash already
+    var ax = br[0] - bl[0], az = br[2] - bl[2], al = Math.hypot(ax, az) || 1;
+    ax /= al; az /= al;                                   // along the screen's width
+    var nx = -az, nz = ax;                                // across it, toward the pilot or away
+    if (nx * -mx + nz * -mz > 0) { nx = -nx; nz = -nz; }  // the back face is the one away from the eye
+    var cw = 0.035, cd = 0.025, y1 = my, y0 = footY + 0.012;
+    function P(u, v, y) { return projLocal(cam, ship, [mx + ax * u + nx * v, y, mz + az * u + nz * v]); }
+    function quad(pts) { return pts.every(function (p) { return !!p; }) ? pts : null; }
+    var front = quad([P(-cw, -cd, y1), P(cw, -cd, y1), P(cw, -cd, y0), P(-cw, -cd, y0)]);
+    var sideU = mx < 0 ? cw : -cw;                        // the side turned toward the centre line
+    var side = quad([P(sideU, -cd, y1), P(sideU, cd, y1), P(sideU, cd, y0), P(sideU, -cd, y0)]);
+    /* The foot: a plate 12 mm thick - its edge toward the eye, then its top. */
+    var fb = footY, ft = footY + 0.012;
+    var edge = quad([P(-0.08, -0.06, ft), P(0.08, -0.06, ft), P(0.08, -0.06, fb), P(-0.08, -0.06, fb)]);
+    if (edge) fillPoly(ctx, edge, '#0a0f15', 'rgba(140,175,215,0.22)');
+    var foot = quad([P(-0.08, -0.06, ft), P(0.08, -0.06, ft), P(0.08, 0.06, ft), P(-0.08, 0.06, ft)]);
+    if (foot) fillPoly(ctx, foot, '#151d28', 'rgba(140,175,215,0.30)');
+    if (side) fillPoly(ctx, side, '#0b1118', 'rgba(140,175,215,0.18)');
+    if (front) fillPoly(ctx, front, '#141c27', 'rgba(140,175,215,0.28)');
+    [-0.055, 0.055].forEach(function (u) {
+      var b = P(u, -0.03, ft + 0.001);
+      if (!b) return;
+      ctx.fillStyle = 'rgba(150,180,215,0.35)';
+      ctx.beginPath(); ctx.arc(b.x, b.y, 1.4, 0, K.TAU); ctx.fill();
+    });
+  }
+
   function tracePath(ctx, pts) {
     ctx.moveTo(pts[0].x, pts[0].y);
     for (var i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
@@ -16162,22 +17270,17 @@
       }
     }
 
-    /* Corner gussets and a short centre mullion at the top of the canopy.
-     * Deliberately kept out of the boresight: a strut across the middle of
-     * the window would be authentic and infuriating. */
-    var gl = projQuad(cam, ship,
-      [-0.92, 0.62, CANOPY_Z], [-0.52, 0.62, CANOPY_Z],
-      [-0.92, 0.34, CANOPY_Z], [-1.22, 0.30, CANOPY_Z]);
-    var gr = projQuad(cam, ship,
-      [0.92, 0.62, CANOPY_Z], [0.52, 0.62, CANOPY_Z],
-      [0.92, 0.34, CANOPY_Z], [1.22, 0.30, CANOPY_Z]);
-    if (gl) fillPoly(ctx, [gl[1], gl[0], gl[3], gl[2]], '#1a222e', 'rgba(140,170,205,0.18)');
-    if (gr) fillPoly(ctx, [gr[1], gr[0], gr[3], gr[2]], '#1a222e', 'rgba(140,170,205,0.18)');
-
-    var mull = projQuad(cam, ship,
-      [-0.045, 0.62, CANOPY_Z], [0.045, 0.62, CANOPY_Z],
-      [0.030, 0.44, CANOPY_Z], [-0.030, 0.44, CANOPY_Z]);
-    if (mull) fillPoly(ctx, mull, '#1a222e', 'rgba(140,170,205,0.16)');
+    /* The windscreen's furniture: each pane's lit, bolted reveal, and on
+     * the big hulls two real window posts (drawCanopyFurniture), built off
+     * this hull's own glass. These used to be flat shapes at fixed numbers
+     * at a fixed 1.2 m, and on hulls whose glass sits further out they hung
+     * in the air in front of it. Still nothing across the boresight: a
+     * strut down the middle would be authentic and infuriating. The posts'
+     * screen x is kept so the HUD stays between them (hudGeom). */
+    /* In front of the glass, so drawn after its wash: the flight view asks
+     * to do that itself (furnitureLater) and calls drawCanopyFurnitureFor
+     * once the glass is down; anywhere else it goes on here. */
+    if (!(opts && opts.furnitureLater)) HUD_POSTS = drawCanopyFurniture(ctx, cam, ship, cockpitLook(ship));
 
     var front = null;
     for (a = 0; a < apertures.length; a++) if (apertures[a].id === 'front') front = apertures[a].pts;
@@ -16277,6 +17380,14 @@
       /* A housing a little proud of the screen on every side, so each panel
        * is a box standing on the console rather than a rectangle painted on
        * it, and a stalk down to the dash so it is holding itself up. */
+      /* Every screen on the dash stands on a support (2026-11-22): a
+       * column from under its housing down to the dash surface below it,
+       * with a foot plate there - so one lifted clear of a neighbour
+       * (mfdLayout) is visibly held up, and none of them floats. */
+      if (spec && Math.abs(mt.bearing) < 60 * Math.PI / 180) {
+        var hs = mfdCorners(mt, 0.022, spec);
+        drawMfdSupport(ctx, cam, ship, hs, dashYAt(cockpitGeometry(spec), (hs[2][2] + hs[3][2]) / 2));
+      }
       var bez = projQuad.apply(null,
         [cam, ship].concat(mfdCorners(mt, 0.022, spec)));
       if (bez) fillPoly(ctx, bez, '#0a0f16', 'rgba(140,175,215,0.30)');
@@ -17373,14 +18484,17 @@
 
       // Transmission tint. Source-over on purpose: real glass takes a
       // little light away, and the sky behind should sit slightly back.
-      ctx.fillStyle = 'rgba(96,150,150,0.055)';
+      /* LIGHTER (2026-11-20, Astra: "glass tint is too dark"): the tint
+       * from 0.055 to 0.025 and the edge darkening from 0.42 to 0.16, so a
+       * ship or a station seen through the pane keeps its own colours. */
+      ctx.fillStyle = 'rgba(96,150,150,0.025)';
       ctx.fillRect(b.minX, b.minY, b.w, b.h);
 
       // Thickness: darker toward the frame, where the path length is longer.
-      var vig = ctx.createRadialGradient(b.cx, b.cy, Math.min(b.w, b.h) * 0.18,
-                                         b.cx, b.cy, Math.max(b.w, b.h) * 0.72);
+      var vig = ctx.createRadialGradient(b.cx, b.cy, Math.min(b.w, b.h) * 0.25,
+                                         b.cx, b.cy, Math.max(b.w, b.h) * 0.75);
       vig.addColorStop(0, 'rgba(6,14,18,0)');
-      vig.addColorStop(1, 'rgba(6,14,18,0.42)');
+      vig.addColorStop(1, 'rgba(6,14,18,0.16)');
       ctx.fillStyle = vig;
       ctx.fillRect(b.minX, b.minY, b.w, b.h);
 
@@ -17591,6 +18705,10 @@
     var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
                   rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
                   load: load.load,
+                  /* Where her cockpit fit seats you (cabinOf): off the
+                   * centre line, the helm moves there and a co-pilot's
+                   * seat stands beside it (shipdeck.js TWO ABREAST). */
+                  seatX: spec.seat ? spec.seat.x : 0,
                   /* Her cockpit up in her nose block (shipdeck.js RAISED). */
                   raised: raiseOf(ship, hullFit(ship)),
                   /* Every room inside her own hull (shipdeck.js planFitted). */
@@ -18778,6 +19896,133 @@
     ctx.restore();
   }
 
+  /* ---- NO LABEL OVER A LABEL (2026-11-22) --------------------------------
+   * Astra, after the turncoat and crooked-law screenshots: build the
+   * no-overlap rule in for the names on the glass, as the panels have it.
+   * Two hulls a few hundred km apart printed "Warden 15 / interceptor ·
+   * 721 km" straight through "Coldwater Barge / freighter ...", and a cop
+   * boxed beside the speed readout wrote her name across "467 KM/S".
+   *
+   * So the boxed targets (nav lock, dock target, everything awake) are
+   * queued for the frame (queueHoloTarget) and placed together
+   * (drawHoloTargets): every bracket is reserved first, so no name lands
+   * on another ship's box; then each name, in priority order, tries the
+   * spot beside its bracket, the other side, above and below, then
+   * stacked rows further out, and takes the first that is off every
+   * bracket, every name already placed, the cockpit's readouts
+   * (hudReadoutBoxes, passed in), the panels claimed last frame
+   * (claimOverlay) and the sky names (placeLabels' boxes). A name moved
+   * off its bracket gets a thin leader back to it, so which name is
+   * whose is still geometry, not guesswork. Off-screen targets keep their
+   * edge arrows as before. */
+  var HOLO_Q = [];
+  function queueHoloTarget(worldPos, label, sub, color, emph) {
+    HOLO_Q.push({ pos: worldPos, label: label, sub: sub, color: color, emph: !!emph });
+  }
+  function rectHit(a, b) { return a.x0 < b.x1 && a.x1 > b.x0 && a.y0 < b.y1 && a.y1 > b.y0; }
+  /* Pure placement, for the suite: `targets` [{ x, y, tw, bh }] on screen,
+   * `blocked` boxes { x0, x1, y0, y1 }. Returns per target { x, top, moved }. */
+  /* The bracket's reach (drawHoloTarget's corners at 11 px, plus their
+   * stroke) and the gap, so a lone name sits exactly where it always did:
+   * 16 px right of the centre, baseline 2 px above it. */
+  var HOLO_BRACKET = 13, HOLO_GAP = 3;
+  function placeHoloLabels(targets, blocked, w, h) {
+    var boxes = (blocked || []).slice();
+    /* `pad`: a target drawn with its outer "scanning you" brackets reaches
+     * further, and its name keeps clear of them too. */
+    var brackets = targets.map(function (t) {
+      var r = HOLO_BRACKET + (t.pad || 0);
+      return { x0: t.x - r, x1: t.x + r, y0: t.y - r, y1: t.y + r, own: t };
+    });
+    boxes = boxes.concat(brackets);
+    return targets.map(function (t) {
+      var b = HOLO_BRACKET + (t.pad || 0) + HOLO_GAP, cands = [];
+      var right = t.x + b, left = t.x - b - t.tw, mid = t.x - t.tw / 2;
+      cands.push({ x: right, top: t.y - 12 }, { x: left, top: t.y - 12 },
+                 { x: mid, top: t.y - b - t.bh }, { x: mid, top: t.y + b });
+      for (var k = 1; k <= 4; k++) {
+        var dy = k * (t.bh + 4);
+        cands.push({ x: right, top: t.y - 12 - dy }, { x: right, top: t.y - 12 + dy },
+                   { x: left, top: t.y - 12 - dy }, { x: left, top: t.y - 12 + dy });
+      }
+      var pick = null;
+      for (var i = 0; i < cands.length && !pick; i++) {
+        var c = cands[i];
+        if (c.x < 2 || c.x + t.tw > w - 2 || c.top < 2 || c.top + t.bh > h - 2) continue;
+        var r = { x0: c.x - 2, x1: c.x + t.tw + 2, y0: c.top - 1, y1: c.top + t.bh + 1 };
+        var hit = false;
+        for (var j = 0; j < boxes.length && !hit; j++) if (boxes[j].own !== t && rectHit(r, boxes[j])) hit = true;
+        if (!hit) pick = { x: c.x, top: c.top, moved: i > 1, box: r };
+      }
+      if (!pick) pick = { x: right, top: t.y - 12, moved: false, crowded: true,
+                          box: { x0: right - 2, x1: right + t.tw + 2, y0: t.y - 13, y1: t.y - 11 + t.bh } };
+      boxes.push(pick.box);
+      return pick;
+    });
+  }
+  function drawHoloTargets(ctx, cam, w, h, reserved, taken) {
+    var q = HOLO_Q;
+    HOLO_Q = [];
+    if (!q.length) return [];
+    ctx.save();
+    ctx.font = '10px ui-monospace, monospace';
+    var on = [], blocked = [];
+    (reserved || []).forEach(function (r) { blocked.push({ x0: r.x0, x1: r.x1, y0: r.y0, y1: r.y1 }); });
+    OVERLAYS_SEEN.forEach(function (o) { blocked.push({ x0: o[0], x1: o[1], y0: o[2], y1: o[3] }); });
+    (taken || []).forEach(function (b) { blocked.push({ x0: b.x, x1: b.x + b.w, y0: b.y, y1: b.y + b.h }); });
+    q.forEach(function (t) {
+      var p = cam.project(t.pos);
+      if (p && p.x > 0 && p.x < w && p.y > 0 && p.y < h) {
+        var tw = Math.max(t.label ? ctx.measureText(t.label).width : 0, t.sub ? ctx.measureText(t.sub).width : 0);
+        on.push({ t: t, x: p.x, y: p.y, tw: tw, bh: t.sub ? 26 : 14, pad: t.emph ? 7 : 0 });
+      } else drawHoloTarget(ctx, cam, t.pos, t.label, t.sub, t.color, w, h);
+    });
+    ctx.restore();
+    var placed = placeHoloLabels(on, blocked, w, h);
+    on.forEach(function (o, i) {
+      var t = o.t, pl = placed[i];
+      drawHoloTarget(ctx, cam, t.pos, null, null, t.color, w, h);    // the brackets alone
+      /* SCANNING YOU (2026-11-22, Astra: "when scanned by another ship,
+       * like a warden, that ship should be highlighted"): a second set of
+       * brackets outside the first, breathing, so the one ship looking at
+       * you stands out from every other box on the glass. */
+      if (t.emph) {
+        var now = (typeof performance !== 'undefined' ? performance.now() : 0) / 1000;
+        var a = 0.45 + 0.45 * (0.5 + 0.5 * Math.sin(now * 5));
+        var s2 = HOLO_BRACKET + 5;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        ctx.globalAlpha = a;
+        ctx.strokeStyle = t.color; ctx.lineWidth = 2;
+        [[-1, -1], [1, -1], [1, 1], [-1, 1]].forEach(function (c) {
+          ctx.beginPath();
+          ctx.moveTo(o.x + c[0] * s2, o.y + c[1] * s2 - c[1] * 7);
+          ctx.lineTo(o.x + c[0] * s2, o.y + c[1] * s2);
+          ctx.lineTo(o.x + c[0] * s2 - c[0] * 7, o.y + c[1] * s2);
+          ctx.stroke();
+        });
+        ctx.restore();
+      }
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      if (GLASS_GLOW) { ctx.shadowColor = t.color; ctx.shadowBlur = 5; }
+      ctx.fillStyle = t.color; ctx.strokeStyle = t.color;
+      ctx.font = '10px ui-monospace, monospace';
+      if (pl.moved) {
+        /* The leader: from the bracket's nearest corner to the name. */
+        var lx = Math.max(pl.x, Math.min(pl.x + o.tw, o.x)), ly = Math.max(pl.top, Math.min(pl.top + o.bh, o.y));
+        var cx = o.x + Math.sign(lx - o.x) * HOLO_BRACKET, cy = o.y + Math.sign(ly - o.y) * HOLO_BRACKET;
+        ctx.globalAlpha = 0.45; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(cx, cy); ctx.lineTo(lx, ly); ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+      if (t.label) ctx.fillText(t.label, pl.x, pl.top + 10);
+      if (t.sub) { ctx.globalAlpha = 0.75; ctx.fillText(t.sub, pl.x, pl.top + 22); }
+      ctx.restore();
+    });
+    return placed;
+  }
+
   /* ---- RE-ENTRY PLASMA, around the ship ----------------------------------
    * The hull shader already burns the windward faces (gl.js, uGlow), and
    * that on its own did not read: a tint on a few triangles is invisible
@@ -18918,7 +20163,8 @@
     setCockpitRoom: function (on) { COCKPIT_ROOM_ON = !!on; },
     hullFineness: hullFineness, COCKPIT_ARCH: COCKPIT_ARCH,
     MFD_SLOTS: MFD_SLOTS,
-    MFD_MOUNTS: MFD_MOUNTS,
+    MFD_MOUNTS: MFD_MOUNTS, mfdLayout: mfdLayout, MFD_CLEAR: MFD_CLEAR,
+    claimOverlay: claimOverlay, overlayFrame: overlayFrame, rolePanelAt: rolePanelAt,
     FLOOR_WINDOW: FLOOR_WINDOW,
     SLOT_S: [SLOT_S0, SLOT_S1],
     mfdCorners: mfdCorners,
@@ -18958,6 +20204,9 @@
     hyperStars: hyperStars,
     hyperRadius: hyperRadius,
     drawHoloTarget: drawHoloTarget,
+    queueHoloTarget: queueHoloTarget, drawHoloTargets: drawHoloTargets, placeHoloLabels: placeHoloLabels,
+    freeSpot: freeSpot,
+    HOLO_BRACKET: HOLO_BRACKET,
     drawHullModel: drawHullModel,
     drawStationModel: drawStationModel,
     drawSeaDomes: drawSeaDomes, seaPlatformMesh: seaPlatformMesh, seaPetalMesh: seaPetalMesh, seaPosts: seaPosts,
@@ -19050,7 +20299,8 @@
                faces: CUT_LAST.faces };
     },
     setAccent: setAccent, accented: accented, accentSwap: accentSwap,
-    drawContrail: drawContrail,
+    drawContrail: drawContrail, drawVapourSheet: drawVapourSheet,
+    groundRock: groundRock, GROUND_ROCK: GROUND_ROCK,
     portSolidity: portSolidity,
     clearRouteJob: clearRouteJob, routeDoors: routeDoors, portReady: portReady, berthPad: berthPad, berthDeckJob: berthDeckJob, berthDeckReady: berthDeckReady, berthStandIn: berthStandIn, trianglesJob: function (role) {
       return TRIDEX[role] !== undefined ? null : (TRI_JOBS[role] || (TRI_JOBS[role] = trianglesJob(role)));
@@ -19101,6 +20351,7 @@
      * for the same reason boltRibbon is: they are the parts a test can hold
      * to account without a canvas. */
     shellMesh: shellMesh, drawShellField: drawShellField,
+    hullMeshFor: hullMeshFor, rayMesh: rayMesh, hullScarPoint: hullScarPoint, portHullMesh: portHullMesh,
     shieldTint: shieldTint, shellFlare: shellFlare,
     drawReentryPlasma: drawReentryPlasma, plasmaRGB: plasmaRGB, plasmaVis: plasmaVis,
     SHIELD_STANDOFF: SHIELD_STANDOFF, SHIELD_FLASH_LIFE: SHIELD_FLASH_LIFE,
@@ -19120,7 +20371,12 @@
     drawFlightPathMarker: drawFlightPathMarker,
     drawBankScale: unblurred(drawBankScale),
     drawHeadingTape: drawHeadingTape,
-    drawAirData: drawAirData, hudReadoutBoxes: hudReadoutBoxes, labelOffReadouts: labelOffReadouts, stackLabels: stackLabels,
+    drawAirData: drawAirData, hudReadoutBoxes: hudReadoutBoxes,
+    HULL_LOOKS: HULL_LOOKS, HULL_LOOK_PICK: HULL_LOOK_PICK, HUD_TINTS: HUD_TINTS,
+    cockpitLook: cockpitLook, setLookTry: setLookTry, lookSummary: lookSummary,
+    cabinOf: cabinOf, cabinParams: cabinParams, lookIndexOf: lookIndexOf, setHudLook: setHudLook, setHudRoom: setHudRoom,
+    hudGeom: hudGeom, hudTint: hudTint, drawCanopyFurnitureFor: drawCanopyFurnitureFor,
+    HULL_ROLE: HULL_ROLE, drawRolePanel: drawRolePanel, dealColour: dealColour, drawComIcon: drawComIcon, COM_ICON: COM_ICON, ROLE_W: ROLE_W, ROLE_H: ROLE_H, labelOffReadouts: labelOffReadouts, stackLabels: stackLabels,
     facingInfo: facingInfo, drawFacingCue: drawFacingCue,
     airSpeedReadout: airSpeedReadout, altitudeReadout: altitudeReadout,
     vsReadout: vsReadout, airReadout: airReadout

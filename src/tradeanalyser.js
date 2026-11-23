@@ -137,11 +137,14 @@
    * makes (Economy.price's asymmetry), and waste at a producer is taken off
    * you and never bought back — so some rows have one line, and the screen
    * has to say which rather than draw a gap. */
-  function rows(port, now, adjust) {
+  /* `past`: `now` is a moment gone (an island's prices, as the last
+   * courier carried them - comsats.js seenAt), so the closed form is asked
+   * as it stood then, without this morning's trades in it. */
+  function rows(port, now, adjust, past) {
     var Eco = eco(), out = [], order = (port.market && port.market.order) || [];
     for (var i = 0; i < order.length; i++) {
       var cid = order[i];
-      var q = Eco.price(port, cid, now);
+      var q = past ? Eco.priceAt(port, cid, now) : Eco.price(port, cid, now);
       if (!q) continue;
       if (adjust) q = adjust(port, q);
       out.push({
@@ -222,8 +225,19 @@
                  : 'lock a target to cost the trip — a port (T), or a star (Enter on the systems list)';
       }
     }
+    /* ISLANDS (comsats.js slice 3): a port whose relays are dark is seen
+     * from anywhere else as the last courier left it, and an island's own
+     * desk sees everyone else as the last courier brought them. The
+     * terminal is at its own port, so it is always live. */
+    var Cs = global.Comsats, starId = G.here && G.here.id;
+    var seen = G.t, lockSeen = G.t;
+    if (Cs && Cs.seenAt && starId && via !== 'terminal') {
+      if (!origin) seen = Cs.seenAt(G, sys, starId, port, G.t, null);
+      if (lock && lock.kind === 'port') lockSeen = Cs.seenAt(G, sys, starId, lock.port, G.t, origin);
+    }
     return {
       ok: true, via: via === 'terminal' ? 'terminal' : 'fitting',
+      seen: seen, lockSeen: lockSeen,
       sys: sys, port: port, origin: origin, lock: lock, lockNote: lockNote,
       t: G.t, ship: ship, galaxy: G.galaxy, here: G.here, visited: G.visited || {},
       burnPerKm: opts.burnPerKm || 0, adjust: opts.adjust || null, systemFor: opts.systemFor || null
@@ -233,9 +247,11 @@
   /* The rows, for a context. The same port at the same instant gives the
    * same rows whichever route asked: that is the test of "one screen". */
   function build(ctx) {
+    var seen = typeof ctx.seen === 'number' ? ctx.seen : ctx.t, past = seen < ctx.t - 1;
     return {
       via: ctx.via, port: ctx.port, t: ctx.t, lock: ctx.lock, lockNote: ctx.lockNote,
-      rows: rows(ctx.port, ctx.t, ctx.adjust)
+      seen: seen, ageH: past ? (ctx.t - seen) / 3600 : 0,
+      rows: rows(ctx.port, past ? seen : ctx.t, ctx.adjust, past)
     };
   }
 
@@ -327,9 +343,12 @@
     var tr = trip(ctx, row.id, load.tonnes);
     var out = { price: row.buy + tr.fuelCr / load.tonnes, buy: row.buy, load: load, trip: tr };
     if (ctx.lock.kind === 'port') {
-      var q = eco().price(ctx.lock.port, row.id, ctx.t);
+      /* An island at either end: its bid as the last courier carried it. */
+      var ls = typeof ctx.lockSeen === 'number' ? ctx.lockSeen : ctx.t, lpast = ls < ctx.t - 1;
+      var q = lpast ? eco().priceAt(ctx.lock.port, row.id, ls) : eco().price(ctx.lock.port, row.id, ctx.t);
       if (q && ctx.adjust) q = ctx.adjust(ctx.lock.port, q);
-      out.compare = q && q.sell !== null ? { bid: q.sell, where: ctx.lock.port.name, ageDays: 0 } : null;
+      out.compare = q && q.sell !== null ? { bid: q.sell, where: ctx.lock.port.name,
+                                             ageDays: lpast ? (ctx.t - ls) / DAY : 0, courier: lpast } : null;
     } else {
       var rep = reports && reports[ctx.lock.star.id];
       var g = rep && rep.goods[row.id];
@@ -379,8 +398,11 @@
    * buy), each with its port. `sys` is the cached system (main.js
    * systemFor), so these are the markets you would find on arrival, less
    * the time the news took. */
-  function systemReport(sys, star, ly, now, adjust) {
-    var Eco = eco(), age = reportAgeDays(ly), at = now - age * DAY, goods = {};
+  /* `chainAge`, when given, is how old the report is by the relay chain
+   * (comsats.js: your com-sat, an hour a hop) rather than by freighter. */
+  function systemReport(sys, star, ly, now, adjust, chainAge) {
+    var Eco = eco(), live = typeof chainAge === 'number';
+    var age = live ? chainAge : reportAgeDays(ly), at = now - age * DAY, goods = {};
     var ports = (sys && sys.ports) || [];
     for (var i = 0; i < ports.length; i++) {
       var p = ports[i];
@@ -395,7 +417,7 @@
         if (q.buy !== null && q.stock >= 1 && (g.ask === null || q.buy < g.ask)) { g.ask = q.buy; g.askPort = p.name; }
       }
     }
-    return { star: star, ly: ly, ageDays: age, at: at, goods: goods };
+    return { star: star, ly: ly, ageDays: age, at: at, goods: goods, chain: live };
   }
 
   var TradeAnalyser = {

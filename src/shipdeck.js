@@ -382,21 +382,21 @@
       wall: '#2a3442', floor: '#222a35', ceil: '#1c232d', console: '#26303e', glare: '#10151c',
       overhead: '#1f2834', bulk: '#283240', jamb: '#1c242f', leaf: '#3b4656', leafEdge: '#e0a63a',
       trim: '!#7fe6c8', light: '!#d8ecff', rib: '#334050', passWall: '#2c3542', passFloor: '#20262f',
-      lockWall: '#2e3640', hazard: '#d9a521', hazardDark: '#1d1f24', seat: '#2a2f38', seatPad: '#3b4250',
+      lockWall: '#2e3640', hazard: '#d9a521', hazardDark: '#1d1f24', seat: '#5a6474', seatPad: '#8a7052', seatPipe: '!#3f8f7c',
       hatch: '#3d4652', hatchLit: '!#7dffb0', hatchShut: '!#ff6b5a', locker: '#28303b', blanket: '#5a6b80'
     },
     navy: {
       wall: '#2e3744', floor: '#232a33', ceil: '#1e242c', console: '#29323e', glare: '#11161d',
       overhead: '#222a35', bulk: '#2d3643', jamb: '#1e252e', leaf: '#45505e', leafEdge: '#c9ced4',
       trim: '!#9fc4ff', light: '!#e8f0ff', rib: '#3a4553', passWall: '#303946', passFloor: '#22282f',
-      lockWall: '#313a45', hazard: '#c9ced4', hazardDark: '#22406e', seat: '#262d36', seatPad: '#22406e',
+      lockWall: '#313a45', hazard: '#c9ced4', hazardDark: '#22406e', seat: '#5a6576', seatPad: '#2f5a9e', seatPipe: '!#5f86c4',
       hatch: '#414b57', hatchLit: '!#8fd8ff', hatchShut: '!#ff6b5a', locker: '#2b333d', blanket: '#33528a'
     },
     syndicate: {
       wall: '#2b2c2e', floor: '#1c1c1d', ceil: '#18181a', console: '#2a2a2c', glare: '#0e0e0f',
       overhead: '#232325', bulk: '#2f3033', jamb: '#1a1a1b', leaf: '#393b3d', leafEdge: '#a72e29',
       trim: '!#c8362f', light: '!#ffe2da', rib: '#4b4d51', passWall: '#2d2e30', passFloor: '#1e1e1f',
-      lockWall: '#303134', hazard: '#792220', hazardDark: '#1c1c1d', seat: '#1c1c1d', seatPad: '#5e1a18',
+      lockWall: '#303134', hazard: '#792220', hazardDark: '#1c1c1d', seat: '#4a4b4f', seatPad: '#8e2a24', seatPipe: '!#a72e29',
       hatch: '#3a3b3e', hatchLit: '!#ff8a7a', hatchShut: '!#ff3b30', locker: '#262628', blanket: '#7a2420'
     }
   };
@@ -618,7 +618,15 @@
     }
     /* Furniture you cannot stand in: the seat, the dash and both side
      * consoles. Counters in walk.js's sense, [x0, z0, x1, z1]. */
-    item('seat', 0, SEAT[1] - 0.05, 'Take the seat', { counter: SEAT.slice(), sitZ: SEAT_SIT_Z });
+    /* TWO ABREAST (2026-11-22). A cockpit fit that seats you to one side
+     * (render.js cabinOf: the L/XL fit B, on the left of two) moves the
+     * helm there, and the seat beside you is the co-pilot's, mirrored
+     * across the centre line, airliner-style. `opts.seatX` is the cabin's
+     * seat in this room's units; 0 is the old single centre seat. */
+    var seatX = Math.abs(opts.seatX) > 0.05
+      ? Math.max(-(geom.consoleX - 0.30), Math.min(geom.consoleX - 0.30, opts.seatX)) : 0;
+    item('seat', seatX, SEAT[1] - 0.05, 'Take the seat',
+         { counter: [SEAT[0] + seatX, SEAT[1], SEAT[2] + seatX, SEAT[3]], sitZ: SEAT_SIT_Z });
     item('dash', 0, geom.dashNearZ, '', { counter: [-geom.dashHW, geom.dashNearZ - 0.02, geom.dashHW, geom.frontZ], silent: true });
     item('console', -geom.consoleX, geom.consoleZ0, '', { counter: [-geom.sideX, geom.consoleZ0, -geom.consoleX, geom.frontZ], silent: true });
     item('console', geom.consoleX, geom.consoleZ0, '', { counter: [geom.consoleX, geom.consoleZ0, geom.sideX, geom.frontZ], silent: true });
@@ -865,7 +873,13 @@
     itemDeck = 'bridge';
     /* S: the second seat, and the medical supplies. */
     var second = size === 'S' ? (SECOND_SEAT[opts.hullId] || null) : null, seat2 = null;
-    if (second === 'copilot') {
+    if (seatX) {
+      /* The other of the two abreast: the same chair, across the aisle. */
+      var cxm = -seatX;
+      seat2 = item('copilot', cxm, SEAT[1] - 0.05, 'Co-pilot\'s seat', { role: 'pilot', yaw: 0, dz: 0, abreast: true,
+                   sitZ: SEAT_SIT_Z,
+                   counter: [cxm + SEAT[0], SEAT[1], cxm + SEAT[2], SEAT[3]] });
+    } else if (second === 'copilot') {
       var cx2 = Math.min(geom.sideX * 0.62, geom.consoleX - 0.02);
       /* Set back from the console where the cockpit is short in the nose. */
       var dz2 = Math.min(0, geom.consoleZ0 - 0.04 - 0.14);
@@ -985,7 +999,7 @@
      * bulkhead, facing aft at the door. And where you come aboard: inside
      * the hatch, facing forward up the passage. */
     var bay = (SEAT[1] - 0.30 + geom.bulkZ + 0.30) / 2;
-    var spawn = { x: 0, z: bay, yaw: Math.PI };
+    var spawn = { x: seatX, z: bay, yaw: Math.PI };   // behind your own seat
     /* Coming aboard you are on the airlock's landing, facing its inner
      * door across the ship. */
     var aboard = { x: rxc, z: hinge + 0.6, yaw: Math.PI / 2 };
@@ -1245,6 +1259,39 @@
     quad(m, p[0], p[1], p[2], p[3], col); quad(m, p[4], p[5], p[6], p[7], col);
     quad(m, p[0], p[1], p[5], p[4], col); quad(m, p[3], p[2], p[6], p[7], top || col);
     quad(m, p[0], p[3], p[7], p[4], col); quad(m, p[1], p[2], p[6], p[5], col);
+  }
+
+  /* A PILOT'S CHAIR (2026-11-22). Astra: "We want the seat to be
+   * visible." It wasn't: the chair was darker than the walls behind it,
+   * and in a docked cabin lit only by its instruments it was a hole. So
+   * the shell is a lighter grey than any wall, the cushions are the
+   * palette's own warm or bright colour (tan in a civil ship, navy blue,
+   * the Syndicate's red), and the backrest and headrest are piped with a
+   * dim strip of the palette's accent light, which the room's shading
+   * leaves alone (`!`) - so its outline reads in the dark. Yours and the
+   * co-pilot's twin are the same chair. */
+  function pilotChair(m, pal, fy, x) {
+    var pipe = pal.seatPipe || pal.trim;
+    box(m, x - 0.26, fy, -0.30, x + 0.26, fy + 0.46, 0.14, pal.seat, pal.seatPad);           // the seat
+    box(m, x - 0.26, fy + 0.46, -0.40, x + 0.26, fy + 1.26, -0.30, pal.seat);                  // the back
+    quad(m, [x - 0.22, fy + 0.55, -0.296], [x + 0.22, fy + 0.55, -0.296], [x + 0.22, fy + 1.20, -0.296], [x - 0.22, fy + 1.20, -0.296], pal.seatPad);
+    box(m, x - 0.15, fy + 1.30, -0.38, x + 0.15, fy + 1.52, -0.30, pal.seat, pal.seatPad);    // headrest
+    quad(m, [x - 0.13, fy + 1.33, -0.296], [x + 0.13, fy + 1.33, -0.296], [x + 0.13, fy + 1.49, -0.296], [x - 0.13, fy + 1.49, -0.296], pal.seatPad);
+    box(m, x - 0.05, fy, -0.10, x + 0.05, fy + 0.30, 0.05, pal.rib);                            // the pedestal
+    /* The piping: up both edges of the back, across its top, and over the
+     * headrest - on the face toward the dash and on the back, so the chair
+     * reads from the seat beside it and from the deck behind it. */
+    [-0.296, -0.404].forEach(function (z) {
+      [-1, 1].forEach(function (s) {
+        var x0 = x + s * 0.235, x1 = x + s * 0.250;
+        quad(m, [x0, fy + 0.50, z], [x1, fy + 0.50, z], [x1, fy + 1.24, z], [x0, fy + 1.24, z], pipe);
+      });
+      quad(m, [x - 0.25, fy + 1.235, z], [x + 0.25, fy + 1.235, z], [x + 0.25, fy + 1.25, z], [x - 0.25, fy + 1.25, z], pipe);
+      quad(m, [x - 0.14, fy + 1.505, z + (z < -0.35 ? 0.02 : 0)], [x + 0.14, fy + 1.505, z + (z < -0.35 ? 0.02 : 0)],
+              [x + 0.14, fy + 1.515, z + (z < -0.35 ? 0.02 : 0)], [x - 0.14, fy + 1.515, z + (z < -0.35 ? 0.02 : 0)], pipe);
+    });
+    /* And down the front edge of the cushion, where a hand finds it. */
+    quad(m, [x - 0.25, fy + 0.40, 0.144], [x + 0.25, fy + 0.40, 0.144], [x + 0.25, fy + 0.415, 0.144], [x - 0.25, fy + 0.415, 0.144], pipe);
   }
 
   /* A flat wall with a convex hole in it: the ring between `hole` and the
@@ -1665,7 +1712,10 @@
      * would, and the room's own walls still never do. */
     var fittings = mesh();
     var cop = p.items.filter(function (it) { return it.kind === 'copilot'; })[0];
-    if (cop) {
+    if (cop && cop.abreast) {
+      /* Two abreast: the twin of your own chair, headrest and all. */
+      pilotChair(fittings, pal, fy, cop.x);
+    } else if (cop) {
       var dz = cop.dz || 0, cx = cop.x;
       box(fittings, cx - 0.24, fy, -0.30 + dz, cx + 0.24, fy + 0.46, 0.14 + dz, pal.seat, pal.seatPad);
       box(fittings, cx - 0.24, fy + 0.46, -0.40 + dz, cx + 0.24, fy + 1.20, -0.30 + dz, pal.seat);
@@ -1685,12 +1735,10 @@
            [(mk.x0 + mk.x1) / 2 + 0.04, mfy + 0.30, mz + 0.204], [(mk.x0 + mk.x1) / 2 - 0.04, mfy + 0.30, mz + 0.204], pal.rib);
     }
 
-    /* THE SEAT, drawn only while you are out of it. */
-    box(seat, -0.26, fy, -0.30, 0.26, fy + 0.46, 0.14, pal.seat, pal.seatPad);
-    box(seat, -0.26, fy + 0.46, -0.40, 0.26, fy + 1.26, -0.30, pal.seat);
-    quad(seat, [-0.22, fy + 0.55, -0.296], [0.22, fy + 0.55, -0.296], [0.22, fy + 1.20, -0.296], [-0.22, fy + 1.20, -0.296], pal.seatPad);
-    box(seat, -0.15, fy + 1.30, -0.38, 0.15, fy + 1.52, -0.30, pal.seat, pal.seatPad);
-    box(seat, -0.05, fy, -0.10, 0.05, fy + 0.30, 0.05, pal.rib);
+    /* THE SEAT, drawn only while you are out of it — where the plan put
+     * it (one side of two abreast, or the centre). */
+    var helm = p.items.filter(function (it) { return it.kind === 'seat'; })[0];
+    pilotChair(seat, pal, fy, helm ? helm.x : 0);
 
     /* The main deck goes down to where it is, and the decks below it are
      * built in place. */

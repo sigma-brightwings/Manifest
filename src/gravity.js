@@ -166,8 +166,66 @@
    * The provinces that outcrop (so a spectrometer can also see them) and the
    * buried bodies that nothing else can. One list, each marked with what it
    * is and whether the player's own survey kit already explains it. */
+  /* A GIANT HOLDS NO LUMPS (planetary interiors slice 2, 2026-11-22). The
+   * ground map lays provinces and buried bodies on every world, giants
+   * included, and this used to pass them all on - so a gravimeter read
+   * "ore bodies" floating in a gas giant's hydrogen. There is no rock in
+   * one to hold a lump; interior.js gives a giant none, and now so does
+   * the instrument. */
+  function isGiant(body) {
+    if (!deps() || !body) return false;
+    var k = Survey.typeKey ? Survey.typeKey(body) : body.type;
+    return k === 'gasGiant' || k === 'iceGiant';
+  }
+  function isShellWorld(body) {
+    var k = Survey.typeKey ? Survey.typeKey(body) : body.type;
+    return k === 'iceball' || k === 'iceMoon';
+  }
+  function dirOf(tag) {
+    var z = 2 * h01(tag + 'z') - 1, a = 2 * Math.PI * h01(tag + 'a');
+    var s = Math.sqrt(Math.max(0, 1 - z * z));
+    return [s * Math.cos(a), s * Math.sin(a), z];
+  }
+  /* LIGHT BODIES (slice 2; Astra, decision 3: buried ice and salt read as
+   * dips). A mass DEFICIT: ice (~0.9 g/cc) or rock salt (~2.2) in rock that
+   * runs nearer 3. `w` is negative - the same density-contrast number as a
+   * dense body, with the sign that says which way. Never on a world whose
+   * crust is itself ice: ice in ice is no contrast at all.
+   *   ICE: the buried patches the water map already lays poleward on dry
+   *   worlds (survey.js groundMap buriedIce), each given a depth and a size.
+   *   SALT: on desert worlds only - the evaporites of seas that dried. */
+  var ICE_COVER = [0.5, 12], SALT_COVER = [1, 20];
+  function lightBodies(body, sys, m) {
+    if (isShellWorld(body)) return [];
+    var R = body.radius || 1, out = [], base = tagOf(body, sys) + 'int:';
+    var bandOf = Survey.bandOf, reach = Survey.BAND_REACH || {};
+    function make(id, kind, c, cover, radKm, w) {
+      var b = bandOf(cover);
+      out.push({ id: id, kind: kind, c: c, cover: cover, radKm: radKm, zKm: cover + radKm,
+                 d: Math.max(0.05, 1 - (cover + radKm) / R), band: b, reach: reach[b],
+                 w: w, share: 0, surface: false, light: true });
+    }
+    ((m && m.buriedIce) || []).forEach(function (p, i) {
+      var it = base + 'ice' + i + ':';
+      var cover = Math.min(ICE_COVER[0] + (ICE_COVER[1] - ICE_COVER[0]) * h01(it + 'cover'), 0.2 * R);
+      var radKm = Math.min(3 + 27 * h01(it + 'rad'), 0.1 * R);
+      make('ice' + i, 'ice', [p.c[0], p.c[1], p.c[2]], cover, radKm, -(0.4 + 0.3 * h01(it + 'w')));
+    });
+    if ((Survey.typeKey ? Survey.typeKey(body) : body.type) === 'desert') {
+      var ns = Math.floor(h01(base + 'salt#') * 2.6);     // 0..2
+      for (var k = 0; k < ns; k++) {
+        var st = base + 'salt' + k + ':';
+        var cov = Math.min(SALT_COVER[0] + (SALT_COVER[1] - SALT_COVER[0]) * h01(st + 'cover'), 0.2 * R);
+        var rk = Math.min(5 + 25 * h01(st + 'rad'), 0.1 * R);
+        make('salt' + k, 'salt', dirOf(st + 'c'), cov, rk, -(0.2 + 0.15 * h01(st + 'w')));
+      }
+    }
+    return out;
+  }
+
   function sourcesOf(body, sys) {
     if (!deps()) return [];
+    if (isGiant(body)) return [];
     var m = Survey.groundMap(body, sys);
     if (!m) return [];
     var out = [];
@@ -186,7 +244,7 @@
                  reach: b.reach, radKm: b.radKm, zKm: b.zKm, cover: b.cover,
                  w: b.w, share: b.share, surface: false });
     });
-    return out;
+    return out.concat(lightBodies(body, sys, m));
   }
 
   /* Excess mass as a fraction of the world's, and the body's centre in km.
@@ -210,8 +268,10 @@
     return (p.mu * b.dm / (z * z)) * 1000 * MGAL;
   }
 
-  /* The anomaly a prepared body adds at a point, m/s^2 (always positive:
-   * excess mass pulls, and what a map wants is the magnitude). */
+  /* The anomaly a prepared body adds at a point, m/s^2: the magnitude of
+   * its pull, SIGNED (slice 2). An excess pulls, and reads high; a deficit
+   * - ice, salt - is rock that is not there to pull, and reads low. The
+   * sign rides in dm, so a light body's anomaly comes out negative. */
   function anomAt(p, b, q) {
     var dx = q[0] - b.pos[0], dy = q[1] - b.pos[1], dz = q[2] - b.pos[2];
     var s2 = dx * dx + dy * dy + dz * dz, soft = b.rad * b.rad;
@@ -245,7 +305,7 @@
      * blur*R, as a separable pass over the grid. */
     var cell = 2 * R / n;
     var sigma = res.blur * R / cell;             // in cells
-    var anMax = 0;
+    var anMax = 0, anMin = 0;
 
     for (var iy = 0; iy < n; iy++) {
       for (var ix = 0; ix < n; ix++) {
@@ -260,6 +320,7 @@
         for (var b = 0; b < bodies.length; b++) a += anomAt(p, bodies[b], q);
         g[k] = gs; an[k] = a;
         if (a > anMax) anMax = a;
+        if (a < anMin) anMin = a;
       }
     }
     if (sigma > 0.4) blur2(an, n, sigma);
@@ -275,7 +336,7 @@
 
     return { plane: plane, planeName: PLANE_NAME[plane] || plane, n: n, R: R,
              axes: ax, g: g, anom: an, gMax: gMax, gMin: gMin === Infinity ? 0 : gMin,
-             anomMax: anMax, lvl: lvl, res: res, gSurf: p.gSurf, peak: peakOf(p),
+             anomMax: anMax, anomMin: anMin, lvl: lvl, res: res, gSurf: p.gSurf, peak: peakOf(p),
              core: p.rc };
   }
 
@@ -326,11 +387,14 @@
     var srcs = sourcesOf(body, sys).map(function (s) { return prep(p, s); });
     if (!srcs.length) return [];
     /* What it reads from above: depth is the enemy, as it should be. */
+    /* Signed (slice 2): a light body reads below the world around it, and
+     * the instrument's sensitivity is to the size of the reading, high or
+     * low. Ordered by that size. */
     srcs.forEach(function (b) { b.sig = surfaceSignal(p, b); });
     var top = 0;
-    srcs.forEach(function (b) { if (b.sig > top) top = b.sig; });
-    var seen = srcs.filter(function (b) { return b.sig >= res.mgal; })
-                   .sort(function (a, b) { return b.sig - a.sig; });
+    srcs.forEach(function (b) { if (Math.abs(b.sig) > top) top = Math.abs(b.sig); });
+    var seen = srcs.filter(function (b) { return Math.abs(b.sig) >= res.mgal; })
+                   .sort(function (a, b) { return Math.abs(b.sig) - Math.abs(a.sig); });
     /* Merge what it cannot separate. */
     var sep = res.blur * p.R, out = [];
     seen.forEach(function (b) {
@@ -349,6 +413,13 @@
        * 3. A buried body is never explained, at any grade. */
       var cls = s.kind === 'fissile' ? 2 : (s.share > 0.5 ? 3 : 1);
       var explained = !!s.surface && sl >= cls;
+      /* Buried ice near the surface shows on the water map too (the poleward
+       * patches), so a kit that reads water explains a shallow one. Salt
+       * and anything deeper, nothing aboard names. */
+      if (s.kind === 'ice' && s.band === 'shallow') {
+        var wc = Survey.classOf ? Survey.classOf('water') : 1;
+        explained = sl >= wc;
+      }
       return {
         id: s.id, kind: s.kind, band: s.band, reach: s.reach,
         lat: Math.asin(Math.max(-1, Math.min(1, s.c[2]))),
@@ -359,7 +430,8 @@
         depthKm: res.depth === 'exact' ? Math.round(s.cover * 10) / 10 : null,
         radKm: res.depth === 'exact' ? Math.round(s.radKm) : null,
         depthBand: res.depth ? s.band : null,
-        merged: o.merged, strength: top > 0 ? o.sig / top : 0, mgal: o.sig,
+        /* `mgal` is signed: a low (a mass deficit) reads below zero. */
+        merged: o.merged, strength: top > 0 ? Math.abs(o.sig) / top : 0, mgal: o.sig, low: o.sig < 0,
         /* Mass against volume. Flagged only by the rung that can read it. */
         dense: res.dense ? s.share > 0.55 : null,
         explained: explained
@@ -372,7 +444,11 @@
     var where = (c.lat >= 0 ? 'N' : 'S') + Math.round(Math.abs(c.lat) * 180 / Math.PI) +
                 ' ' + (c.lon >= 0 ? 'E' : 'W') + Math.round(Math.abs(c.lon) * 180 / Math.PI);
     var bits = [];
-    bits.push((c.mgal >= 10 ? Math.round(c.mgal) : c.mgal.toFixed(1)) + ' mGal');
+    /* A reading, not a verdict (Astra's decision 2): a low is said to be a
+     * low - a mass deficit - and what makes one is the player's to work out. */
+    var am = Math.abs(c.mgal);
+    bits.push((c.mgal < 0 ? '-' : '') + (am >= 10 ? Math.round(am) : am.toFixed(1)) + ' mGal' +
+              (c.mgal < 0 ? ' low' : ''));
     if (c.merged > 1) bits.push(c.merged + ' sources, unresolved');
     if (c.depthKm != null) bits.push(c.depthKm + ' km down, ' + c.radKm + ' km across');
     else if (c.depthBand) bits.push(c.depthBand === 'shallow' ? 'near the surface'
@@ -394,7 +470,8 @@
     MGAL: MGAL, RES: RES, PLANES: PLANES, PLANE_NAME: PLANE_NAME, PLANE_AXES: PLANE_AXES,
     profileOf: profileOf, massFrac: massFrac, gSmooth: gSmooth, peakOf: peakOf,
     sourcesOf: sourcesOf, slice: slice, contacts: contacts, describe: describe,
-    surfaceSignal: surfaceSignal, offPlane: offPlane, muOf: muOf
+    surfaceSignal: surfaceSignal, offPlane: offPlane, muOf: muOf,
+    lightBodies: lightBodies, isGiant: isGiant, ICE_COVER: ICE_COVER, SALT_COVER: SALT_COVER
   };
   global.Gravity = Gravity;
   if (typeof module !== 'undefined' && module.exports) module.exports = Gravity;

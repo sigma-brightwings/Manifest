@@ -44,7 +44,36 @@
     FLASH_BUCKET: 0.9,       // s — one slot of the schedule
     FLASH_DUTY: 0.52,        // slot threshold at the peak of an active spell
     FLASH_QUIET: 0.94,       // ... and in a lull. The gap is the clustering.
-    FLASH_JITTER: 0.85       // of a slot, how far a stroke may slide off grid
+    FLASH_JITTER: 0.85,      // of a slot, how far a stroke may slide off grid
+    /* ---- climate (2026-11-22) ------------------------------------------
+     * See `climateWet` below. Latitudes in radians. */
+    CL_ITCZ_A: 0.70,         // the rain belt under the sun: how much wetter
+    CL_ITCZ_W: 0.15,         // ... and how wide (about 9 degrees)
+    CL_ITCZ_FOLLOW: 0.65,    // how far it follows the sun's latitude
+    CL_DRY_LAT: 0.52,        // the dry belts (30 degrees): the deserts
+    CL_DRY_W: 0.14,
+    CL_DRY_A: 0.62,
+    CL_STORM_LAT: 1.00,      // the storm tracks (57 degrees)
+    CL_STORM_W: 0.17,
+    CL_STORM_A: 0.40,
+    CL_POLAR_A: 0.45,        // cold air holds little water
+    CL_SEA_A: 0.22,          // over open water, wetter
+    CL_LAND_A: 0.28,         // over high, inland ground, drier
+    CL_ORO_A: 9.0,           // per unit of upslope over the step: windward wet
+    CL_ORO_STEP: 0.05,       // radians upwind, about 3 degrees
+    CL_ORO_MAX: 0.45,        // the most one slope can add or take
+    CL_MIN: 0.12, CL_MAX: 2.2,
+    CL_STORM_SHIFT: 0.06,    // how far a wet belt lowers the storm threshold
+    /* ---- the cloud's body (2026-11-22) ----------------------------------
+     * See `column` below: a deck has a thickness, a low layer lies under
+     * it, a storm stands taller. Shared with the shader. */
+    THICK_SPAN: 0.09,        // field above the cut over which a cloud goes thin -> solid
+    LOW_SCALE: 1.9,          // the low layer's own, finer lookup
+    LOW_OFF: 5.3,
+    LOW_CUT_HI: 0.72,        // the low layer's cut, dry ...
+    LOW_CUT_LO: 0.50,        // ... and where it is wet and over water
+    SUN_EPS: 0.045,          // lookup units sunward, for lit tops and shaded flanks
+    TOP_SHADE: 6.0           // how hard that slope lights or shades a top
   };
 
   /* ---- the same noise, in the other language ---------------------------
@@ -76,6 +105,11 @@
       x *= 2.03; y *= 2.03; z *= 2.03; a *= 0.5;
     }
     return s;
+  }
+  /* Two octaves only, as gl.js's fbm2: the low layer is soft and does
+   * not need the fine ones, and on the RX 540 they were not free. */
+  function fbm2(x, y, z) {
+    return 0.5 * vnoise(x, y, z) + 0.25 * vnoise(x * 2.03, y * 2.03, z * 2.03);
   }
 
   function smoothstep(e0, e1, x) {
@@ -127,16 +161,162 @@
 
   /* Cover and storm at one point of one world. `cover` is the body's own
    * cloudiness from the generator — the same uCloud the shader is handed. */
-  function sample(n, sp, seed, cover) {
+  /* `clim` (optional): this place's climate, from climateAt - the world's
+   * cloudiness times how wet this latitude, coast and slope are, and how
+   * much readier the belt is to storm. Absent, the world's own number. */
+  function sample(n, sp, seed, cover, clim) {
     var cp = lookup(n, sp, seed);
     var cl = fbm(cp.x, cp.y, cp.z);
+    var wet = clim ? clim.wet : 1;
     var thresh = K.THRESH_HI + (K.THRESH_LO - K.THRESH_HI) *
-                 Math.max(0, Math.min(1, cover));
+                 Math.max(0, Math.min(1, cover * wet));
     var mask = smoothstep(thresh, thresh + K.EDGE, cl);
     var s = K.STORM_SCALE;
-    var storm = smoothstep(K.STORM_LO, K.STORM_HI,
+    var sLo = K.STORM_LO - (clim ? clim.stormy : 0) * K.CL_STORM_SHIFT;
+    var storm = smoothstep(sLo, sLo + (K.STORM_HI - K.STORM_LO),
                            fbm(cp.x * s, cp.y * s, cp.z * s)) * mask;
-    return { raw: cl, cloud: mask, storm: storm };
+    /* THE BODY OF IT (2026-11-22). `thick`: how far into the cloud this
+     * point is - 0 at a ragged edge, which is thin and lets light through,
+     * 1 well inside, which does not. `low`: the low layer - stratus and
+     * fog - its own finer lookup, cut lower where the air is wet and over
+     * water, which is where fog lives. */
+    var thick = smoothstep(thresh, thresh + K.THICK_SPAN, cl) * mask;
+    var wetSea = Math.max(0, Math.min(1, cover * wet * (0.35 + 0.65 * (clim && clim.sea ? clim.sea : 0))));
+    var cutL = K.LOW_CUT_HI + (K.LOW_CUT_LO - K.LOW_CUT_HI) * wetSea;
+    var ls = K.LOW_SCALE;
+    var low = smoothstep(cutL, cutL + K.EDGE,
+                         fbm2(cp.x * ls + K.LOW_OFF, cp.y * ls + K.LOW_OFF, cp.z * ls + K.LOW_OFF) * 1.25);
+    return { raw: cl, cloud: mask, storm: storm, thick: thick, low: low };
+  }
+
+  /* ---- CLIMATE (2026-11-22) ----------------------------------------------
+   *
+   * Astra: are weather patterns modelled, or faked? They were faked - a
+   * noise field cut at one level per world, so a desert was as likely to be
+   * overcast as an ocean - and she wants the data good enough to sell to
+   * the planners of new stations. So the cut now depends on WHERE, the way
+   * a planet's general circulation makes it depend:
+   *
+   *   THE RAIN BELT under the sun (the ITCZ): air heated at the subsolar
+   *     latitude rises, cools and rains. It follows the sun north and south
+   *     with the seasons, part of the way.
+   *   THE DRY BELTS at about 30 degrees, where that air comes down again,
+   *     dry: this is why Earth's great deserts sit where they do.
+   *   THE STORM TRACKS at about 57 degrees, where cold and warm air meet.
+   *   THE POLES, cold, holding little water.
+   *   OPEN WATER feeds cloud; high inland ground starves it.
+   *   SLOPES: the prevailing wind (trades from the east in the tropics,
+   *     westerlies in the middle latitudes, easterlies again at the poles)
+   *     is lifted up a windward slope and rains, and comes down the far
+   *     side dry - the rain shadow.
+   *
+   * Still a pure function of (world, place, time), and the shader computes
+   * the same arithmetic from the same numbers (gl.js), so a forecast, the
+   * picture and the climate record a sounder builds all agree. A world
+   * with no surface to speak of - a giant, or a twilight world zoned by its
+   * star - keeps the world's own number: wet 1, stormy 0.
+   *
+   * `wet` multiplies the world's cloudiness; `stormy` is how much readier
+   * the place is to storm (the wet belts are). Both from climateWet, which
+   * takes only numbers so the suite and the shader can check it alone. */
+  function band(x, c, w) { var d = (x - c) / w; return Math.exp(-d * d); }
+  function climateWet(lat, subsolar, sea, elev, elevUp, ocean, ice, wetSea) {
+    var a = Math.abs(lat);
+    var itcz = band(lat, subsolar * K.CL_ITCZ_FOLLOW, K.CL_ITCZ_W);
+    var dry = band(a, K.CL_DRY_LAT, K.CL_DRY_W);
+    var stormT = band(a, K.CL_STORM_LAT, K.CL_STORM_W);
+    var w = 1 + K.CL_ITCZ_A * itcz - K.CL_DRY_A * dry + K.CL_STORM_A * stormT;
+    w -= K.CL_POLAR_A * smoothstep(1.15, 1.45, a);
+    if (wetSea) {
+      w += K.CL_SEA_A * sea;
+      /* High inland ground: how far above the sea it stands. */
+      w -= K.CL_LAND_A * (1 - sea) * smoothstep(0, 0.18, elev - ocean);
+    }
+    var oro = Math.max(-K.CL_ORO_MAX, Math.min(K.CL_ORO_MAX, K.CL_ORO_A * (elev - elevUp) * (1 - sea)));
+    w += oro;
+    w *= 1 - 0.4 * ice;
+    w = Math.max(K.CL_MIN, Math.min(K.CL_MAX, w));
+    var stormy = itcz + 0.7 * stormT - 0.6 * dry;
+    return { wet: w, stormy: stormy };
+  }
+  /* The prevailing wind's direction, as the sign of its eastward part:
+   * trades and polar easterlies blow FROM the east (-1, westward), the
+   * westerlies from the west (+1). */
+  function zonalSign(lat) {
+    var a = Math.abs(lat);
+    return (a < K.CL_DRY_LAT || a > K.CL_STORM_LAT + 0.17) ? -1 : 1;
+  }
+  /* The sun's latitude on this world at time t: the season. */
+  function subsolarLat(body, sys, t) {
+    var Sim = global.Sim;
+    sys = sys || (global.Game && global.Game.sys);
+    if (!Sim || !Sim.bodyPosition || !sys || !sys.root || !body) return 0;
+    var sp = Sim.bodyPosition(sys.root, sys, t), bp = Sim.bodyPosition(body, sys, t);
+    var d = { x: sp.x - bp.x, y: sp.y - bp.y, z: sp.z - bp.z };
+    var l = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z);
+    if (!(l > 0)) return 0;
+    var k = spinAxis(body);
+    return Math.asin(Math.max(-1, Math.min(1, (d.x * k.x + d.y * k.y + d.z * k.z) / l)));
+  }
+  function climateOn(body) {
+    /* 'global' is an ordinary world; the two twilight zonings are not. */
+    if (!body || body.habitableBand === 'terminator' || body.habitableBand === 'equator') return false;
+    if (body.type === 'gasGiant' || body.type === 'iceGiant') return false;
+    return !!body.atmosphere;
+  }
+  /* THE WORLD KEEPS ITS CLOUD. The generator's `cloud` column was tuned to
+   * give each type its share of sky (gl.js, the coverage table); climate
+   * should move the cloud AROUND a world, not add or take it away. So the
+   * multiplier is divided by its own mean over the sphere (at equinox), per
+   * world, once - measured before this, the bands alone took a fifth of a
+   * tundra's cloud away. gl.js is handed the same divisor (uClimate.y). */
+  var CLIM_NORM = new WeakMap();
+  function climateNorm(body) {
+    if (!climateOn(body)) return 1;
+    var hit = CLIM_NORM.get(body);
+    if (hit) return hit;
+    var N = 600, s = 0, ga = Math.PI * (3 - Math.sqrt(5));
+    for (var i = 0; i < N; i++) {
+      var z = 1 - (2 * i + 1) / N, r = Math.sqrt(1 - z * z), a = ga * i;
+      s += climateRaw(body, { x: r * Math.cos(a), y: r * Math.sin(a), z: z }, 0).wet;
+    }
+    var m = Math.max(0.2, s / N);
+    CLIM_NORM.set(body, m);
+    return m;
+  }
+  /* The climate at a body-fixed unit point `p`, given the season. */
+  function climateAtFixed(body, p, subsolar) {
+    if (!climateOn(body)) return { wet: 1, stormy: 0 };
+    var c = climateRaw(body, p, subsolar);
+    c.wet = c.wet / climateNorm(body);
+    return c;
+  }
+  function climateRaw(body, p, subsolar) {
+    var T = terrainOf(body), k = spinAxis(body);
+    var lat = Math.asin(Math.max(-1, Math.min(1, p.x * k.x + p.y * k.y + p.z * k.z)));
+    var elev = elevationAt(body, p);
+    var sea = T.ocean > 0.001 ? 1 - smoothstep(T.ocean - SEA_EDGE, T.ocean + SEA_EDGE, elev) : 0;
+    var ice = 0;
+    if (T.ice > 0.001) {
+      var edge = T.ice * (0.85 + 0.30 * elev);
+      ice = smoothstep(1 - edge - 0.06, 1 - edge + 0.06, Math.abs(Math.sin(lat)));
+    }
+    /* Upwind: east is k x p, normalised; the wind comes FROM -sign*east. */
+    var ex = k.y * p.z - k.z * p.y, ey = k.z * p.x - k.x * p.z, ez = k.x * p.y - k.y * p.x;
+    var el = Math.sqrt(ex * ex + ey * ey + ez * ez) || 1;
+    var s = -zonalSign(lat) * K.CL_ORO_STEP / el;
+    var up = { x: p.x + ex * s, y: p.y + ey * s, z: p.z + ez * s };
+    var ul = Math.sqrt(up.x * up.x + up.y * up.y + up.z * up.z) || 1;
+    up.x /= ul; up.y /= ul; up.z /= ul;
+    var wetSea = !T.lava && body.type !== 'desert';
+    var r = climateWet(lat, subsolar, sea, elev, elevationAt(body, up), T.ocean, ice, wetSea);
+    r.sea = wetSea ? sea : 0;             // for the low layer: fog lives over water
+    return r;
+  }
+  /* And at a world-frame unit normal at time t, as sample() is asked. */
+  function climateAt(body, sys, nWorld, t) {
+    if (!climateOn(body)) return { wet: 1, stormy: 0 };
+    return climateAtFixed(body, bodyFixed(body, nWorld, t), subsolarLat(body, sys, t));
   }
 
   /* ---- what it is doing over a place ------------------------------------
@@ -171,7 +351,8 @@
       return { x: p.x / len, y: p.y / len, z: p.z / len };
     }
 
-    var here = sample(normalAt(lat, lon), sp, seed, air.cloud);
+    var nHere = normalAt(lat, lon);
+    var here = sample(nHere, sp, seed, air.cloud, climateAt(host, sys, nHere, t));
     /* A degree either way, which is a few hundred kilometres — the scale
      * the field actually varies on. A finer step measures rounding. */
     var d = 0.9 * Math.PI / 180;
@@ -232,6 +413,66 @@
    * one's is low without a second table to keep in step. */
   var DECK_LO = 0.10, DECK_HI = 0.26;
 
+  /* ---- THE CLOUD HAS A BODY (2026-11-22) ---------------------------------
+   *
+   * Astra: "if you go down through a storm, that should be obvious in the
+   * weather changing and the view going from clear to reduced visibility as
+   * the density of the cloud increases... layers of transparency and
+   * opacity and density from the highest place you'd find clouds down to
+   * nearly sea level on worlds which can host them." And it must not cost
+   * the RX 540 much: so not a raymarch, but three layers stacked in the
+   * column over a place, each a density that rises and falls through its
+   * own height, all from the lookups sample() has already made:
+   *
+   *   THE LOW LAYER, stratus and fog, from just off the ground to 4.5% of
+   *     the air's height: sample().low, which is where the air is wet and
+   *     over water.
+   *   THE DECK, from DECK_LO to DECK_HI as before, thin at its ragged edges
+   *     and solid inside (sample().thick), densest in its middle.
+   *   THE STORM, which is the deck grown: a storm cell's base sinks toward
+   *     the ground (the rain shaft) and its top climbs to TOWER_TOP (the
+   *     anvil), and it is denser throughout.
+   *
+   * Fractions of `top`, like the deck. `column(here, a)` is the density at
+   * height fraction `a`, 0..1, and how much cloud lies ABOVE it (an
+   * optical depth, so the light under a storm can go dark); `vis` is how
+   * far you can see in it, 1 clear to about 0 in the heart of a cell. */
+  var LOW_BASE = 0.004, LOW_TOP = 0.045, TOWER_BASE = 0.03, TOWER_TOP = 0.36, LAYER_EDGE = 0.015;
+  function slab(a, lo, hi, e) {
+    return smoothstep(lo - e, lo + e, a) * (1 - smoothstep(hi - e, hi + e, a));
+  }
+  function deckSpan(here) {
+    var s = here.storm || 0;
+    return { lo: DECK_LO + (TOWER_BASE - DECK_LO) * s, hi: DECK_HI + (TOWER_TOP - DECK_HI) * s };
+  }
+  function column(here, a) {
+    var sp = deckSpan(here);
+    /* THE SHAPE OF A DESCENT (2026-11-22, measured). The first cut made
+     * the deck `deckD * bulge` and clipped at 1, and a storm's deckD is
+     * 1.8 - so from the anvil to the base the probe read density 1.00 the
+     * whole way, the same grey wall at 38 km and at 7. The point of the
+     * request was the gradient. So: a strength that tops out at 1 in a
+     * storm's core (0.55 in an ordinary deck), times a profile that is
+     * thin at the anvil, densest about 40% of the way up, and half as
+     * thick again at the base: clear, haze, wall, thinning, out. */
+    var u = Math.max(0, Math.min(1, (a - sp.lo) / Math.max(1e-6, sp.hi - sp.lo)));
+    var shape = u < 0.4 ? 0.5 + 0.5 * smoothstep(0, 0.4, u)
+                        : 1 - 0.75 * smoothstep(0.4, 1, u);
+    var deckD = (here.cloud || 0) * (0.30 + 0.70 * (here.thick || 0)) * (1 + 0.8 * (here.storm || 0));
+    var strength = (here.cloud || 0) * (0.30 + 0.70 * (here.thick || 0)) * (0.55 + 0.45 * (here.storm || 0));
+    var dMain = strength * shape * slab(a, sp.lo, sp.hi, LAYER_EDGE);
+    var dLow = 0.75 * (here.low || 0) * slab(a, LOW_BASE, LOW_TOP, LAYER_EDGE * 0.5);
+    var d = Math.max(dMain, dLow);
+    /* What lies above: the share of each layer's height that is over you,
+     * times its density - a crude optical depth, enough to darken. */
+    var aboveMain = deckD * Math.max(0, Math.min(1, (sp.hi - Math.max(a, sp.lo)) / (sp.hi - sp.lo)));
+    var aboveLow = 0.75 * (here.low || 0) * Math.max(0, Math.min(1, (LOW_TOP - Math.max(a, LOW_BASE)) / (LOW_TOP - LOW_BASE)));
+    var tau = aboveMain * 2.2 + aboveLow * 0.8;
+    return { density: d, tau: tau, deckLo: sp.lo, deckHi: sp.hi,
+             /* How far you can see, in the cloud: thick cloud is a wall. */
+             vis: Math.exp(-3.2 * d) };
+  }
+
   /* ---- rain, snow or ash (2026-11-10) -----------------------------------
    *
    * Astra: "storms which rain, snow and thunder/lightning as viewed from on
@@ -267,6 +508,17 @@
     return { snow: smoothstep(0.22, 0.62, g.ice), ash: 0 };
   }
 
+  /* How much daylight at a place: the sun's height over the local vertical
+   * `n` (unit, world) at world position `pos`, eased through twilight - the
+   * same ramp the ground sky's `day` uses (gl.js overcastFor). */
+  function dayAt(n, pos, sys, t) {
+    var Sim = global.Sim;
+    if (!Sim || !Sim.bodyPosition || !sys || !sys.root || !pos) return 1;
+    var sp = Sim.bodyPosition(sys.root, sys, t);
+    var d = { x: sp.x - pos.x, y: sp.y - pos.y, z: sp.z - pos.z };
+    var l = Math.sqrt(d.x * d.x + d.y * d.y + d.z * d.z) || 1;
+    return smoothstep(-0.10, 0.26, (n.x * d.x + n.y * d.y + n.z * d.z) / l);
+  }
   function aloft(ship, sys, t) {
     var Sim = global.Sim, GL = global.GLWorld;
     if (!ship || !Sim || !Sim.atmosphereContext || !GL || !GL.spinOf) return null;
@@ -282,8 +534,12 @@
     var alt = r - body.radius;
     var n = { x: dx / r, y: dy / r, z: dz / r };
 
-    var here = sample(n, GL.spinOf(body, t), hashSeed(body.id), air.cloud);
-    var lo = air.top * DECK_LO, hi = air.top * DECK_HI;
+    var here = sample(n, GL.spinOf(body, t), hashSeed(body.id), air.cloud, climateAt(body, sys, n, t));
+    /* The deck as this place has it: a storm's base sinks and its top
+     * climbs (column, above), so the rain starts lower under a storm and
+     * the tops are higher over one. */
+    var col = column(here, alt / air.top), span = deckSpan(here);
+    var lo = air.top * span.lo, hi = air.top * span.hi;
 
     /* UNDER THE DECK IS UNDER THE DECK, all the way to the ground.
      *
@@ -293,26 +549,36 @@
      * reported rain 0.03 and gloom 0.04, a sunny afternoon beneath a sky
      * that was black. What thins is the cloud ABOVE you, so the only fade
      * is at the top: full below the deck, gone a little way above it. */
-    var below = 1 - smoothstep(hi, hi * 1.4, alt);
+    /* Gone by the very top (2026-11-22): with the deck at a few km "a
+     * little way above" was 40% more height and harmless; over a storm's
+     * 41 km anvil it put rain on the glass at 48 km, in clear air above
+     * the cloud. Rain comes out of the top part of a cloud, not above it. */
+    var below = 1 - smoothstep(hi * 0.85, hi, alt);
     var kind = precipKind(body, sys, n, t);
 
     /* And in the murk, which is its own state: the window fills and you
-     * fly on instruments. Ramped over the outer fifth of the band, or
-     * entering a cloud is a frame rather than a moment. */
-    var edge = (hi - lo) * 0.22;
-    var inside = smoothstep(lo - edge, lo + edge, alt) *
-                 (1 - smoothstep(hi - edge, hi + edge, alt));
-
+     * fly on instruments. Not in-or-out any more (2026-11-22): the
+     * column's density at your height, so a descent through a storm goes
+     * clear, thin anvil, the dense heart, thinner toward the base, then
+     * out under it into the rain - and a fog bank near the sea is murk
+     * of its own. */
     return {
       body: body, alt: alt, deckLo: lo, deckHi: hi,
-      cloud: here.cloud, storm: here.storm,
-      inCloud: here.cloud * inside,
+      cloud: here.cloud, storm: here.storm, low: here.low,
+      inCloud: col.density,
+      density: col.density,
+      vis: col.vis,
+      /* Daylight here, 0..1, so the murk is grey by day and black by night
+       * (the sun's height over this spot, eased through the twilight). */
+      day: dayAt(n, ship.pos, sys, t),
       /* Rain falls out of the bottom of the deck, and only from cloud
        * thick enough to be raining out of. */
       rain: Math.max(0, here.cloud - 0.25) / 0.75 *
             (0.35 + 0.65 * here.storm) * below,
-      /* How much of the daylight the deck is keeping off you. */
-      gloom: gloomOf(here) * below,
+      /* How much of the daylight is kept off you: the cloud ABOVE you, as
+       * an optical depth, so the light goes as you descend into a storm
+       * and comes back a little under its base, not all at once at the top. */
+      gloom: Math.min(0.97, (0.55 + 0.45 * here.storm) * (1 - Math.exp(-1.3 * col.tau))),
       /* What that fall is made of, as fractions of it. */
       snow: kind.snow, ash: kind.ash
     };
@@ -337,13 +603,13 @@
    * weather at all; nothing is invented for it. `deck` is the height of
    * the deck's base, km, for the ceiling; `phase` is the field's own clock
    * (spinOf's weather), so the underside drifts as the field does. */
-  function overhead(body, up, t) {
+  function overhead(body, up, t, sys) {
     var GL = global.GLWorld;
     var air = body && body.atmosphere;
     if (!air || !(air.cloud > 0) || !up || !GL || !GL.spinOf) return null;
     var sp = GL.spinOf(body, t);
     if (!sp || !sp.ax) return null;            // a stand-in GL layer (tests) has no spin to give
-    var here = sample(up, sp, hashSeed(body.id), air.cloud);
+    var here = sample(up, sp, hashSeed(body.id), air.cloud, climateAt(body, sys, up, t));
     return { cloud: here.cloud, storm: here.storm, gloom: gloomOf(here),
              deck: air.top * DECK_LO, phase: sp.weather };
   }
@@ -807,13 +1073,62 @@
     return m < 0.30 ? 'desert' : m < 0.65 ? 'savanna' : 'rainforest';
   }
 
+  /* ---- VAPOUR OFF A HULL (2026-11-22) -------------------------------------
+   *
+   * Astra, of the cloud work: "if this works, we might be able to do some
+   * contrails on ship leading tips / edges for control surfaces in
+   * atmosphere". The thing she is describing is not an engine contrail: it
+   * is the vapour a lifting body pulls out of the air. Lift is made by low
+   * pressure, low pressure is cold, and cold wet air condenses - in the
+   * cores of the vortices that roll off the tips, and in a sheet over the
+   * lifting surface when the pull is hard. Two consequences decide when to
+   * draw it, and both are what a pilot sees:
+   *   - it follows the PULL, not the speed. Level flight lays almost
+   *     nothing; a hard turn streams it from both tips.
+   *   - it follows the WET. In dry air it takes a brutal pull to show
+   *     anything; in air near its dew point a gentle turn will do it.
+   *
+   * humidity(here): how near the air is to making cloud, 0..1, from the
+   * same column the murk reads - the deck and the fog at this place, and
+   * how far into one you are. A world with no cloud at all is dry air.
+   *
+   * vapourOf(load, hum, through, rho): load is the pull ACROSS the airflow
+   * in g (1 in level flight), through the airspeed in km/s, rho the air's
+   * density in kg/m^3. Returns { tip, sheet }, each 0..1. */
+  function humidity(ship, sys, t) {
+    var a = aloft(ship, sys, t);
+    if (!a) return 0.25;
+    return Math.max(0, Math.min(1, 0.30 + 0.70 * Math.max(a.cloud * 0.85, a.low || 0, a.density || 0)));
+  }
+  function vapourOf(load, hum, through, rho) {
+    var speedF = smoothstep(0.05, 0.20, through || 0);
+    var rhoF = smoothstep(0.03, 0.40, rho || 0);
+    var h = Math.max(0, Math.min(1, hum || 0));
+    /* Humidity squared for the tips, measured (probe-vapour): at h^1.5 the
+     * same 2.7 g pull gave 0.52 in wet air and 0.10 in dry - dry air still
+     * streaming visible tips. And the pull proportional, from zero: these
+     * hulls have no wing lift, so one coasting is in free fall and feels
+     * nothing, and the first cut's floor streamed tips off her anyway.
+     * Measured now: wet 0.49 at 2.7 g, 0.13 at 1 g, nothing coasting;
+     * dry 0.05 at 2.7 g, under the cut. */
+    var lift = Math.pow(Math.min(1, Math.max(0, (load || 0) / 4)), 1.3);
+    var tip = h * h * lift * speedF * rhoF;
+    var sheet = Math.pow(h, 1.5) * smoothstep(2.0, 5.0, load || 0) * speedF * rhoF;
+    return { tip: Math.min(1, tip), sheet: Math.min(1, sheet) };
+  }
+
   var Weather = {
+    humidity: humidity, vapourOf: vapourOf,
     TERRAIN: TERRAIN, terrainOf: terrainOf, terrainAt: terrainAt,
     dryAt: dryAt, digFloor: digFloor, padDir: padDir, DIG_MARGIN: DIG_MARGIN, DIG_NUDGE: DIG_NUDGE,
     BIOME: BIOME, biomeParams: biomeParams, biomeAt: biomeAt, biomeGrid: biomeGrid,
     elevationAt: elevationAt, bodyFixed: bodyFixed, spinAxis: spinAxis,
     magAxisWorld: magAxisWorld, magneticAxis: magneticAxis,
-    K: K, fbm: fbm, hashSeed: hashSeed, sample: sample, lookup: lookup,
+    K: K, fbm: fbm, fbm2: fbm2, hashSeed: hashSeed, sample: sample, lookup: lookup,
+    climateWet: climateWet, climateAt: climateAt, climateAtFixed: climateAtFixed,
+    column: column, deckSpan: deckSpan, LOW_BASE: LOW_BASE, LOW_TOP: LOW_TOP,
+    TOWER_BASE: TOWER_BASE, TOWER_TOP: TOWER_TOP,
+    subsolarLat: subsolarLat, zonalSign: zonalSign, climateOn: climateOn, climateNorm: climateNorm,
     report: report, describe: describe, hasWeather: hasWeather,
     aloft: aloft, overhead: overhead, precipKind: precipKind, gloomOf: gloomOf, DECK_LO: DECK_LO, DECK_HI: DECK_HI,
     stormClock: stormClock, saltOf: saltOf,

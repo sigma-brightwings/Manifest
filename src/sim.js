@@ -106,7 +106,10 @@
     if (hit) return { pos: hit, vel: cache.vel[body.id] };
 
     var pos, vel;
-    if (body.surface) {
+    if (body.fieldRef) {
+      var fst = bodyStateAt(body, sys, t);
+      pos = fst.pos; vel = fst.vel;
+    } else if (body.surface) {
       var hostState = bodyState(body.parentBody, sys, t);
       var off = surfaceOffset(body.parentBody, body, t);
       pos = V.add(hostState.pos, off.pos);
@@ -965,19 +968,81 @@
    * Softened at 0.35 radii so a trajectory that clips a body's centre
    * produces a large-but-finite force rather than NaN; impacts are detected
    * separately and honestly. */
+  /* WHAT THE SHIP FEELS IS WHAT THE RAILS ASSUME (stars stage 3, 2026-11-20;
+   * claude/stars-and-systems-plan.md 2.3 - doctrine 3 applied to the stars).
+   *
+   * Every planet of a close pair rides a Kepler rail about a POINT MASS at
+   * the barycentre. A ship that summed both stars where they really are
+   * would feel the pair's quadrupole - about 1% of the stellar pull at a
+   * planet's distance - and the planet would not: a ship parked round a
+   * circumbinary world would drift off it by hundreds of km a day. So past
+   * MONO_IN binary separations from the pair the two stars blend into one
+   * point at their barycentre, completely by MONO_OUT. No planet sits inside
+   * 2.8 separations (the circumbinary cut), so near any world the ship
+   * feels exactly the mass its rail circles; close to the pair it feels the
+   * stars where they are.
+   *
+   * A DISTANT companion is the same idea from the other side: the planets'
+   * rails ignore her (she is hundreds of AU off and the whole inner system
+   * falls toward her together), so until a ship is COMP_IN of the way from
+   * the root to her she ignores her too, and feels her fully past COMP_OUT,
+   * out where her own well and her own worlds are.
+   *
+   * With one star neither applies: k is exactly 1 and every float is the
+   * float it was. */
+  var MONO_IN = 1.5, MONO_OUT = 2.5, COMP_IN = 0.4, COMP_OUT = 0.6;
+  function smooth01(lo, hi, x) {
+    if (x <= lo) return 0;
+    if (x >= hi) return 1;
+    var u = (x - lo) / (hi - lo);
+    return u * u * (3 - 2 * u);
+  }
   function acceleration(pos, sys, t, out) {
     var ax = 0, ay = 0, az = 0;
     var list = sys.gravBodies;
+    var pair = sys.pairBary || null, comp = sys.companion || null;
+    var wMono = 0, wComp = 1, pp = null;
+    if (pair && pair.separation > 0) {
+      pp = bodyPosition(pair, sys, t);
+      wMono = smooth01(MONO_IN * pair.separation, MONO_OUT * pair.separation, V.dist(pos, pp));
+    }
+    if (comp && comp.orbit) {
+      /* Measured as a share of the way from the root to her, not in AU: her
+       * orbit can be eccentric, and the stable zones of both ends (each
+       * under 0.37 of the separation, Holman & Wiegert) must stay outside
+       * the blend wherever she is. */
+      var rootP = bodyPosition(sys.root, sys, t), compP = bodyPosition(comp, sys, t);
+      var rr = V.dist(pos, rootP), rc = V.dist(pos, compP);
+      wComp = smooth01(COMP_IN, COMP_OUT, rr / Math.max(1e-9, rr + rc));
+      /* And out by her, the frame's own fall. Her rail is the RELATIVE orbit
+       * (mu = root + her), so she and her worlds fall toward the root as if
+       * it weighed both; a ship out there must too, or she parks beside a
+       * world of hers and drifts off it. */
+      if (wComp > 0) {
+        var cx = rootP.x - pos.x, cy = rootP.y - pos.y, cz = rootP.z - pos.z;
+        var c2 = cx * cx + cy * cy + cz * cz, cd = Math.sqrt(c2);
+        var cf = comp.mu / (c2 * cd) * wComp;
+        ax += cx * cf; ay += cy * cf; az += cz * cf;
+      }
+    }
     for (var i = 0; i < list.length; i++) {
       var b = list[i];
+      var k = b.inPair ? 1 - wMono : b.distant ? wComp : 1;
+      if (k <= 0) continue;
       var bp = bodyPosition(b, sys, t);
       var dx = bp.x - pos.x, dy = bp.y - pos.y, dz = bp.z - pos.z;
       var d2 = dx * dx + dy * dy + dz * dz;
       var soft = b.radius * 0.35;
       if (d2 < soft * soft) d2 = soft * soft;
       var d = Math.sqrt(d2);
-      var f = b.mu / (d2 * d); // mu / d^3, ready to multiply by the vector
+      var f = b.mu / (d2 * d) * k; // mu / d^3, ready to multiply by the vector
       ax += dx * f; ay += dy * f; az += dz * f;
+    }
+    if (wMono > 0) {
+      var mx = pp.x - pos.x, my = pp.y - pos.y, mz = pp.z - pos.z;
+      var m2 = mx * mx + my * my + mz * mz, md = Math.sqrt(m2);
+      var mf = pair.mu / (m2 * md) * wMono;
+      ax += mx * mf; ay += my * mf; az += mz * mf;
     }
     if (out) { out.x = ax; out.y = ay; out.z = az; return out; }
     return { x: ax, y: ay, z: az };
@@ -1025,7 +1090,9 @@
   function frameBody(pos, sys, t) {
     var dom = dominantBody(pos, sys, t);
     var b = dom;
-    while (b && (b.kind === 'star' || b.kind === 'barycentre') &&
+    /* A DISTANT companion (stage 3) circles the whole system from hundreds
+     * of AU: near her you are in her well, never the pair's. */
+    while (b && (b.kind === 'star' || b.kind === 'barycentre') && !b.distant &&
            b.parentBody && b.parentBody.kind === 'barycentre') {
       var bc = b.parentBody;
       if (!(bc.separation > 0) ||
@@ -2054,6 +2121,12 @@
    * A station is three links from the root, so this is a handful of Kepler
    * solves and it is called once per leg, not once per frame. */
   function bodyStateAt(body, sys, t) {
+    /* A worker's site in a belt's field (generate.js buildWorkers): it is
+     * where the field is. */
+    if (body.fieldRef && global.Rings && global.Rings.fieldCenter) {
+      var fc = global.Rings.fieldCenter(body.fieldRef, sys, t);
+      return { pos: fc.pos, vel: fc.vel };
+    }
     if (body.surface) {
       var hostAt = bodyStateAt(body.parentBody, sys, t);
       var off = surfaceOffset(body.parentBody, body, t);
@@ -2129,6 +2202,15 @@
       return { dir: d2, vec: V.scale(d2, port.radius * 1.015) };
     }
 
+    /* A PROSPECTOR'S FAR END IS AMONG THE ROCKS (generate.js buildWorkers):
+     * a hashed point inside the field, not an apron outside it. */
+    if (route && route.siteId === port.id && port.fieldRef) {
+      var fh = portHash({ id: String(route.id) + '@field@' + port.id });
+      var fd = V.norm({ x: ((fh & 1023) / 1023) - 0.5, y: (((fh >>> 10) & 1023) / 1023) - 0.5,
+                        z: (((fh >>> 20) & 1023) / 1023 - 0.5) * 0.3 });
+      if (V.len(fd) < 1e-9) fd = radial;
+      return { dir: fd, vec: V.scale(fd, (port.radius || 50) * (0.2 + ((fh >>> 5) % 100) / 100 * 0.5)) };
+    }
     if (route && route.id && !port.surface && !port.underground) {
       var along = V.sub(ps.vel, hs.vel);
       var east = V.cross(radial, along);
@@ -2686,7 +2768,9 @@
   }
 
   function trafficState(route, sys, t) {
-    if (!route.feeder && !route.heavy && !route.oneWay) {
+    /* Lane hulls and the outer system's workers (2026-11-22) keep to their
+     * timetable: a leak would tow one into a berth she does not take. */
+    if (!route.feeder && !route.heavy && !route.oneWay && !route.stream && route.kind !== 'work') {
       var U = upkeepMod();
       var sd = U ? U.stranded(route, sys, t) : null;
       if (sd) {
@@ -2958,12 +3042,47 @@
     return railState(spec, sys, t);
   }
 
+  var ESCORT_OFF_KM = 6, ESCORT_SIDE_KM = 2.5;
+  function escortHost(spec, sys) {
+    if (spec._host !== undefined && spec._hostOf === sys) return spec._host;
+    var h = null, tr = sys.traffic || [];
+    for (var i = 0; i < tr.length; i++) if (tr[i].id === spec.escorting) { h = tr[i]; break; }
+    spec._host = h; spec._hostOf = sys;
+    return h;
+  }
+  function escortState(spec, sys, t, own) {
+    var host = escortHost(spec, sys);
+    if (!host || host.dead) return own;
+    var hs = trafficState(host, sys, t);
+    if (!hs || !hs.pos) return own;
+    var fwd = hs.fwd || { x: 1, y: 0, z: 0 }, right = hs.right || { x: 0, y: 1, z: 0 };
+    /* Which side she keeps: a seeded half, so two escorts on one charge
+     * (a merc and a cutter) do not sit on top of each other. */
+    var side = (spec.id.charCodeAt(spec.id.length - 1) % 2) ? 1 : -1;
+    var out = {};
+    for (var k in own) out[k] = own[k];
+    out.pos = V.add(hs.pos, V.add(V.scale(fwd, -ESCORT_OFF_KM), V.scale(right, side * ESCORT_SIDE_KM)));
+    out.vel = V.clone(hs.vel);
+    out.fwd = V.clone(fwd); out.up = V.clone(hs.up || { x: 0, y: 0, z: 1 }); out.right = V.clone(right);
+    out.phase = hs.phase; out.from = hs.from; out.to = hs.to;
+    if (hs.throttle !== undefined) out.throttle = hs.throttle;
+    return out;
+  }
+
   /* Where the responder's own timetable puts it — the ordinary rail,
    * split out so the rescue leg can read its starting point off it. */
   function railState(spec, sys, t) {
     var st;
     if (spec.rail.type === 'route') {
       st = trafficState(spec.rail.route, sys, t);
+      /* AN ESCORT KEEPS STATION ON HER CHARGE (ship AI slice 5). She used
+       * to fly her own copy of the charge's timetable, a minute behind on
+       * a rail shaped by her own drive - which measured a median 16,500 km
+       * off her charge and up to 200,000 (mercenaries the same, 18,700).
+       * Now her place IS the charge's place, ESCORT_OFF_KM astern and a
+       * little to one side in the charge's own frame: alongside by
+       * construction, and still a pure function of the clock. */
+      if (spec.escorting && st) st = escortState(spec, sys, t, st);
     } else if (spec.rail.type === 'port') {
       /* A boat that lives at a port, and is nowhere else: the temporary
        * tender a system without one launches from its nearest dock. */
@@ -3176,8 +3295,18 @@
     /* A responder on a rescue leg wakes INTO the rescue, not into the
      * shadowing every other tender does — otherwise the handoff would turn
      * an ambulance into a bystander two thousand kilometres out. */
+    /* An escort (generate.js buildEscorts, ship AI slice 5) is on duty: a
+     * heavy riding with a runner, a cutter riding with a liner. She keeps
+     * an eye on you, like the mercenaries do, rather than leaving her
+     * charge to scan you - and a Syndicate heavy in lawful space keeps her
+     * head down. */
+    /* And a warship answering a platform's alarm (milsats.js) wakes still
+     * on that job: flying to the scene, or to you if she has ordered you
+     * to heave to. */
     spec.mode = spec.rescue ? 'rescue'
+              : spec.questioning ? (spec.mode || 'respond')
               : spec.kind === 'pirate' ? 'intercept'
+              : spec.escorting ? 'shadow'
               : spec.kind === 'police' ? 'inspect' : 'shadow';
     /* THE OVERBOSS'S MARK (tithe.js). In a hold you have paid for, his
      * pirates and his own patrols wake, look, and leave you be. */
@@ -3531,6 +3660,9 @@
   function updateEncounters(sys, t, dtSim, ship) {
     var result = { active: [], demand: null, closest: Infinity,
                     dangerClosest: Infinity, warpCap: Infinity };
+    /* The lane hulls near you (updateLanes), before anything asks who is
+     * about. Cheap when nothing has moved far. */
+    updateLanes(sys, t, ship && ship.pos);
     var patrols = sys.patrols || [];
     if (!patrols.length) return result;
 
@@ -4266,8 +4398,141 @@
       if (r.dead || r.suppressed) continue;
       list.push(trafficState(r, sys, t));
     }
+    /* The outer system's working ships, and the lane hulls near you
+     * (generate.js buildWorkers / buildLanes, updateLanes below). Neither
+     * list is in sys.traffic, so no berth, market or board counts them. */
+    var extra = (sys.workers || []).concat(sys._laneShown || []);
+    for (var j = 0; j < extra.length; j++) {
+      var x = extra[j];
+      if (x.dead || x.suppressed) continue;
+      list.push(trafficState(x, sys, t));
+    }
     sys._traffic = { t: t, list: list };
     return list;
+  }
+
+  /* ---- THE LANES (2026-11-22) ---------------------------------------------
+   * generate.js buildLanes gives each pair of worlds a lane: its busiest
+   * route, flown again by `n` hulls at a fixed headway along the same
+   * timetable. All of them exist - any one is a pure function of t - but
+   * only the ones near you are worked out, here, and shown through
+   * trafficAll. Each is a real route object (laneRoute), cached while she
+   * matters, so a lifted, robbed or killed lane hull stays herself.
+   *
+   * Finding them cheaply. Hull k's phase on her loop is arithmetic, so
+   * whether she is under way, which way, and how far along (u) costs
+   * nothing. Where she is takes her own leg's geometry, which is the
+   * expensive part - so she is first placed on a reference arc for her
+   * slice of departures (LANE_BINS per crossing), and only the hulls that
+   * land within LANE_GATE_KM of you are placed exactly. A lane whose
+   * radii do not come near yours is skipped whole.
+   *
+   * Only the open middle of a crossing (u inside LANE_EDGE of either end):
+   * near a port the real timetable is the traffic, and a stream hull
+   * appearing or going at eight percent of an interplanetary crossing does
+   * so millions of km from anything. */
+  /* Shown out to 20 million km, the nearest 30: the scope's own range is
+   * 0.75 AU (main.js RADAR_RANGE), and a busy lane's hulls 2.5 million km
+   * apart fill that slice of it with a few dozen dots ahead and behind. */
+  var LANE_SHOW_KM = 2e7, LANE_GATE_KM = 3e7, LANE_BINS = 10, LANE_EDGE = 0.08, LANE_MAX_SHOWN = 30;
+  var LANE_REFRESH_S = 30, LANE_REFRESH_KM = 3e5;
+  function laneTemplate(sys, lane) {
+    if (lane._tpl !== undefined) return lane._tpl;
+    var tr = sys.traffic || [];
+    lane._tpl = null;
+    for (var i = 0; i < tr.length; i++) if (tr[i].id === lane.template) { lane._tpl = tr[i]; break; }
+    return lane._tpl;
+  }
+  function laneRoute(sys, lane, k) {
+    var cache = sys._laneRoutes || (sys._laneRoutes = {});
+    var key = lane.id + '.' + k;
+    if (cache[key]) return cache[key];
+    var tpl = laneTemplate(sys, lane);
+    if (!tpl) return null;
+    var Gx = global.Gen, CL = (Gx && Gx.SHIP_CLASSES) || {};
+    var h = portHash({ id: 'lane|' + (sys.seed || '') + '|' + key });
+    /* Her line's sister ship: the template's hull class half the time,
+     * else a freighter or a tanker. Never a liner (no souls aboard) or a
+     * waste hauler (she carries the lane's trade, not its waste). */
+    var pool = ['freighter', 'freighter', 'tanker'];
+    var keep = tpl.cls !== 'liner' && tpl.cls !== 'shuttle' && tpl.cls !== 'hauler' && CL[tpl.cls];
+    var cls = (h % 10) < 5 && keep ? tpl.cls : pool[(h >>> 4) % pool.length];
+    var cl = CL[cls] || { size: 0.1, color: '#d8c79a', label: cls };
+    /* Named as the line's fleet: the template's line name, a hull word,
+     * and her number in the line - unique on the lane. */
+    var line = String(tpl.name || 'Lane').split(' ')[0];
+    var HN = (Gx && Gx.HULL_NAMES) || ['Hauler'];
+    var scale = 0.4 + ((h >>> 8) % 70) / 100;
+    var cut = function (list) {
+      return (list || []).map(function (m) { return { cid: m.cid, qty: Math.max(1, Math.round((m.qty || 0) * scale)) }; });
+    };
+    var route = {
+      id: 'lane:' + key, name: line + ' ' + HN[(h >>> 18) % HN.length] + ' ' + (k + 1),
+      cls: cls, className: cl.label, size: cl.size * (0.8 + ((h >>> 22) % 50) / 100), color: cl.color,
+      from: tpl.from, to: tpl.to, parentId: tpl.parentId, local: false,
+      cruise: tpl.cruise, layover: tpl.layover, period: tpl.period,
+      t0: tpl.t0 + k * lane.headway,
+      out: cut(tpl.out), back: cut(tpl.back), distance: tpl.distance,
+      faction: tpl.faction, outboard: true, stream: true, lane: lane.id
+    };
+    cache[key] = route;
+    return route;
+  }
+  /* Where a hull on this crossing is at fraction u, on a reference leg:
+   * the arc trafficCore flies, without the parking blend (a few hundred
+   * km against a gate of millions). */
+  function arcPoint(leg, ps, u) {
+    var e = smootherstep(u);
+    var dir = V.rotateAroundAxis(leg.sh, leg.axis, leg.ang * e);
+    var r = (leg.rs + (leg.rd - leg.rs) * e) * (1 + 0.055 * Math.sin(Math.PI * e));
+    return { x: ps.pos.x + dir.x * r, y: ps.pos.y + dir.y * r, z: ps.pos.z + dir.z * r };
+  }
+  function updateLanes(sys, t, pos, force) {
+    if (!sys || !sys.lanes || !sys.lanes.length || !pos) { if (sys) sys._laneShown = null; return null; }
+    var L = sys._laneScan;
+    if (!force && L && Math.abs(t - L.t) < LANE_REFRESH_S && V.dist(pos, L.pos) < LANE_REFRESH_KM) return sys._laneShown;
+    var found = [];
+    for (var li = 0; li < sys.lanes.length; li++) {
+      var lane = sys.lanes[li], tpl = laneTemplate(sys, lane);
+      if (!tpl || tpl.dead) continue;
+      var A = sys.byId[tpl.from], B = sys.byId[tpl.to], parent = sys.byId[tpl.parentId];
+      if (!A || !B || !parent) continue;
+      var ps = bodyState(parent, sys, t);
+      /* The whole lane, at a glance: is your distance from its parent
+       * anywhere between its two ends' (with the bow and the gate)? */
+      var rA = V.dist(bodyState(A, sys, t).pos, ps.pos), rB = V.dist(bodyState(B, sys, t).pos, ps.pos);
+      var rMe = V.dist(pos, ps.pos);
+      if (rMe < Math.min(rA, rB) - LANE_GATE_KM || rMe > Math.max(rA, rB) * 1.06 + LANE_GATE_KM) continue;
+      var arcs = {};
+      var P = tpl.period, cr = tpl.cruise, lay = tpl.layover;
+      for (var k = 1; k <= lane.n; k++) {
+        var ph = ((t - (tpl.t0 + k * lane.headway)) % P + P) % P;
+        var out, u;
+        if (ph < cr) { out = true; u = ph / cr; }
+        else if (ph >= cr + lay && ph < 2 * cr + lay) { out = false; u = (ph - cr - lay) / cr; }
+        else continue;
+        if (u < LANE_EDGE || u > 1 - LANE_EDGE) continue;
+        var bin = Math.min(LANE_BINS - 1, Math.floor(u * LANE_BINS));
+        var ak = (out ? 'o' : 'b') + bin;
+        var leg = arcs[ak];
+        if (!leg) {
+          var src = out ? A : B, dst = out ? B : A;
+          var tDep = t - ((bin + 0.5) / LANE_BINS) * cr;
+          leg = arcs[ak] = legGeometry({ id: tpl.id + '#ref' }, sys, 'ref', src, dst, parent, tDep, tDep + cr);
+        }
+        if (V.dist(arcPoint(leg, ps, u), pos) > LANE_GATE_KM) continue;
+        var route = laneRoute(sys, lane, k);
+        if (!route || route.dead || route.suppressed) continue;
+        var st = trafficCore(route, sys, t);
+        var d = V.dist(st.pos, pos);
+        if (d < LANE_SHOW_KM) found.push({ route: route, d: d });
+      }
+    }
+    found.sort(function (a, b) { return a.d - b.d; });
+    sys._laneShown = found.slice(0, LANE_MAX_SHOWN).map(function (f) { return f.route; });
+    sys._laneScan = { t: t, pos: V.clone(pos) };
+    sys._traffic = null; sys._ships = null;
+    return sys._laneShown;
   }
 
   /* The nearest traffic ship to a point, for the cockpit's contact readout.
@@ -8949,6 +9214,8 @@
     trafficState: trafficState,
     trafficCore: trafficCore,
     trafficAll: trafficAll,
+    updateLanes: updateLanes, laneRoute: laneRoute, laneTemplate: laneTemplate,
+    LANE_SHOW_KM: LANE_SHOW_KM, LANE_EDGE: LANE_EDGE,
     berthStatus: berthStatus,
     /* For the queue measurements in test/berths.test.js and tools; the same
      * booking trafficState flies. */

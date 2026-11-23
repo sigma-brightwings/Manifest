@@ -950,6 +950,12 @@
     var bodies = sys.bodies || [];
     for (var i = 0; i < bodies.length; i++) {
       var b = bodies[i];
+      /* Worlds only (bug hunt 2026-11-21): a distant companion star rides
+       * the root too, tens to thousands of AU out, and took the ring with
+       * her - Mirven's from 2.2 AU to 9.4, Dratara's from 27 to 3,450 -
+       * and every wake in 76 systems with it. The close pair's own stars
+       * orbit the root as well, inside everything, and are no world either. */
+      if (b.kind === 'star' || b.distant) continue;
       if (b.orbit && b.orbit.a > far && b.parentBody === sys.root) far = b.orbit.a;
     }
     /* A system with nothing in orbit — an interstellar locale — still needs

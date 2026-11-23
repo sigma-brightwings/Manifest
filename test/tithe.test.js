@@ -95,7 +95,13 @@ check('without touching the port\'s own book', Eco.priceList(synPort, G5.t).filt
 var Gnp = game(held, heldSys);
 check('nothing off for a ship that has not paid', T.adjustRow(Gnp, heldSys, synPort, buyRow, Gnp.t) === buyRow);
 var lawPort = lawfulSys.ports.filter(function (p) { return p.market; })[0];
-check('nor at anybody else\'s port', T.adjustRow(G5, heldSys, lawPort, buyRow, G5.t) === buyRow);
+/* Asked about a lawful system's port, in that system (this check used to
+ * pass the hold as the system, which ship AI slice 5 made mean something:
+ * an independent port INSIDE a hold now carries the collectors' cut). */
+check('nor at anybody else\'s port', T.adjustRow(G5, lawfulSys, lawPort, buyRow, G5.t) === buyRow);
+var inHold = T.adjustRow(G5, heldSys, lawPort, buyRow, G5.t);
+check('an independent port inside a hold carries protection, not the tithe',
+      inHold.protection && !inHold.tithed && inHold.buy > buyRow.buy, buyRow.buy.toFixed(1) + '  ' + inHold.buy.toFixed(1));
 
 console.log('--- haggling ---');
 var Gh = game(held, heldSys); T.onArrive(Gh, heldSys, Gh.t);

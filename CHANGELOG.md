@@ -53,6 +53,1788 @@ title left undecided for now and may change it again. To try another face:
 `node "Claude outputs/wordmark.cjs" <font> <WORD> [tracking-em]` (needs
 opentype.js) and paste its output over MARK_W and MARK. The Aldrich file and
 its licence are in Claude outputs/fonts/. Saves are untouched.
+### Changed (2026-11-22, a port's pit is cut through the world's own ground)
+
+Astra, for when ground ports are player-buildable: planets need "a texture for whatever is under the surface so we aren't building new ports in a hole that shows China on the bottom". The hole already had a bottom (the rock bowl under the street section) and walls (the beds), but every world's beds were the same two greys, so a pit on an iceball was lined with the same rock as one in a desert.
+
+- **The beds and the bowl are now the world's own top layer** (`Render.groundRock`, read from `Interior.of`):
+
+  | World | Ground |
+  |---|---|
+  | Anything with an ice shell (iceballs, icy moons) | ice |
+  | Desert | red sandstone |
+  | Molten | ash and basalt |
+  | Terran | sedimentary rock |
+  | Ocean | marine mudstone and limestone |
+  | Tundra | frozen ground and grey rock |
+  | Rocky / airless | regolith and impact breccia |
+
+- **Why only the top layer:** a port's pit is under a kilometre deep, and the thinnest crust or ice shell in the seeds is 9.4 km. A dig only ever meets the top layer; the deeper ones stay in the scanner's cutaway.
+- **What stays the same:** the street layers (road, paving, slab, services) and the burnt edge round the cut. The wall shader takes three new colours, the loose fill and two alternating beds.
+- **Checked:** `tools/probe-pitrock.js` docks at ground ports on six kinds of world and opens the cut on each. The checks are in `test/interior-cut.test.js` (18 → 29).
+
+### Fixed (2026-11-22, a sky when you fly in air)
+
+- **Flying in a world's air there was no sky.** The sky built for the ground ports on 2026-11-02 (gradient, haze, dusk, the overcast ceiling) only came on inside a ground port's cut or within 30 km of a sea platform. Everywhere else, above the horizon was cleared to space: at noon 3 km over Mirven II's sea, a black, starry sky. Found while tuning the cloud dimming. Under a deck, that dimming was going dark against black, which is why every overcast looked like dusk.
+  - **Now that sky is drawn wherever the eye is inside a world's air,** at the eye's own vertical, with the weather overhead there. A port's own sky still wins at a port, and nothing changes in the map, underground or in a shed.
+  - **It thins as you climb:** the sky is scaled by the air left at the eye (`GLWorld.skyOver` and `setGroundSky` take a `thin`). On Mirven II it is a full blue sky at 3 km, a darkening blue at 30 km, and stars coming out through it at 50 km. Above that it stops and the planet seen from space takes over.
+- **The dark wash under a cloud deck is light for plain overcast and heavy for storms.** The sky itself is now grey under a deck, so the wash was a second darkening.
+  - Mirven II's ordinary overcast (gloom 0.52): opacity 0.40 before, 0.16 now. A storm (gloom 0.94) is still 0.66.
+  - Probe shots at 3 km for clear, overcast, storm and night are in tools/probe-overcast.js.
+
+### Added (2026-11-22, vapour off the tips and over the hull)
+
+Astra, on the cloud work: "if this works, we might be able to do some contrails on ship leading tips / edges for control surfaces in atmosphere." This is the vapour a lifting body pulls out of wet air, not an engine contrail. Lift is low pressure, low pressure is cold, and cold wet air condenses: in the cores of the vortices off the tips, and in a sheet over the lifting side in a hard pull.
+
+- **It follows the pull and the wet** (`Weather.vapourOf`):
+  - The pull is what the hull feels across the airflow, in g. For your ship that's the felt acceleration. For an NPC it's her velocity change less gravity, smoothed over a third of a second.
+  - The wet is how near the air is to making cloud (`Weather.humidity`), from the same column the murk reads.
+  - These hulls have no wing lift, so one that is coasting is in free fall and lays nothing.
+  - Measured by flying it (probe-vapour, Mirven II, 250 m/s, vertical and lateral thrusters held, 2.7 g):
+
+    | Air | Coasting | 2.7 g pull |
+    |---|---|---|
+    | Wet (under a deck) | 0.00 | 0.49 |
+    | Dry (high inland) | 0.00 | 0.05, under the cut, so nothing is drawn |
+- **Tip vortices:** two thin, short-lived trails (2.2 s) from each hull's real tips (`Sim.hullBox`, her true span), laid every 0.08 s so a hard turn curves smoothly. This covers your ship and every lifted NPC.
+- **The sheet:** from outside, a hull pulling hard in wet air wears soft white vapour over her lifting side, streaming aft (`Render.drawVapourSheet`).
+- **From the seat**, where you can see neither: vapour streams past the canopy, outward from where you're heading and crowded toward the side you're pulling toward. It is drawn with the weather, under the instruments and without the glass's glow blur.
+- The existing trail behind a hull in air is unchanged. Room for trails went from 24 to 48, three per hull.
+
+### Changed (2026-11-22, clouds with a body: lit tops, and a storm you descend through)
+
+Astra asked for clouds that feel volumetric: "the sun properly lighting the tops of them", and "if you go down through a storm, that should be obvious in the weather changing and the view going from clear to reduced visibility as the density of the cloud increases", in layers from the highest cloud down to nearly sea level, cheap enough for the RX 540. Real raymarched volumes are not affordable on that card, so this fakes the parts the eye reads.
+
+- **From orbit, the deck has relief.** One extra look at the cloud field, a short step toward the sun, tells each point whether it is a top or sunward face (lit) or a far flank (in its own shadow). The step shrinks with the sun overhead, so noon lights a deck evenly and a low sun rakes it.
+  - **Storm towers** take that shading harder than the ordinary deck, because they stand far above it.
+  - **Clouds cast shadows** on the clear ground beside them, from the same lookup.
+  - **Thin edges are see-through:** a cloud's ragged edge lets the ground show; its body does not.
+  - **Cloud tops keep the light** a little past the ground's terminator.
+- **A low layer:** stratus and sea fog, under the deck, cut lower where the air is wet and over water. Measured from the field: about 1% of the sky over dry ground, up to a third over a wet sea.
+- **The column has a shape.** At any place, the deck now has a height profile: thin at the top, densest about 40% of the way up, thinner toward the base, then clear underneath. Over a storm, the base sinks and the top climbs (on Mirven II, about 3 km to 41 km). A storm descent on Mirven II, by Weather.aloft:
+
+  | Altitude | Density | Visibility | Gloom |
+  |---|---|---|---|
+  | 48 km | 0.00 | 1.00 | 0.00 |
+  | 38 km | 0.25 | 0.44 | 0.33 |
+  | 30 km | 0.54 | 0.18 | 0.74 |
+  | 22 km | 0.82 | 0.07 | 0.90 |
+  | 14 km | 0.75 | 0.09 | 0.96 |
+  | 7 km | 0.48 | 0.21 | 0.97 |
+  | 1.4 km | 0.00 | 1.00 | 0.97 (under it, in the rain) |
+
+- **The murk on the glass is graded:** it thickens and thins with that density, is pale near the top of a deck and dark in a storm's heart, and has three soft banks that rise past the canopy as you descend. It is black at night.
+- **Rain stops at the top of the cloud.** Over a storm's 41 km anvil, the old fade put rain on the glass at 48 km, in clear air.
+
+Cost, measured on the RX 540 with a cloudy disc filling the glass (5-second averages, two runs each): 32.7 ms a frame without the new lookups, 34.8 ms with them. The first version took 36.3 ms; cutting the sunward look and the low layer to two octaves of noise (the sunward look borrows this point's own fine detail) recovered 1.5 ms of that.
+
+### Fixed (2026-11-22, the weather on the canopy)
+
+- **The dark under a cloud deck was brightening the view.** The canopy's glass pass leaves the canvas in additive mode, and the weather never set it back, so the "darken under the deck" wash was *added* to the scene. That had been true since the wash was written (2026-11-03). Inside a storm, the murk summed to flat white. Found by logging every fill on a probe descent. Both now paint over the view.
+- **The weather erased the instruments.** It was drawn last inside the glass, over the HUD. Once it painted properly, a storm's heart hid the ladder, the air data and every box. The weather is outside the canopy and the HUD is projected on it, so the weather now goes on first.
+- **Weather drew with the glass's glow blur on**, a shadow blur over a full-screen fill every frame. Inside weather on the RX 540: about 21 fps before, about 30 after.
+- **Pausing during a lightning strike held the flash**, leaving the canopy pale white for as long as the pause lasted. No flash while paused.
+
+### Changed (2026-11-22, the weather has a climate)
+
+Astra asked: "weather patterns are modeled, or just faked?" They were faked: one noise field, cut at one level per world, so a desert coast was as likely to be overcast as an ocean. She wants them modelled because the data is to be sold to the planners of new stations. This is slice 1 of that plan (claude/climate-and-met-data.md): the model.
+
+- **The cut now depends on where you are**, by a planet's general circulation (`Weather.climateWet`, every number in `Weather.K` as `CL_*`):
+  - **The rain belt** sits under the sun and follows it north and south with the seasons, part of the way.
+  - **The dry belts** at about 30° are where the risen air comes down dry, which is where deserts sit.
+  - **The storm tracks** sit at about 57°.
+  - **The poles** are dry, cold air holding little water.
+  - **Open water** feeds cloud, and high inland ground starves it.
+  - **Slopes:** the prevailing wind (trades from the east in the tropics, westerlies in the middle latitudes, easterlies at the poles) is lifted up a windward slope and rains, then comes down the far side dry, the rain shadow.
+  - **Ice** holds little water.
+  - **Storms** start more readily in the wet belts.
+- **Seasons are real:** the rain belt moves with the sun's latitude on the world at that moment. A world tilted 31° has a sun that wanders from −31° to +31° over its year.
+- **Each world keeps its cloud.** The multiplier is divided by its own mean over the sphere, per world, so climate moves cloud around a world without adding or taking any. The generator's cloud column still means what it was tuned to: the worst world is 1.5% off.
+- **Who has none:** giants, twilight worlds and airless rock keep the old behaviour exactly.
+- **One sky, everywhere:**
+  - the shader runs the same function from the same numbers (`climateWet` and `elevFixed` in gl.js, with `uClimate` and the season from `uSunDir`);
+  - port forecasts, the weather aloft and the ground sky pass the climate to `sample()`.
+  - The picture, the forecast and the climate record a sounder will build all agree.
+- **Measured** (tools/measure-climate.js, 60 systems), cloud by |latitude| band (0–13°, 13–26°, 26–39°, 39–52°, 52–65°, 65–78°, 78–90°):
+  - terran worlds: 41%, 22%, 13%, 31%, 28%, 12%, 7%. Wet tropics, dry subtropics, cloudy storm tracks, clear poles. Sea is 27% clouded against land's 21%.
+  - Ocean worlds run 54% at the equator down to 11% at the poles.
+  - Deserts and iceballs barely change: their cloud column is too low for the cut to move.
+
+**Saves.** Nothing is stored. The weather at any hour is still a pure function of the world, the place and the time, so the same hour has the same sky. But it is a different sky from before: cloud has moved off the dry belts and onto the rain belt and storm tracks.
+
+**Tests.** New climate.test.js (19 checks, core group):
+- the belts' order, and the rain belt following the sun;
+- sea wetter than high land, windward wetter than lee;
+- the prevailing wind's direction by latitude;
+- every world's mean multiplier is 1 (55 worlds);
+- no climate term on giants, twilight worlds or airless rock;
+- seasons span the tilt;
+- the shader, read as source:
+  - it carries the same function;
+  - all 21 climate numbers it uses exist in `Weather.K`;
+  - both the cloud cut and the storm threshold read it;
+  - the season is the sun on the spin axis;
+  - gl.js hands it the world's own mean.
+
+weather.test.js: its source check of main.js's `Weather.overhead` call now expects the system to be passed (64 pass).
+
+**Seen in the real build** (tools/probe-climate.js, X:\Shared_AI\climate). Over Mirven II's north storm track the climate reads wet 1.38, the forecast at the sub-ship point reads cloud 0.90, and the picture there is cloud. Over the equator the climate reads wet 1.72, with clear sky under the ship at that hour, and the picture is clear there too. The shader compiles and draws.
+
+### Fixed (2026-11-22, ice caps on the surface map read as untextured)
+
+Astra: "the ice caps read as untextured." The planet picture gets its texture from the sun across the relief and from ground-detail mottling, and a flat map has neither, so a cap came out as one flat white. Worse, the relief the map did have was only applied to dry land, and a polar cap on a wet world is nearly all sea underneath, so the cap had no texture at all.
+
+`Survey.surfaceMap` now adds two terms from the same elevation field the planet is painted from:
+- **Hillshade:** the slope toward a light from the north-west, from the field a quarter-cell east and north of each cell's centre, within ±25%.
+- **Mottle:** the field at six times the frequency, the grain of sastrugi and melt ponds. It is stronger on ice and faint on rock. Ice also turns a faint blue-grey where the mottle runs low, as the picture's ice does.
+
+Pack ice over a sea now counts as ground for this, so it gets the texture too. Land gets the same hillshade and so reads with more relief. The land, sea and ice classes are unchanged, so coastlines don't move. One surface map now takes about 260 ms to build, once per world.
+
+**Seen in the real build** (tools/probe-globe.js, X:\Shared_AI\globe): Mirven II's north polar cap, looked down on from the globe, is mottled and shaded under both the resources and the magnetic layers.
+
+### Added (2026-11-22, the scanner map on a globe)
+
+Astra: "can we wrap the gridmap onto a globe?"
+
+- **A GLOBE / FLAT button** sits in the scanner's top row, after INTERIOR, and O does the same. It works on the RESOURCES, MAGNETIC and BOTH layers; GRAVITY and INTERIOR are cuts and stay as they are. It starts FLAT.
+- **Everything on the map is on the globe.** The flat map is drawn whole at 1x into an offscreen texture (4 px a cell), with the readouts, surface, graticule, deposit glyphs, magnetic rings, field lines, drones, outposts, digs, ground track and ship. That texture is then wrapped onto a sphere, so the globe can never show something the map doesn't, or miss something it does.
+  - The globe is drawn orthographically, as seen out of a window, with the limb darkened and the edge lit like the cutaways'.
+  - Shapes the flat map has to stretch come back true on the globe: a province's ellipse becomes the circle it is.
+- **Turning it:**
+  - The arrows turn it 15° a press: → brings the east round to face you, ↑ tips the north toward you.
+  - SWEEP FOLLOW keeps the ship's ground point facing you.
+  - The centre longitude and latitude are written under the globe.
+- **Pointing works.** The hover readout and click-to-pin project back through the sphere to the cell under the pointer, and the selected cell is marked on the globe. Off the disc, or on the far side, nothing is picked. In the probe, 187 points sent to the screen and back landed within 3e-12°. The probe checks that projection, not a real click.
+- **Cost.** The pixel-to-texel table is cached per view and only rebuilt when the view moves half a degree. A still globe costs one pass over the table a frame. In the probe window (not representative hardware), a still globe frame took about 25 ms and a turning one about 35 ms.
+
+**Saves.** Unchanged: GLOBE is a screen setting, like SURFACE.
+
+**Seen in the real build** (tools/probe-globe.js, X:\Shared_AI\globe). Mirven II with its northern two-thirds swept and TRUE COLOUR on. O and the arrow keys were pressed through the game's own key handling.
+- On the resources layer, the ore-rich peninsula shows in radar colours on its own land.
+- Turned east and tipped north, the ice cap's edge rings the pole.
+- On the magnetic layer, the two province highs sit on their land as circles, and the unswept south stays dark.
+
+### Added (2026-11-22, the surface under the scanner's readout)
+
+Astra: the scanner readout should be superimposable on a map of the surface, switchable, and shown only where you've flown.
+
+- **A SURFACE button** at the top of the scanner's side panel, beside LEGEND, cycles OFF → TRUE COLOUR → OUTLINE. V does the same. It starts OFF.
+  - **TRUE COLOUR** is the planet as it looks from orbit, dimmed under the readout: its biomes, seas and ice caps, with a little relief.
+  - **OUTLINE** is flat land, sea, ice and lava.
+  - A giant has no surface, so it shows its cloud colour in latitude bands.
+- **Only where you've flown.** The surface fills in on the cells your scanner or magnetometer has swept. Unflown ground stays the dark checker.
+- **The readout goes over it part-transparent**, so both show: the magnetic ramp at 60% of its old strength and the resource colours at 65%. "Flown, nothing worth digging" no longer paints over the ground.
+- **Coastlines and ice edges are drawn on top of everything** as a thin pale line, so the shape of the land survives any readout.
+- **One coastline.** `Survey.surfaceMap` asks `Weather.terrainAt`, the same arithmetic the planet picture is painted with and the same one the ground map's water came from. Its coasts are the coasts you see from orbit, and a deposit on the map sits on the land it's on. It is cached per body and nothing is saved.
+
+**Saves.** Unchanged; the switch is a screen setting.
+
+**Tests.** magnetics.test.js gains 3 checks (25 in all):
+- the surface map's land, sea and ice agree with the ground map's in all 55,548 sampled cells;
+- it is cached;
+- a giant gets bands.
+
+**Seen in the real build** (tools/probe-surface.js, X:\Shared_AI\surface). Mirven II, terran, has its northern two-thirds swept. Coastlines run under the magnetic layer, the two ore provinces' highs sit on the land patches the resources layer shows ore on, and the south stays blank. V was pressed through the game's own key handling.
+
+### Added (2026-11-22, planetary interiors slice 4: the INTERIOR cutaway)
+
+The plan's slice 4 (claude/planetary-interiors.md). Astra's decision 6 makes this its own scanner layer, a picture of the rock, apart from the GRAVITY slice, which is a picture of the field. Open it with the INTERIOR button or the I key. 1/2/3 pick the XY/YZ/ZX cut, as on the gravity slice.
+
+- **It draws what your kit can tell apart, never the true interior** (`Interior.measured`). Layers the instruments can't separate merge into one band, so a boundary you haven't measured leaves no edge behind to give it away. A world nothing has read is one hatched band marked "unmeasured".
+- **What each gravimeter grade adds:**
+  - grade 1: the core, against everything above it;
+  - grade 2: the crust, or on an icy world the low-density lid, "ice, perhaps water";
+  - grade 3: water under the ice, and the mantle's state (convecting, solid, or a magma ocean);
+  - grade 4: the inner core inside the outer.
+  - On a giant: grade 1 shows fluid over a core, and grade 2 separates the envelope from the deep fluid.
+- **Depths carry their error:** ±25%, 15%, 7% and 3% of the depth at grades 1–4, e.g. "5,250±150 km". Depth is pinned far more tightly than the gravimeter's sideways resolving length, because a whole shell of rock pulls together. The drawn edges are as soft as that error.
+- **The magnetometer adds, once a quarter of the world is swept:**
+  - the Curie depth, as a dashed ring;
+  - a liquid core, but only where a dipole and the interior's dynamo agree. Until slice 6 rebuilds the field from the core, a rolled field over a dead core is not claimed as liquid;
+  - an induced field on an icy moon of a magnetised giant. Something under the ice conducts, so the ocean shows at grade 2 (Europa, in our own sky).
+  - A magnetometer alone draws no boundaries, because only gravity sees density steps. It still gives the Curie depth and its notes.
+- **Contacts on the cut:** gravity contacts as warm rings (violet for a low) and buried magnetic highs as cyan diamonds, each at the depth it was read at. They fade when the cut barely touches them.
+- **The panel** lists the layers with their depths, what the field says, and what the next instrument up would add.
+- **The look:** the cut edge glows like the other cutaways', and the axes are arrows. Layers too thin to see, such as a 75 km crust on a 9,600 km world, are drawn at least 3 px thick, and the footer says so.
+
+**Saves.** Nothing new is saved: it is all computed from the seed and the survey record.
+
+**Tests.** New interior-cut.test.js (19 checks, ground group). Over 598 worlds:
+- with no instrument, every world is one unmeasured band, and a magnetometer alone draws no boundaries;
+- every edge drawn is a true edge, with no two neighbouring bands alike, and a finer grade never shows fewer layers;
+- each grade adds what it should;
+- the Curie depth appears only once a quarter is swept, and lands within 1 km of the truth;
+- a liquid core is claimed only where dipole and dynamo agree (15 worlds), and never over a dead core (30 worlds);
+- the induced ocean shows at grade 2 on all 20 ocean moons;
+- a finer grade quotes a smaller error, and the core top lies within its quoted error.
+
+**Seen in the real build** (tools/probe-interior.js, X:\Shared_AI\interior):
+- Mirven I, a desert world: rock over a core at grade 1, 5,250±1300 km down; crust, mantle and core at grade 2; at grade 4 the crust (75±2 km), a convecting mantle, an outer core and a solid inner core.
+- Mirven VI: envelope, conducting metallic hydrogen, and a core.
+- A magnetometer alone: one hatched disc, with the Curie depth noted.
+- The starting system has no ocean moon, so the induced-ocean case is checked by the test only.
+
+**Fixed on the way:** the hatching left the lower-left of the disc bare. Its lines now start far enough left to reach that edge.
+
+### Fixed (2026-11-22, a stale test: escorts were counted as patrols)
+
+The full suite on ship AI slice 5 (full-suite5) was 143 of 144 green. The red one was economy.test.js, "the most permissive systems are patrolled thinner than the strictest". It counted every police-kind ship in `sys.patrols`, and slice 5's escorts are stored there too. Across its 150 seeds, the strictest third has 2.41 real patrols per faction and the most permissive 1.73, so the rule still holds. But escorts run 0.92 per faction against 2.05: Syndicate heavies ride with runners, and the permissive systems are the busy ones. That tipped the total over. The test now leaves out ships that are `escorting`, since they go where their charge goes rather than patrolling. economy.test.js: 208 pass. No game code changed.
+
+### Changed (2026-11-22, planetary interiors slice 3: the magnetometer hears the interior)
+
+The plan's slice 3 (claude/planetary-interiors.md). The magnetic anomaly used to be the ore-grade map: every metal province was a bump, whatever it was made of and however deep. It is now built from the interior's bodies (`survey.js magSources`, `magMap`).
+
+- **Only what can hold a magnetisation is heard.** Iron reads full strength, sulphide half, the rare-metal mixes faintly (0.15). Fissile, ice and salt are silent. Nothing below the Curie depth is heard, because rock that hot can't stay magnetised.
+- **A province** is ore spread through the crust over its whole patch, so it reads as a broad rise the width of the patch. An iron province reads what the old ore anomaly read at its centre.
+- **A buried body** is a lump. Its high is about as wide as it is deep, and its strength falls as (size/depth)³, the dipole law. A deep body is much quieter to a coil than to a gravimeter, which loses only the square. A high is never narrower than one cell, so it can't fall between cell centres.
+- **Remanence.** On a world whose dynamo has died, 3–7 broad, faint patches of old field are frozen into the crust (like Mars's southern highlands). No ore lies under them. They are on the map but never in the contact list.
+- **Measured before switching** (tools/measure-magnetics.js, 120 systems, 2,177 worlds with ore). Of 7,598 province highs:
+  - 3,564 keep their strength (or never showed);
+  - 3,851 weaken, mostly rare-metal and sulphide provinces;
+  - 183 vanish, all of them below the Curie depth on hot worlds.
+  Of 2,918 buried bodies, 924 now raise a high of 500 nT or more, which the old map never showed.
+- **The magnetometer has a contact list**, beside the gravimeter's (`Survey.magContacts`, `describeMag`). On the MAGNETIC layer it replaces the deposits list as MAGNETIC HIGHS. It shows readings only (decision 2): "+5.2k nT · about 68 km down" for a lump, judged from the width of its high; "+11.4k nT · broad, 190 km wide, shallow" for a province. It never names a composition.
+  - It lists only highs over ground the coil has swept, loudest first, and nothing under 100 nT.
+  - A province the spectrometer also reads is explained, as on the gravimeter. A buried body never is, and gets a "!" and a warm colour.
+  - Click a row to pin it and walk the map there.
+- **Rings on the map** mark each high: warm if unexplained. A province also gets a dashed ellipse the size of its patch, stretched east–west toward the poles as the patch itself is on this projection.
+- **The cell readout** adds the rock's own part of the field, e.g. "+3400 nT", after the total.
+- **The panel** says "no dipole: only what the crust holds", and "remanent crust: old field frozen in the rock" where that applies.
+- **Units.** 1.0 on the field scale is 50,000 nT (`Survey.NT_PER`), an Earth-strength polar field.
+
+**Fixed on the way: the scanner map at 1x lost everything drawn on top of it.** `scanSX` takes the short way round the seam. Its test, `dx > nLon - vc`, becomes `dx > 0` when the whole world is in view, so every column but the first was thrown off the left edge. At 1x that meant no deposit glyphs, no meridians, no longitude labels and no field lines, and it had been that way since 1.3.1. It showed up when the magnetic highs wouldn't draw. Now a column moves to the left only when it is nearer there than off the right edge.
+
+**Saves.** Nothing stored changes: the field is computed from the world, and a magnetometer record still marks only which cells were swept. An old save sees the new highs over ground it has already flown.
+
+**Tests.**
+- New magnetics.test.js (22 checks, ground group):
+  - building the field moves nothing, and the same seed gives the same field;
+  - every source is magnetic and above Curie; ice, salt, fissile and giants are silent;
+  - a buried body reads as (size/depth)³, and its high stands over it (145 of 145);
+  - deeper bodies of the same make are quieter;
+  - remanence appears only where the dynamo has died, and is never a contact;
+  - contacts are readings only, loudest first, none under the floor, none over unswept ground, and buried ones are never explained.
+- magnetometer.test.js loads the interior. A "dead rock with anomalies" is now one with a magnetic province; a "silent" world is one with nothing magnetic in it and no remanence.
+
+**Seen in the real build** (tools/probe-maghighs.js, X:\Shared_AI\maghighs). Mirven I b, which has no dipole, shows six highs: five provinces and one unexplained buried body at +5.2k nT, about 68 km down. Mirven IV shows its remanent patches as faint blue washes under two province highs.
+
+### Changed (2026-11-22, planetary interiors slice 2: the gravimeter reads lows, and giants hold no lumps)
+
+The plan's slice 2 (claude/planetary-interiors.md). Astra's decision 3: buried ice and salt read as dips.
+
+- **Gravity is signed** (`gravity.js anomAt`, `surfaceSignal`, `slice`, `contacts`). A body lighter than the rock around it is a mass deficit: its reading is negative, and a contact carries `low`. The instrument's sensitivity is to the size of a reading, so a −131 mGal low shows on a grade that reads to 70. Contacts are ordered by size, high or low.
+- **Light bodies.** `Gravity.lightBodies`, all hashes, no draws:
+  - **Buried ice:** the poleward patches the water map already laid on dry worlds, each now with a depth (0.5–12 km) and a size.
+  - **Salt:** 0–2 evaporite bodies under desert worlds only, 1–20 km down.
+  - Never inside an ice shell, where ice in ice is no contrast.
+  - Over 24 systems: 156 ice and 27 salt bodies, and 181 of them read as lows at grade 4.
+- **A reading, not a verdict** (decision 2). The line says "-131 mGal low, 8.3 km down, 10 km across, needs a drilling team", and its head says "buried", the same as any body no spectrometer can see. The game never says "ice".
+- **What can explain a low.** A shallow ice low is explained by a kit that reads water, because the water map shows that patch. Deeper ice and salt are never explained.
+- **The slice shows dips.** The lateral-anomaly picture used to clip everything below zero. Lows now draw cold, violet darkening into the blue well, the opposite of the warm heat a dense body raises. Their contact rings are violet.
+- **The footnote** no longer says "something heavy": a high is mass, a low is mass missing.
+- **A giant holds no lumps.** The ground map lays provinces and buried bodies on every world, and the gravimeter used to pass them all on, so it read ore inside a gas giant's hydrogen. Giants now have no gravity sources, matching the interior. A giant's page says so: "No rock here to hold a lump." At grade 4, an empty world no longer suggests a finer instrument.
+- **One list.** `Interior.of` now takes its masses, ice and salt included, straight from `Gravity.sourcesOf`, with the same hashes slice 1 used. The interior and the gravimeter can't disagree about what is down there.
+
+**Tests.**
+- interior.test.js gains 8 checks (28 in all):
+  - giants have no sources;
+  - ice and salt are sources, salt only under deserts, and never in an ice shell;
+  - lows read negative and are flagged;
+  - the line says "low";
+  - shallow ice is explained by a water reading, salt and deep ice never;
+  - the slice dips below zero (-36.7 mGal deepest in the sample);
+  - the interior's list is exactly the gravimeter's.
+- gravity.test.js: "nothing below the rung's sensitivity" now means the size of the reading, high or low (44 pass).
+
+**Seen in the real build** (tools/probe-gravlows.js, X:\Shared_AI\shots-gravlows). On Mirven II b the strongest low reads −131 mGal, and its violet ring sits at the limb. Mirven VI, a gas giant, reads nothing.
+
+### Added (2026-11-22, the ship scanning you is highlighted)
+
+Astra: "when scanned by another ship, like a warden, that ship should be highlighted."
+
+- **On the glass.** A patrol coming in to scan you (in inspect, not yet done, within 300 km), or a warship that has ordered you to heave to, is boxed in amber with a second set of brackets outside the first that pulse. Its label reads "SCANNING YOU · interceptor · 41.95 km". Amber because it is neither friendly green nor hostile red: it is the one ship looking at you.
+- **In the contacts panel** it reads SCANNING YOU, or HEAVE TO ORDERED, in amber.
+- **Labels keep clear of the outer brackets** (`Render.placeHoloLabels` takes a `pad`), both its own name and a neighbour's.
+- Tests: panels.test.js gains two checks (15).
+
+### Fixed (2026-11-22, the contacts panel: rows that ran into each other, and everyone "escorting")
+
+- **The panel is as wide as its longest row.** "The Notary (Syndicate enforcer) 2,500 km ATTACKING" pushed its status onto a second line, which the panel's height did not allow for, so it ran into the row below. The panel now takes the width its rows need, from 380 px up to half the glass.
+- **Everyone was "escorting".** That was the last word for any awake ship with no other status, so a port tug and a navy cutter answering an alarm both said it. A tug or tender now says "standing by", a navy ship on a job says what the job is, and anything else says "keeping watch". Mercenaries and the new escorts still say "escorting".
+
+### Added (2026-11-22, ship AI slice 5: navy and Syndicate doctrine)
+
+claude/ship-ai-profiles.md section 7, item 5. Astra's calls:
+- protection: "both", live near you and in the prices and gossip;
+- escorts: heavies ride with runners, and the navy escorts liners;
+- grudges: "a hit squad comes";
+- the navy at a hit platform: "subdue and question anyone near the platform who could've done it. They will attempt to disable, but they will not hesitate to escalate their use of force if resisted."
+
+**Escorts** (`generate.js buildEscorts`, its own seeded stream, so nothing else in a system moves):
+- **Runners.** A Syndicate runner working a lawful fence takes a heavy with her 15% of the time in a clean system, up to 40% in a crooked one.
+- **Liners.** In an empire system with law in its sky, 30% of liner runs fly with an escort: the navy's own warship if the system has a navy, otherwise a police interceptor ("Shepherd 14").
+- **The outlaw cap still holds.** Outlaws never outnumber the law in lawful space, so liners get their escorts first and heavies ride only within what that leaves. Names never repeat: once a name list runs out, the next is numbered ("The Underboss 2").
+- **An escort and her charge are one flight** (`ShipAI.orgOf`, any `escorting`), and a woken escort keeps watch rather than leaving her charge to scan you.
+
+**Escorts actually alongside** (`Sim.railState` / `escortState`). An escort used to fly her own copy of her charge's timetable, a minute behind, on a path shaped by her own drive. Measured over 30 systems, that put her a median **16,500 km** off her charge and up to 200,000 km. The existing mercenary escorts had the same problem (median 18,700 km). An escort's position is now her charge's position at that moment, 6 km astern and 2.5 km to one side: **7 km every time**, still worked out from the clock. This also fixes the mercenaries.
+
+**The hit squad** (`hunters.js`, a third ledger, `G.grudge`, saved):
+- **What starts it.** A REPORTED wrong against Syndicate traffic (their runners, whatever her papers say, plus heavies, enforcers and their systems' traffic) adds points: hold-up 20, assault 12, kill 40, killing a heavy 60. An unidentified hull (the shroud) gives them no name.
+- **When they come.** At 40 points the word goes upstairs ("That was Syndicate traffic. Somebody upstairs will hear about it."). Two days later, in **any** system, half an hour after you arrive and once you are out of dock, two enforcers drop out of slipspace 2,500 km behind you: "Somebody upstairs would like a word. They are not here for a tithe." Three come at 120 points. Names: The Auditor, The Notary, Final Notice, Courtesy Call, Account Closed…
+- **It never fades.** Leave a system and the next one sends them again. Kill them and, if it is reported, the grudge grows.
+- **A fixer squares it** ("Can you square me with the people upstairs?") for 3,000 cr + 150 per point. That clears the grudge and their warrant, but not your standing with them. A fixer who otherwise won't deal with you will still take this one errand. Nobody carries the message for a marked pilot. The fixer's "is anyone looking for me?" now covers it.
+
+**The navy answers a platform** (`milsats.js`):
+- **The alarm.** A defence platform that is hit, or destroyed, raises an alarm. The nearest warship answers, the navy's own first even when a police cutter is closer, and flies to it.
+- **The order.** At the scene she looks for anyone within 3,000 km. Finding you: "You there - heave to for questioning about the attack on DP-1 Coldwater Relay." Hold position and she comes to you. Gone, and she finds nobody and stands down.
+- **The questions.** Inside the scan's own range (60 km), matched for 4 s:
+  - transponder on, they already know it was you, and fine you on the spot if you can pay;
+  - running silent, guns fired within 15 minutes of the attack are "still warm", and you are charged by name;
+  - cold guns, and you go with a note on the file.
+- **Subdue.** Run (drive lit and the range opening for 15 s, or 25 km further off than when she called) and she opens disabling fire: guns, no missiles. She holds fire once your hull is under 35%, and comes in to talk at gunpoint.
+- **Lethal.** Fire on her at any point and the gloves come off.
+- **The platform holds its fire** while she has you under orders, unless you shoot it again.
+- **Warm guns.** Firing a weapon now stamps `G.lastFiredAt`. A mining laser doesn't count.
+- **Not yet:** questioning NPCs found near a platform. Today only your guns can hit one.
+
+**Protection** (`aggression.js protection`, `tithe.js`, `dialogue.js`):
+- **Live near you.** In a Syndicate system, a Syndicate patrol passing an independent hull (one from a port that isn't theirs, and not a runner) collects 4% of her cargo's value: "The Patron collects 45,850 cr of protection from the Fenwick Wain - 'the overboss thanks you for your custom'". A captain with enough greed and nerve, and a gun, refuses and is roughed up: 30% of her hull, never below a fifth, and she runs. Each collector collects once per 15 minutes, and each hull pays once a week.
+- **In the prices.** An independent port in a Syndicate system passes the cut on: 3% dearer to buy from, 3% meaner to sell to.
+- **In the gossip.** "The overboss's collectors take four in the hundred off every independent hull here," or, after someone has refused, "They are still patching her drive housing."
+
+**Found by the probe, fixed** (tools/probe-doctrine.js, shots in X:\Shared_AI\shots-doctrine):
+- **Shot to pieces while doing as told.** Sitting still as ordered, the probe's ship was destroyed by the platform it was being questioned about. Fixed: the platform holds fire while the warship has you under orders.
+- **Held still and shot anyway.** A navy cutter needs about three minutes to close 60 km, and the first version allowed 90 s before "failure to heave to". Then the range opening because *she* drifted was being counted as *you* running. Fixed: running now means your drive is lit and the range is opening.
+- **Questions that never came.** The first questioning range was 2 km, but the law holds 45 km off to scan, so she backed away and never asked. Now the scan's own rule applies.
+
+**Tests.**
+- test/doctrine.test.js (53 checks, combat group):
+  - escorts add nothing else and stay in their lanes;
+  - the grudge, the squad's timing, dock-waiting, size and arrival, and settling it;
+  - the alarm's choice of ship, the order, holding still, drifting versus running, subdue and holding fire (with a control that fires), the three verdicts, lethal, nobody found, no law at all, and the platform holding its fire;
+  - protection collected, once at a time, once a week, refused by the right captain;
+  - the price cut in a Syndicate system, and nowhere else.
+- **Three older tests had frozen the old world, and were updated to say so.**
+  - turncoats.test.js caught real breaks (outlaws outnumbering the law, a duplicate name), fixed in the code.
+  - tithe.test.js asked about a lawful port while passing a Syndicate system as the system; it now checks both cases.
+  - syndicate-fleet.test.js said heavies fly only in Syndicate systems; heavies riding with runners are counted on their own.
+
+### Added (2026-11-22, planetary interiors slice 1: one interior per world, data only)
+
+Astra brought the plan (project doc claude/planetary-interiors.md): "make the magnetic field of a surveyed planet correspond to the rest of the planet's features." Until now gravity knew a core and the magnetometer knew a dipole, and the two had never been introduced. Slice 1 builds the one interior that every instrument will read. **Nothing reads it yet, so nothing in play changes.**
+
+**Decided with Astra today:**
+- The field follows the interior: the dipole is rebuilt from the core in slice 6.
+- A contact line shows readings only. A "probable X" label unlocks with better kit or Guild standing.
+- Buried ice and salt read as dips on the gravimeter.
+- There is a Curie depth: below it rock is too hot to stay magnetised, so iron there is heavy on the gravimeter and silent on the coil.
+- A drill confirms what a body is made of.
+- The cutaway is its own scanner layer, INTERIOR.
+
+**`src/interior.js`, `Interior.of(body, sys)`** (new). Pure and seeded from hashes, with no rng draws, cached per body. It gives each world:
+- **Layers, outside in:** crust (or an ice shell, with a water ocean under it where tides keep it warm), mantle (convecting, solid, a magma ocean, or water or solid ice), outer core and inner core. Giants get an envelope, metallic hydrogen or an ionic ocean, and a rock-and-ice core.
+- **The core is gravity.js's own.** `rc` and `kc` are taken from `profileOf` unchanged, and the new layers are names on that same two-density profile, not extra weight. Giving the crust its own density would have moved g, and every gravity contact with it, on every world.
+- **Heat:** from type, size (a big world keeps its heat) and tidal kneading (a moon of a giant). Heat decides how much of the core is still liquid. Earth-like heat gives an inner core about a third of the core's radius, close to Earth's.
+- **A dynamo** needs a liquid outer core at least 0.08 of the radius thick, and a dynamo number (shell × heat × spin) of at least 0.4. The spin weights are the old roll's (×1.2 fast, ×0.7 slow, ×0.6 tidally locked). A magma ocean is nearly as hot as the core under it, so little heat leaves the core and a molten world's dynamo is weaker (×0.6). Giants always have one. `drive` (0–1) is how hard the dynamo runs. It is not yet a field strength: slice 6 turns it into one using buildMagnetospheres' own draws.
+- **The Curie depth** comes from type, shallower on a hotter world: about 19–43 km on terran worlds, 1–6 km on molten ones, and through the shell into the rock on icy ones.
+- **Old magnetised crust** (`remanence`) on some worlds with no dynamo, the way Mars has patches.
+- **Every mass, tagged with what it is made of:** each gravity source (provinces, fissile hotspots, buried bodies), plus the buried ice the water map already knew about, which now gets a depth and a size.
+  - Fissile hotspots are fissile-bearing.
+  - A body whose rare-metal share is over 0.55 is heavy rare-metal. That is the same test grade IV uses for "dense for its size", so the two can't disagree.
+  - The rest are iron-nickel (60%) or sulphide.
+  - Ice is lighter than the rock around it. Ice inside an ice shell is no contrast, so it isn't listed.
+  - Each mass records whether it lies above the Curie depth and could be heard by a coil.
+
+**Tuned by measuring, over 2,576 worlds in 120 systems** (`tools/measure-interiors.js`). The first guesses gave desert worlds a field 1% of the time (17% today) and molten ones 98% (15% today). After tuning:
+
+| type | field today | dynamo |
+|---|---|---|
+| terran | 52% | 55% |
+| ocean | 54% | 57% |
+| tundra | 35% | 38% |
+| desert | 17% | 19% |
+| molten | 15% | 40% |
+| rocky | 17% | 0% |
+| moons, iceballs | 1–9% | 0% |
+| giants | 100% | 100% |
+
+The shares now roughly match today's, but they come from the planet instead of a dice roll. So the worlds that have one aren't the same worlds: about two-thirds of terran and ocean worlds agree. 83 worlds with ports would gain or lose a field when slice 6 lands, and each will be named in its changelog entry.
+
+**Small additions to survey.js:**
+- `groundMap` keeps its buried-ice patches as `buriedIce`. Nothing in survey.js reads them, so the maps are unchanged.
+- `typeKey` is exported, so the interior and the ore table agree on what a world is.
+
+**A seam found, not yet fixed:** `Gravity.sourcesOf` lists ore provinces and buried bodies on gas and ice giants too, so the gravimeter can read solid lumps inside a gas giant. The interior gives giants none. Fixing gravity is slice 2's job, when sources get signed.
+
+**Tests.** test/interior.test.js (20 checks, ground group):
+- The same seed builds the same interior, and asking for one changes no body and no system.
+- The profile is gravity.js's own.
+- The layers tile each world without a gap.
+- Every rocky dynamo has a liquid outer core, and every giant has one.
+- Every gravity source on a solid world is in the interior, with a composition matching the grade IV tell.
+- Nothing below the Curie depth is magnetic.
+- Earth-like worlds often have a dynamo, and dead rock and moons rarely do.
+
+packed (12), packed-browser (16), survey (44), gravity (44), magnetometer (21), magnetosphere (20) and ground (36) still pass.
+
+### Changed (2026-11-22, no name over a name: ship labels and the contacts panel keep clear)
+
+Astra: "build the no overlap rule in." The no-overlap rule the dashboard screens and panels already follow now covers the names on the glass and the contacts panel too. The screenshots showed three problems: two ships 20 px apart printing their names through each other ("Warden 15 / interceptor" through "Tallow Lighter / shuttle"), a cop's name written across the speed readout, and the CONTACTS box sitting on the heading tape.
+
+**Ship and target names** (`Render.queueHoloTarget`, `drawHoloTargets`, `placeHoloLabels`):
+- **Placed together.** The boxed targets (nav lock, dock target, every ship awake) are queued for the frame and placed in one pass. Hostile ships go first, so they keep the spot beside their own box.
+- **Every ship's box is reserved first,** so no name can land on another ship's box.
+- **Where a name goes.** It tries beside its box, then the other side, then above and below, then rows further out. It takes the first spot clear of other ships' boxes, other names, the cockpit's readouts, any panel on screen and the planet and port names.
+- **A moved name gets a thin line back to its box,** so you can still tell which name belongs to which ship.
+- **No change when nothing is crowded:** a lone name sits exactly where it always did. Off-screen targets keep their edge arrows.
+
+**The contacts and interdiction panel** (`Render.freeSpot`):
+- **Off the instruments.** In the cockpit it now takes the first spot that doesn't cover an instrument or another box: where it was, then beside the heading tape, then under it.
+- **Kept off the bank arc too.** The cockpit's list of instrument areas now includes the bank arc, which the role panel already avoided. The contacts panel's first fallback spot under the tape would otherwise have covered it, and planet and port names now keep clear of the arc as well.
+- **If nothing is clear,** it stays where it was.
+
+**Tests and probe.**
+- test/panels.test.js now has four more checks (13 in all). Four boxed ships close together, with one beside the speed readout, end up with no name on another name, another ship's box or the readout. A lone name stays where it was, and one at the edge of the glass flips to the other side rather than running off it.
+- The crooked-law probe, re-run, shows Warden 15's name moved to the far side of her box and the Tallow Lighter's on hers. The contacts panel now sits clear of the tape and the bank arc, under the cargo box.
+- airdata.test.js (73) and cockpit.test.js (244) still pass.
+
+### Added (2026-11-22, ship AI slice 4: the crooked law)
+
+The fourth slice of the ship AI (claude/ship-ai-profiles.md §3 and §7 item 4). Until now, whether an inspector took a bribe was a dice roll on the system's corruption. Now it depends on the inspector herself: her own probity (which the system's corruption pulls on but doesn't set), and whether anyone honest is watching.
+
+**The scan** (combat.js `resolveScan`):
+- **Laxity.** A crooked cop searches less often (× 0.6), and an undisciplined one less again (× 0.7–1.0).
+- **The quiet word.** When contraband turns up, a crooked inspector takes a bribe only if no other lawful patrol is within 30,000 km. An honest one never does, in any system. A crooked one with a colleague in sight writes it up like anyone else. This can now happen even in a clean system, where before nobody ever took a bribe.
+
+**The shakedown** (Astra: pay, refuse or report). In a bought system (corruption 60 or more), a crooked cop alone with you wants an "inspection fee" whether your hold is clean or not. That's about 3% of your cargo's value plus 2% of your credits, scaled by her greed, and never under 80 cr.
+- **The INSPECTION FEE panel** shows her ask and a countdown. Time runs at 1× while she waits.
+- **C pays.** She waves you on, and the system gets a little more bought.
+- **X refuses.** She searches you properly with no bribe on offer. If she finds nothing, she cites you anyway for "an obstructed inspection" (60–240 cr, by her greed). Saying nothing for 25 s counts as refusing.
+- **Z reports her.** This is a gamble on someone straight being left to hear it. The odds are better when an honest cop or the navy is in the system, and worse the more bought the system is.
+  - **Upheld:** she is recalled and stays off the lanes for a month, even across arrivals and reloads (`G.suspended`), and your standing with her force rises by 2.
+  - **Not upheld:** your standing with her force drops by 6, and you're marked for 30 days (`G.troublemaker`). Every crooked cop in that system searches you every time.
+
+**On the lanes** (aggression.js, Astra's three targets):
+- **NPC traders.** In a bought system, a crooked cop with no colleague in sight shakes down the traders she scans ("Warden 15 holds the Tallow Lighter for an 'inspection' - 840 cr changes hands and she waves her on"). The trader resents it (her mood takes a "robbed" event). A cop does this at most once every 15 minutes.
+- **Syndicate runners.** A greedy crooked cop (greed 0.35 or more, roughly the top sixth) will lean on the Syndicate's own runners, and the Syndicate answers as if she'd fired on one.
+- **The straight cop.** A cop with probity 0.7 or more, in a system that isn't bought, runs a Syndicate runner down: "I know whose ship this is. Your friends do not pay me."
+- **The dock talks.** A cop who has taken money more than once, or from the mob, gets named in dock gossip (`G.onTheTake`).
+
+**Saves.** `troublemaker`, `suspended` and `onTheTake` are new fields, so an older career loads with none of them. No version bump.
+
+**Tests and probe.** New test/crookedlaw.test.js (35), in the combat group. tools/probe-crookedlaw.js ran it in the game at Mirven, with its corruption set to 80 for the run:
+- Warden 15 (probity 0.34) asked 180 cr. Pressing C paid it and she waved me on.
+- The second time she asked 170 cr. Pressing X refused, and she cited me 92 cr.
+- She then shook down the Tallow Lighter for 840 cr. The contacts list now says "waved on" for a trader let go like that, instead of "fleeing".
+
+### Added (2026-11-22, ships on the lanes, and working ships in the outer system)
+
+Astra: "We need more ships running around in general." Asked where it felt empty, she said on the lanes and in the outer system. For the lanes she chose both streams and passers-by, and for the outer system all four trades: ice haulers, prospectors, gas-giant skimmers and survey ships.
+
+**Why the lanes were empty.** Measured over 15 kawartha systems: about 173 ships fly in each system at any moment, and about 39 of them are out between worlds. But 89% of those had nobody else within a million km. That's because every route takes its own path between the worlds, so it's not a shortage of routes. Ordinary routes would take about 50 times the traffic to fill the gap, and every one would book berths and move markets.
+
+**Lane streams** (`Gen.buildLanes`, `Sim.updateLanes`):
+- **One lane per pair of worlds** with interplanetary trade. Each runs on that pair's busiest route, flown again by many sister ships ("Pilgrim Wain 17") spaced out along the same timetable.
+- **Busy and quiet lanes.** The 5 busiest lanes in a system run thick, with a hull about every 2.5 million km each way. Every other lane runs thin, about every 20 million km. The thin lanes are the passers-by: real ships on a real timetable that you can follow to port, rather than random spawns.
+- **Only the hulls near you are worked out.** The nearest 30 within 20 million km are shown, and only in the open middle of a crossing (8% to 92%). Near the ports, the real timetable is the traffic.
+- **They change nothing else.** Lane hulls lie off the ports they serve, so they take no berth and join no queue. They register no deliveries, so no market moves.
+- **Measured:** a ship out on a lane goes from about 1 neighbour within 20 million km to about 48. The share with nobody within a million km drops from 87% to 58%. Working out who is near costs about 1.75 ms, and it only reruns after 30 s of game time or 300,000 km of travel.
+
+**The outer system's working ships** (`Gen.buildWorkers`, `sys.workers`). These fly a two-ended loop between a home port and a work site, the same shape as your own skimmers' work orders. The time at the site is spent working. About 14 per system, about 8 of them working beyond 3 AU.
+
+| trade | works at | brings home | hull |
+|---|---|---|---|
+| gas skimmer | the top of a giant's air | hydrogen | tanker |
+| ring cutter | a giant's ring | water and ore, by the ring's ice | waste-hauler hull |
+| prospector | a belt or trojan field, among the rocks | ore, rare metals, water | shuttle |
+| ice hauler | an icy moon past the frost line | water, to the port nearest the habitable zone | tanker |
+| survey ship | the farthest world, if it's well past the frost line | nothing | shuttle |
+
+- A belt field isn't a body, so a prospector's site follows `Rings.fieldCenter` (`Sim.bodyStateAt` reads `fieldRef`), and she parks inside the field.
+- Workers lie off their home port and register nothing, the same as the lane hulls.
+
+**Like any other ship.** Lane hulls and workers fly through `Sim.trafficAll`, so they show on the scope, can be hailed, robbed, rescued and lifted, and have captains. Neither is in `sys.traffic`, so nothing that counts berths, boards or deliveries sees them. A leak never strands one, because a tow would put her in a berth she doesn't take.
+
+**What changes for an existing seed:** nothing that existed before. Routes, patrols, markets and every earlier draw are identical with lanes and workers on or off (tested). Workers draw from their own fork; lanes draw nothing.
+
+**Saves.** Nothing is saved for them. A lane hull or worker you destroy comes back after a reload, which is a known gap.
+
+**Tests and probe.** New test/streams.test.js (30), in the transfer group. tools/probe-lanes.js ran it in the game at Mirven:
+- **On lane L0** (Harrow Deep to Lantern Terminal, 240 hulls), ships within 20 million km went from 1 to 12, 11 of them lane hulls, at 57 fps.
+- **The prospector** Assay was out from Talus Field (L5) with 16 t ore and 8 t water. **The skimmer** Banded Lady was at the top of Mirven VI's air with 118 t hydrogen. **The ice hauler** Meltwater was bound for Mirven VI a with 300 t water.
+- The run held 50 to 56 fps throughout.
+
+### Added (2026-11-22, traders who turn pirate when a fortune passes)
+
+Astra: "is there a way for a non-pirate NPC to turn pirate if a juicy enough target passes?" She chose armed traders and Syndicate runners, and that a trader who turns goes back to her lane afterwards, marked.
+
+**Who can be tempted** (`ShipAI.temptation`):
+- **Traders** only if they're armed, bent (probity under 0.4) and greedy (0.5 or more). An honest captain never turns, however rich the ship beside her. The lower her probity, the less it takes.
+- **Syndicate runners** use the same rule now instead of a flat 12% a leg. Their probity only tempers their greed. Without the ship AI loaded, the old flat chance stands.
+
+**What makes a prize juicy:** what it's worth against her own hold, on a log scale. Five times her stake starts to interest her, fifty times is all of it. Her stake never counts for less than 5,000 cr, and nothing under 20,000 cr is ever juicy. An armed prize tempts half as much. A trader never turns with the law watching; a runner rarely does.
+
+**When it happens:** at most once per leg, rolled against the temptation on a seeded hash, so the same leg makes the same choice on every reload. It's only checked for ships near you, and only against a target within 600 km, which is usually you. About 4% of traffic are bent, greedy, armed traders. Beside an unarmed pilot carrying 100,000 cr they turn about 11% of legs on average, and with 300,000 cr about 19%.
+
+**What she does:** the same as a runner. She fires first ("The Coldwater Barge breaks from her lane and opens fire on you - she wants your hold"), or knocks out an NPC's drive and strips her.
+
+**Afterwards she's marked** (`Aggression.markCrime`, saved as `G.turncoats`):
+- **The law treats her as a pirate.** Every lawful cutter that sees her runs her down.
+- **Her record follows her route for 30 days.** The next cop who scans her papers chases her ("you are wanted for an assault on ..."). The record closes early if she's impounded or killed.
+- **The dock talks.** Gossip in that system names her and who she turned on.
+
+**Saves.** `turncoats` is a new field, so an older career loads with no records. No version bump.
+
+**Tests and probe.** New test/turncoats.test.js (33), in the combat group. tools/probe-turncoats.js ran it in the real game at Mirven: the Coldwater Barge (probity 0.24, greed 0.56) turned on an unarmed pilot carrying 20 t of milfuel, and Warden 15 ran her down as a pirate.
+
+### Changed (2026-11-22, outlaw numbers follow corruption; Syndicate and raiders named apart)
+
+Astra: "Syndicate ships should have a different name list. Pirate or syndicate presence should go up with the corruption level in a system, yes, but they shouldn't be a majority of most civilized places."
+
+**How many raiders** (`Gen.pirateRange`, from the system's corruption). Every system used to get 1 to 4 whatever its government (2.3 on average in clean systems, 2.9 in crooked ones).
+
+| corruption | raiders | measured mean (160 kawartha systems) |
+|---|---|---|
+| clean (under 25) | 0 or 1 | 0.46 |
+| bribeable (25 to 59) | 1 to 2, or 1 to 3 from 45 | 1.59 |
+| bought (60 and over) | 1 to 4 | 1.62 |
+
+The cap is still half the system's ports. In lawful space, raiders plus any Syndicate flagship may never outnumber the lawful guns (police, navy and capitals). A system with no law at all gets at most one. That cap is why bought systems sit near parity with their thinner police rather than at four. Pirate-band and Syndicate holds are exempt, because there the outlaws are the law.
+
+**Raiders know their crew.** Each raider carries `band`. In a band's own space it's the band's id. Elsewhere it's `free:<port>`, so the freelancers working one port fly as one crew. Before this, every raider in a system read as one band, because they all had the faction `outlaw`. shipai.js `orgOf` now reads `band`, so slice 2's "each pirate band is its own flight" is real.
+
+**Names:**
+- **Syndicate flagships** have their own boardroom-style list ("The Chairman", "The Godmother", "The Majority Holder" ...) instead of the raiders' list.
+- **Raiders** have 30 names instead of 10.
+- **No two hulls in a system share a name.** This covers raiders, heavies, police and enforcers ("Vigil 12" walks on to "Vigil 13") and tugs. It costs no extra random draw.
+- **What changes for an existing seed:** only the raiders' count, crew and names, and a Syndicate flagship's name. Patrols are generated, not saved, so a career simply meets the new ones.
+
+### Added (2026-11-22, ship AI slice 3: what a civilian does when the guns come out)
+
+The third slice of the ship AI (claude/ship-ai-profiles.md §7 item 3). Freighters and liners no longer answer a pirate with a fixed roll. Each one weighs five answers against her own situation and picks the best.
+
+**The five answers** (`ShipAI.civilScores`, `choose`): comply, dump, flee, fight, surrender. Each is scored from a base for her role, scaled by what she can see:
+- **Her situation** (`ShipAI.situation`): whether she's armed; her firepower, her mates' and the attacker's; whether she can outrun the attacker (more than 5% faster, and nobody outruns you); whether the law is near; her hull; whether she carries cargo.
+- **Her role.** A trader leans to comply or dump when the demand comes, and to flee or fight once she's hit. A liner (passengers) never fights. Her first answer to a hit is to run or strike her colours.
+- **Her mood.** Fear lifts comply, dump, flee and surrender. Anger lifts fight and halves surrender. When fear passes 0.6, she's armed and she can't outrun the attacker, she is cornered, and fight is lifted 1.6×.
+- **The law nearby** lifts flee 1.6× and cuts comply to 0.7×: help is coming, so she runs for it rather than hand the hold over.
+- **Stickiness.** Under fire, the answer she chose holds for 8 s unless another beats it by 25%, so she doesn't flicker between running and fighting. Ties break on a seeded roll, so the same ship answers the same way.
+
+**Dumping is new** (`dumpCargo` in aggression.js). A freighter that dumps throws about a third of her hold out of the hatch as canisters (`Sim.dropCanister`, marked `dumpedBy`), writes the loss back to her manifest, shorts her delivery, and runs. The pirate stops to scoop what's floating rather than chasing ("X dumps medical supplies out of her hatch and runs - Y stops to scoop it"). Whatever the pirate hasn't scooped by the time she gives up is still in space for anyone else.
+
+**A liner calls for help early.** When a pirate's demand reaches a passenger ship, she sends her distress call at once instead of waiting to be hit.
+
+**Surrender reads the mood** (combat.js). A liner's base chance to strike is 0.9 (`surrenderBase`, now exported). `moodStrike` scales the surrender odds by (1 + 0.6 × fear), and by 0.6 if she's angry. A calm crew is unchanged. `beatenSurrender` takes the system and time so it can read the mood.
+
+**Tests.** New test/civilians.test.js (41), in the combat group. aggression.test.js now accepts "dumped" as a freighter's answer to a demand. tools/probe-civilians.js runs it in the real game at Mirven: of four freighters robbed by The Scrag, three dumped and one complied, and every dumped canister was accounted for.
+
+### Added (2026-11-22, ship AI slice 2: flights and moods)
+
+The second slice of the ship AI (claude/ship-ai-profiles.md §4 and §7). Astra: loyalty "isn't in relation to the player, but to the 'flight leader' of the group", and "all syndicate ships will have loyal for one another."
+
+**Flights** (`ShipAI.formFlights`). Ships of one organisation, lifted near you and within 300 km of each other (chained ship to ship), fly as one flight. The flights are re-formed every 2 s. The organisations:
+- **Navy, per faction**, including the tenders that ride a capital.
+- **Police, per faction.**
+- **The Syndicate**, heavies and runners together.
+- **Each pirate band.**
+- **A freighter and the mercenaries hired to escort her run.**
+
+Independent freighters and liners fly alone. The leader is chosen by rank (capital, navy, heavy, police, hired gun, pirate, tender, trader), then hull, then a seeded seniority, and a sitting leader keeps the job.
+
+**What loyalty does:**
+- **Covering a mate.** When a ship is hit, her armed wingmates within 2000 km turn on whoever hit her ("X breaks to cover Y").
+- **The Syndicate answers its own.** Every Syndicate ship within 3000 km answers any Syndicate ship that is hit, whether or not they're in a flight.
+- **When you're the attacker.** Hit a pirate, a Syndicate ship or an escorted freighter and her flight turns on you ("weapons hot"). A cutter's wingmate is left to the law's own answer, the crime and the warrant.
+- **Following the leader.** Wingmates engage what the leader engages, and withdraw when she does. A band never piles onto a freighter its leader is only robbing; it closes in only once she refuses and fights, so no hold is stripped twice.
+- **When the leader falls.** The senior captain takes the lead if her cohesion is 0.5 or more ("X takes the lead"). Otherwise the flight scatters ("the flight scatters") and doesn't regroup for two minutes. Taking the leader out is how a fight against a group is won.
+
+**Moods** (`ShipAI.feel`, `moodOf`, `stance`). Each lifted ship carries fear and anger, from 0 to 1, on the spec. They are never saved.
+- **Fear** has a half-life of 60 s × (1.5 − nerve). It is raised by:
+  - a hit;
+  - being robbed;
+  - a wingmate killed;
+  - losing the leader;
+  - the odds, which hold it up from below: the firepower aimed at her against her own and her flight's.
+- **Anger** has a half-life of 5 min to 1 h, set by heat: quick to anger is slow to forgive. It is raised by:
+  - a hit;
+  - being robbed;
+  - a demand of hers refused;
+  - a wingmate hit or killed.
+- **Anger overrides fear in proportion to nerve.** A brave, hot-tempered captain hit three times is *angered*; a timid one is *scared*.
+- **An angered pirate holds on** to half the hull a calm one breaks off at (0.2 instead of 0.4, through aggression.js `runAt`).
+- **A wingmate whose fear beats her cohesion breaks formation and runs** ("X breaks formation and runs"). An angered one doesn't.
+- **Anger at you** already outlives the meeting in captain memory: combat.js records "attacked" and "robbed".
+
+**No numbers on screen.** As agreed, you learn a captain from her tells: the message line and what her ship does.
+
+**Wired through aggression.js:** `onNpcHit`, `onNpcKill`, `onPlayerHit`, `onPlayerKill`, the robbery's strip and refusal, and a tick at the top of `Aggression.update`.
+
+**Fixed along the way:**
+- **"The The Scrag's drive is out."** A ship named "The …" got a second "The" in the drive-out message and its journal line (combat.js `TheName`).
+- **A doubled label on awake ships.** Every awake ship near you is boxed on the glass with her name, class and range, and her sky tag also printed "name [class]" a few pixels off it. Awake ships now get the box's label only (main.js `holoNames`), as the nav and dock targets already did.
+
+**Tests:** `test/flights.test.js` (new, 40 pass, in the combat group). It checks:
+- who flies with whom;
+- the leader by rank, and that she keeps the job;
+- covering a mate, and the Syndicate answering across flights;
+- your hit on a pirate versus your hit on a cutter;
+- succession and scattering;
+- the half-lives, and angered versus scared;
+- the run hull;
+- breaking formation;
+- following the leader, and not piling onto a robbery;
+- the same meeting giving the same result twice.
+
+shipai, aggression, combat, band, rendezvous, hunters, captains, rescue and the rest of the combat group all still pass.
+
+**Probe:** `tools/probe-flights.js`. In the real game it wakes two pirates of one band near you (staged), and you fire on one with Space held. The run showed:
+- the flight forming, with The Tallow leading;
+- The Scrag's drive going out, and her scared;
+- The Tallow, angered, turning on you to cover her, and knocking out two of your panels.
+
+**Not yet:**
+- Your own company's ships don't form a flight with you.
+- Your firepower is a rough estimate (one or two pirate guns' worth).
+- The civilian choices fear will drive (dump cargo, comply, surrender, fight when cornered) are slice 3.
+
+### Changed (2026-11-22, no panel overlaps another; the pilot's chair you can see)
+
+Astra: "can you make a rule so no panel overlaps another, even if it means moving it up (if it's moved off the 'dashboard' then it's on a support, on a wall, etc." And: "We want the seat to be visible."
+
+**The cockpit screens** (`Render.mfdLayout`, NO PANEL OVERLAPS ANOTHER):
+- **Where the old check stopped.** The old check held the three dash screens apart only in the cabin every ship had. A fit's cabin moves them: spread wide, stood up high, or seated to one side. Fit C's instrument stack put them 6–9 px apart on every hull, against the 8 px at 1280 wide the suite asks for. Its housings were nearly touching.
+- **How the rule places them.** Per cabin, the six screens go down in order: centre, left, right, overhead, then the two on the bulkhead. Each is kept 0.8° clear of every screen already placed, as seen from the seat's own eye. A screen that would come closer is lifted a centimetre at a time until it clears.
+- **Supports.** Every dash screen now stands on a support (`drawMfdSupport`): a column from under its housing down to the dash surface beneath it (`dashYAt`, read off the fitted dash), on a foot plate 12 mm thick with two bolts. A lifted screen just has a longer column. The old code promised "a stalk down to the dash" in a comment but never drew one, so until now every screen floated. A wall or overhead screen just moves up its wall.
+- **What moves today.** Only fit C's two outer screens, by 3–6 cm, into a small tiered stack. Fits A and B move nothing.
+- **Cached per cockpit spec.** A ship with her own fitted spec gets her own answer. The Tanker bought in the probe needed no lift in fit C, for example.
+
+**The boxes over the view** (`Render.claimOverlay`):
+- **Claims.** Every box drawn over the view through main.js `panel` claims its rectangle: the captain's card, the transit readout, a hail.
+- **The role panel keeps clear.** The role panel (weapons, cargo P/L, work, passengers) is never placed under a claimed box. Touching one costs a hundred times what touching an instrument does, and the spots just below and beside each box are tried. Captain Halloway's card had been covering it; it now sits clear of the card, top left.
+
+**The pilot's chair** (`shipdeck.js` `pilotChair`):
+- **Why it vanished.** The chair was darker than the walls behind it, so in a docked cabin it disappeared.
+- **Shell and cushions.** The shell is now a lighter grey than any wall. The cushions are the palette's own colour: tan in a civil ship, navy blue, or the Syndicate's red.
+- **Piping.** The back and headrest edges and the front of the cushion are piped with a dim strip of the palette's accent light, which the room's shading leaves lit.
+- **One builder.** Your chair and the co-pilot's twin are built by the same function.
+
+**Tests:** `test/panels.test.js` (new, 9 pass, in the view group). It checks:
+- every hull's A, B and C, projected through the real cockpit camera from the fit's own seat, at 1920 and 1280 wide;
+- that lifted screens are supported, fit A is never moved, and lifts stay small;
+- that the role panel moves out from under a box, finds space with all four corners boxed, and goes back when the box goes.
+
+Run with the rule switched off, the screen check fails on fit C, so it does catch the old overlap.
+
+**Probes:**
+- `tools/probe-abreast.js` now also refits to C and shoots the dash.
+- `tools/probe-panel-sizes.js` lists every hull's in-game cockpit size and lifts.
+- `tools/probe-copilot.js` reads where a hired pilot is on a two-abreast deck while you hold the helm (`Npc.lastScene`), then moves the clock on to her watch and looks across.
+  - It found nothing broken. Off watch, she sleeps in her bunk: a ship with bunks keeps three watches, and the first probe landed on her rest period.
+  - On watch, she walks up and sits in the co-pilot's chair beside you.
+  - No code changed.
+
+### Changed (2026-11-22, two abreast: the helm moves with the seat, and the co-pilot gets a chair)
+
+Astra: "the player doesn't have to be centered in every ship; some of the bigger ones can have two seats, like an airplane." The cockpit view already sat you on the left of two in a large hull's fit B. Walking the deck didn't match: the helm chair was still in the middle.
+
+- **Your chair is where the seat view puts you** (`shipdeck.js` TWO ABREAST). On an L/XL hull with cockpit fit B, the deck plan puts your chair at the cabin's seat. `Render.shipInterior` passes it in as `seatX`, and this is checked to match the camera exactly. Standing up puts you behind your own chair, and E there sits you back down in it.
+- **The co-pilot's chair** is your chair's twin, mirrored across the centre line. There is no aisle between them: like a real flight deck, you get in and out from behind.
+- **A hired pilot sits in it.** That was already how `npc.js` seated a co-pilot on the Wren and Bollard. When you get up, she takes the helm, as before.
+- **Every other fit keeps the one centre seat.**
+- **The cabin notes** (`Render.cabinOf`) now say the chair beside you is the co-pilot's mirror, not the old centre seat.
+- **Tests:** a "two abreast" section in `test/shipdeck.test.js`, 69 pass. It checks:
+  - on all 9 two-abreast hulls, the helm sits exactly where the seat view puts your eye;
+  - the co-pilot's twin chair is on the other side;
+  - you stand up behind your own seat, and E takes it;
+  - the chairs stand clear of each other and out of the side consoles;
+  - both are drawn;
+  - every room on the bridge deck is still reachable;
+  - every other fit keeps the centre seat.
+- **A screenshot probe,** `tools/probe-abreast.js`. It buys a big hull in fit B, signs on a pilot, gets up with O, sits back down with E, and looks across.
+- **Test runner:** `test/cargocost.test.js` added to the economy group in `tools/run-tests.js`. The runner refuses ungrouped files, so the full suite never started last time.
+
+### Changed (2026-11-21, the HUD sits on the glass, not on your eye line)
+
+Astra asked for the HUD to be centred on the cockpit glass, not the player's view. In ships where the seat is off to one side, the less vital information should move out to the side, and the crucial information should sit between the glass centre and the seat.
+
+- **Where the instruments centre.** `Render.hudGeom` now centres them halfway between two points: the middle of the windscreen, and the point straight ahead of the seat. `main.js` projects that second point each frame and passes it in through `setHudRoom(aperture, seatX)`. The bank scale, heading tape, air data, attitude text and facing cue all use this centre (`hg.cx`).
+- **Centre-seat cabins.** Both points are the same, so these look exactly as before.
+- **Two-abreast cabins.** On the L/XL fit B, with the seat on the left of two, the instruments shift partway toward you.
+- **The role panel.** Weapons, cargo P/L, work or passengers move to the far side of the glass (`rolePanelAt` now prefers that side).
+- **Turning your head.** The layout is tied to the glass, so it stays put on the windscreen.
+- **The raised seat in fit B on small and medium hulls.** Lowered from 9 cm to 5 cm (× room size). From 9 cm the console sank out of the bottom of the view.
+- **The 'wide' console.** Now mounted 2 cm higher.
+- **Canopy parameters.** The table for the exterior models (`claude/cockpit-cabin-params.md`) has been regenerated with these values.
+
+### Added (2026-11-21, the trade panel prices your run; cabins vary by seat, console and canopy)
+
+Astra: "I'd appreciate more variety with the location of the pilot's seat and the MFD panels, and some cockpit variants can have different HUD colors and characteristics, but all should be bright enough to provide good contrast. Use icons for trade. Trade HUD should show the cargo in your hull, how much you'll make or lose taking it to your destination in either bright green or bright red, fading through orange and yellow for deals which are less and less bad." And: "Changing the canopy shape is also permitted. It doesn't have to match the exterior, I can alter those models later as long as you give me the parameters."
+
+- **What your cargo cost you is now kept** (`Economy.costBuy` / `costSell` / `costOf`). It was designed after the 2026-09-08 play report and never built.
+  - Per commodity, it stores the credits paid and the tonnes they paid for. Buying adds to both; selling takes its share of both, so the average stands.
+  - Tonnes that cost nothing (mined, scooped, salvaged) are simply the held tonnes the record doesn't cover.
+  - A hold that shrinks some other way (jettisoned, taken) takes its share off when the record is read.
+  - Contract freight is never in it. Waste is left out, because a port pays you to take it.
+  - It's saved, goes with a ship onto the clamp and back, and is cleared when the hull is lost.
+  - Additive: an older career's hold reads as having cost nothing.
+- **The trade panel.** On a freighter's glass, each of your cargoes shows:
+  - its mark (a new set of commodity icons: drums, sacks, logs, rock, gems, chips, gears, a helix and more; every commodity has one);
+  - its tonnes;
+  - what selling it at the port locked on NAV makes or loses against what it cost.
+  - Colours: bright red for a real loss, through orange and yellow near break-even, to bright green (`Render.dealColour`). Every stop on that ramp is bright.
+  - A NET line totals the run. Contract freight gets a plain line of its own, and a port that won't buy something says "no buyer".
+- **Every HUD colour is bright.** Each is held to a relative luminance of 0.55 or better (`cargocost.test.js`). Coral and violet were under it (0.42, 0.50) and were lifted toward white.
+- **A fit is a whole cabin** (`Render.cabinOf`):
+  - **Fit A** is the cabin every ship had, untouched.
+  - **Fit B** opens it up: wider glass, a slimmer brow, a wide low console. On a small or medium hull you sit higher. **On a large or very large hull you sit on the left of two, as on an airliner.** The glass and the room stay centred on the ship and your own screens move over in front of you.
+  - **Fit C** closes it in: narrower glass, a heavier brow, an instrument stack stood up toward you, and a low seat further forward.
+  - The canopy shape changes with the fit: the windscreen's width, the height of its top edge, the reach of the quarter-lights, and the lean. A refit rebuilds the cabin.
+  - The yard card and the refit rows now lead with the cabin ("left seat of two · wide console · wider glass").
+  - **The numbers for the exterior models** (every hull, every fit: glass reach, width and top-edge multipliers, wrap, brow, rake, seat, console) are in the project doc `claude/cockpit-cabin-params.md`, generated from `Render.cabinParams()`.
+  - Not yet: on a two-abreast deck there's no co-pilot model in the seat beside you, and the walk-aboard helm spot is still the centre seat.
+- **Fixed on the way:** the role panel read the market through a bare `Economy`. The render suite draws the cockpit without a market, and three of its checks failed. It now goes through `global.Economy`, and through `global.Missions` for the freight it counts.
+
+### Changed (2026-11-21, cockpits: chosen at the yard, framed in metal, and a panel for what the ship is for)
+
+Astra, after the first gallery: "I'm going to ask that you don't use flat rectangles in the player's visual field. Maybe what's missing is textures on the interior of the cockpit edges? I like the variation in HUD. The different cockpits should be available when purchasing a ship. Maybe you can make different interfaces for each ship type? Like a fighter shows missiles and guns selected, a freighter shows the current prices of your cargo at your selected destination, that sort of thing?" Her choices, asked: struts *and* textured edges; free choice at purchase, with a refit at shipyards later; the hull's role sets the panel, and fitted gear adds to it; all four role panels.
+
+- **No flat shapes in the view.** The corner plates, the short posts and the fighter's combiner glass are gone.
+  - **Every pane's edge is now a reveal.** That is the frame's inner face running from the glass back toward the pilot, so it foreshortens as you turn your head. It is lit from above (the sill catches the light, the header is in shadow), with a seal line at the glass and bolts along it. Bolts are sized by distance.
+  - **A look sets the frame:** how deep it is, the bolt spacing, and whether the seal is lit in the hull's accent.
+  - **Real window posts on the large and very large hulls.** They are prisms with a lit face and a shadowed one, standing from header to sill at the windscreen's top corners. A big ship's glass reads as three panes, and the HUD stays in the middle one.
+  - **Small hulls get no posts.** A strut that ends in mid-air is what started this.
+  - **Drawn after the glass,** because they stand in front of it. The first try put them under the glass's wash and they read as tinted plastic.
+- **The cockpit is chosen when you buy her.** The yard card has COCKPIT A / B / C, with a line saying what each one is.
+  - Free on purchase, and on a commission too: the order carries it to the slip and the hand-over.
+  - **REFIT COCKPIT** on the fleet page, at a shipyard only, costs 2% of the hull price (150 cr minimum) (`Combat.refitCockpit`).
+  - It is the ship's own (`ship.cockpitLook`). It goes with her onto the clamp and back (`Fleet.record`, take command) and into the save. Additive: an older career flies fit A.
+- **A role panel on the glass** (`roleReadout` in main.js, `Render.drawRolePanel`): a title and up to five lines, in the look's colour and box style. It sits in whichever spot of this window is clear of this look's instruments: the four corners first, then just under or over the tape.
+  - **Fighters and police:** guns by group, the armed missile and how many, heat (amber at 70%), the target and its range.
+  - **Freighters and traders:** the hold against capacity, and each cargo priced at the port locked on NAV, with the total there against the total here.
+    - There is no cost basis kept for cargo yet (planned in the 2026-09-08 play report as `cargoCost`, never built), so it cannot say profit against what you paid. It says what it knows instead.
+  - **Tugs, miners and tenders:** ore and rare ore in the hold, how full the hold is, the arms' state, a tow, and the target.
+  - **Liners and shuttles:** souls aboard, and each party's destination, fare and time left (amber under 6 h).
+  - **Gear the role didn't lead with adds a line:** guns on a Mule, passengers on a fighter, a hold on a liner, arms on anything that has them.
+  - Which hull is which: `Render.HULL_ROLE`.
+  - The panel's spot is one of the readout boxes, so planet labels keep off it too.
+
+### Changed (2026-11-21, every hull its own cockpit look — candidates)
+
+Astra, looking at three cockpits: "some of these angled things are just floating in space on models where the glass is further out from the pilot's seat … can you re-design the interiors so that each one has a unique HUD layout and placement of cockpit visual details? Give me a few examples for each one and I'll tell you which is the best."
+
+- **The floating corner pieces, fixed.** The corner gussets and centre mullion were drawn at fixed numbers from before the windscreen grew, always 1.2 m out. On hulls whose glass sits further out, or is bigger (every bubble canopy), they hung in the air in front of it. Everything on the windscreen is now built from that hull's own outline: its corners, its chamfers, and its own distance from the eye (`drawCanopyFurniture`).
+- **A look per hull, three candidates each** (`Render.HULL_LOOKS`, A/B/C, 69 in all). A look has two halves:
+  - **HUD:** a colour (jade, cyan, amber, ice, lime, coral, violet); where speed and altitude stand (wide, tucked in, low, high); the heading tape at the top or the foot; the bank arc above, hung below, or left off; and the boxes framed, corner-bracketed or bare.
+  - **Windscreen furniture:** corner plates or braces sized per hull; a centre post, twin posts, or (fighters) a combiner glass on the glare shield; and an optional dim brow lamp in the hull's accent colour.
+  - No candidate puts two instruments in one place.
+- **The HUD now fits inside each window.** The glass is clipped to the windscreen, and on narrow-glass hulls (the tanker's is about half the screen wide) the speed and altitude boxes had always been drawn under the frame and cut in half. Nobody saw it until all 23 cockpits were lined up side by side. `Render.hudGeom` now places every instrument from one spot, brings the boxes in to fit the opening, and keeps the tape and bank arc between the window's top and sill and above the flight panel. `hudReadoutBoxes` reads the same geometry, so planet labels still keep off wherever the instruments went.
+- **Defaults:** a ship with no fit recorded flies its hull's A look. The buyer chooses now (the entry above), so there is no single pick per hull. The pitch ladder keeps its old cyan and green outside a hull's look.
+- `tools/probe-cockpit-looks.js` photographs all 69 candidates in the same spot over Mirven II, for the gallery.
+- Not yet done, and asked for in the same conversation: two-seat cockpits for the bigger hulls, pilot in the left seat as on an airliner. That moves the eye, the console and the walk-aboard helm seat, so it is its own change.
+
+### Fixed (2026-11-21, the bug hunt: where the new systems meet)
+
+Astra: *"before I do that I want you to embark once more on the great bug
+hunt"*. It covers everything since the last hunt (Nov 14–15), looking at
+the seams between systems. Each system's own suite was green; all five
+bugs were where two of them meet. Each was measured before it was fixed,
+and `test/seams.test.js` pins it. Every check in that file was run with
+its fix undone, to show it fails without the fix.
+
+- **Com-sats × world digs: relay cover depended on when you last
+  loaded.** Public relays are laid over every world with a port and then
+  cached. A dig that opened while you were in the system came after
+  that, so a dig on a bare world had no relays until you reloaded, and
+  then six. This was true of all 130 such digs.
+  - **Now:** the public network serves the worlds the system was
+    generated with ports on. A dig's world, or a station you found on a
+    bare world, is off the network until a sat goes up over it, and your
+    own com-sat does exactly that.
+  - **Your call to reverse:** relays could instead be pre-placed over
+    every planned dig.
+- **Mil-sats × late ports: a companion moon's station took platforms off
+  older ports.** Platforms are capped per system and handed out by id,
+  and `'b0cp1'` sorts before `'b12'`. In 3 of 53 guarded systems (Unis,
+  Belora, Sytar) a pair moved to the moon. Ports the system was
+  generated with now come first.
+- **Mil-sats × late routes: platforms moved after a reload.** A
+  platform sits on its port's busiest approach corridor, which is
+  counted from the traffic and then cached. Routes added later (a dig's,
+  a resort's, a companion moon's, your own station's) shifted it: one
+  platform moved 6 km, and a dig opening mid-session would have moved
+  others on the next reload. Corridors now count only the timetable the
+  system was generated with. All 318 platforms are back where they were.
+- **Saves × digs: docked at a dig's port, saved, reloaded, and you came
+  back undocked at the foot of its shaft.** The start system is built
+  at t = 0, before any dig is open. Your dig state (supplies that bring
+  an opening forward) was also put back only after the system had been
+  entered. Both now come back before the dock, the same way the
+  stations you found always have.
+- **Slipspace × binaries: a distant companion star dragged the jump
+  ring, and every wake, out with her.** The ring is the farthest orbit
+  round the root, and a companion orbits the root. It moved in all 76
+  systems with one: Mirven's went from 2.2 AU to 9.4, Dratara's from
+  27 AU to 3,450, and wakes were scattered out there with it. Only
+  worlds count now.
+- **Checked and fine:**
+  - the barycentre stays off the F3 list and can't be locked;
+  - resorts and companion ports join the relay network as often as any
+    other port;
+  - the four EVA and crew issues from the last hunt were already fixed
+    in an earlier release.
+- **Tools:**
+  - `hunt-islands.js`, `hunt-digrelays.js`, `hunt-digdock.js` and
+    `probe-barycentre.js`;
+  - `test/seams.test.js` (6 checks, in the economy group).
+
+### Added (2026-11-20, worlds worth visiting, slice 3: the resort pad)
+
+The plan: "The most appealing worlds get a guaranteed second ground port,
+off their own forked substream so no existing pad moves."
+
+- **Every postcard world a ship can land on now has at least two ground
+  ports.** Where it had fewer, it gets an open-air resort, the last port
+  built in the system.
+  - **Where:** only postcard worlds (appeal 0.7 and up), never a buried
+    bay. A resort with no dry ground to stand on is built as a sea
+    platform, like any other pad.
+  - **Names:** a stock of its own ("Larkspur Resort", "Halcyon Retreat",
+    "Long Light Terraces"), not the working pads' "Groundside" and "Low".
+  - **The rest:** its own id (`<world>rs`), market, dressing and routes.
+    Its ferries carry people, and the holiday hops on the passage board
+    can now land there.
+  - **Faction:** the world's own where it has ports, else the system's.
+- **Measured** (`tools/diag-resorts.js`, 120 claimed systems): 13 resorts
+  in 13 systems. 7 are on the new companion moons, 4 stand on the sea.
+  Home has one: Larkspur Resort, on Mirven II.
+- **Nothing that existed moves.** Every body (4,748 in 120 systems) and
+  every older route is identical, field by field, with and without
+  resorts (`opts.noResorts`).
+- **One shared path for late ports.** The companion moons' ports and the
+  resorts are settled by the same code, `settleLatePorts`: the walk
+  inland, the sea platform, then market, dressing and routes, each from
+  a stream named for the feature and the port. The companion's seed
+  strings are unchanged.
+- **Tests:**
+  - `test/resorts.test.js`: 15 checks, in the economy group.
+  - `seaplatform.test.js`'s count of sea platforms moves from 223 to 233.
+    A check now accounts for all 19 added since 214: 9 on companion
+    moons, 10 resorts.
+  - `multiples.test.js` and `tools/diag-multiples.js` now leave resorts'
+    routes out of "what existed", as they already did the companion
+    moon's. A resort's timetable is built after the companion, so it may
+    call at her ports. Every older route is still compared.
+  - `twilight.test.js` builds both sides of its old-versus-new comparison
+    without resorts. Resorts follow a world's pad count, and the twilight
+    pass is what changes that count. Its check "new ports only take ids
+    after the old ones" had been passing by default since the first named
+    id (`b0a`) arrived: `+'0a'` is NaN, and `Math.max(-1, NaN)` is NaN.
+    It counts only plain `b<n>` ids now, and it still passes.
+- **Saves:** additive. A career loads into the same systems, with the
+  resorts added.
+
+### Fixed (2026-11-20, other people's ships counted as yours)
+
+- **Found by `stations.test.js` once resorts arrived.** `addPortRoutes`
+  was written for the stations you found, and stamped every route it
+  made `playerPort`. Three later kinds of port reuse it: the world's own
+  digs (2026-11-19), the companion moons' ports and the resorts
+  (2026-11-20). Their NPC ships were read as your own lines, so:
+  - never raided (`attachRaids`);
+  - never held at a lonely pad (`Sim.arrivalHold`);
+  - never an aggression target (`aggression.js`).
+- **Now:** a route is `playerPort` only if its port is a station you
+  founded. A seized station keeps the flag, as before. Every other late
+  route is marked `latePort` and raided at the system's own odds. The
+  per-route half of `attachRaids` is now `raidRoute`, with no RNG draws,
+  so nothing generated earlier moves.
+- **Measured** over 150 systems: 168 late routes, none flagged as yours,
+  and 794 of their deliveries raidable.
+- **Pinned in `resorts.test.js`:** "a resort's ships are not counted as
+  yours", and "they are raided at the system's odds, like everyone
+  else's".
+
+### Added (2026-11-20, worlds worth visiting, slice 2: the passage board follows appeal)
+
+The second slice of `claude/after-mining-roadmap.md` item 8. The agreed
+shape is in `claude/worlds-people-and-infrastructure.md`: "more short
+station ↔ ground passages (low pay per soul, quick, repeatable); more
+inbound passengers from the rest of the system and from other stars."
+
+- **Hops.** On a world rated pleasant or better, the sky and the ground
+  trade tourists.
+  - Any port there can post a passage to a port on the other side
+    (station to pad, or pad to station). A pleasant world posts up to one
+    a window, a postcard up to two.
+  - Each is 3–8 day-trippers, tour parties or wedding parties, due within
+    a day.
+  - It pays less per head than an ordinary local passage: a median of 258
+    cr against 552. Small, quick and repeatable, which is the shuttle's
+    trade.
+- **Inbound.** Ports on every other world in the system book holidaymakers
+  for the system's best world (pleasant or better). One chance a window,
+  as likely as the world is appealing (60% of its score). The pay is the
+  local passage rate, nudged up by appeal.
+- **Going home.** An appealing world's ports post passages for tourists
+  heading back to a neighbouring star, at the interstellar rate. This is
+  the inbound trade from other stars, seen from the end that knows it. A
+  port can't judge a world in a system nobody has generated, so the
+  appealing end posts the work.
+- **The board says why.** For example: "People come for 2 big moons and
+  the aurorae." It names only the draws (clear skies, a giant overhead,
+  big moons, aurorae, a sun that never sets), never the drawbacks.
+  Leaving: "They came for <world>, and the holiday is over."
+- **Measured** over 50 claimed systems, 4 windows each (3,132 boards):
+  1,187 holiday offers (321 hops, 696 inbound, 170 going home). A postcard
+  world's board averages 2.40 passage offers against a harsh world's 1.22.
+- **Nothing that was on a board moves.** The holiday trade has its own
+  stream (`'tourism|'`) and is appended after every other kind of work,
+  with its own ids (`tr|…`). A test builds 448 boards both with and
+  without the holiday trade, and every older offer is identical, field by
+  field, text included.
+- **Fixed before it shipped:** "5 aboard, a honeymoon couple". A couple
+  is two people now, whatever the roll said.
+- **The F7 board scrolls (fixed: it used to drop rows silently).**
+  - A board longer than the panel stopped drawing at the foot without a
+    word. The kinds of work added last (digs, relays, mail, platforms,
+    and now holidays) were the first to vanish, which reads as "there
+    is none".
+  - Hold left Alt for the cursor and roll the wheel over the board, the
+    same as the notes log.
+  - A scrollbar shows only when something is out of view, with "▲ N more"
+    and "▼ N more · wheel to scroll" at whichever end is hiding rows.
+  - The wheel stops once the last row is showing, and the board starts
+    from the top again at each new port.
+  - Seen working in `tools/probe-tourism.js`: an open DETAILS row pushes
+    the holiday offer off the foot, the count says so, and real wheel
+    events bring it back into view.
+- **Tests:** `test/tourism.test.js`, 19 checks, in the economy group.
+  `tools/diag-boardfit.js` counts how many boards outgrow the panel.
+- **Saves:** unaffected. Boards are generated per port and window, and
+  nothing new is stored.
+
+### Added (2026-11-20, more than one sun, and a giant over a living moon)
+
+Astra: *"yeah, add both changes please"*. That means binary stars (stage 3
+of `claude/stars-and-systems-plan.md`), and a postcard world: a habitable
+moon with a giant filling its sky.
+
+**Nothing that already existed moves.** Every planet, moon, port, route,
+patrol, market and ring is identical with and without the new stars, so
+saves carry on. This was checked body by body, 0 moved of 1,529, by
+`tools/diag-multiples.js` and `test/multiples.test.js`.
+
+- **Measured before building** (`tools/diag-stars3.js`, 200 systems):
+  - A close pair (orbiting at least once a week) fits inside the innermost
+    planet in 128 of them.
+  - A companion far enough out to disturb no planet sits a few tens of AU
+    out at the median.
+  - No warm chain of planets has a gap wide enough for a Jupiter, so a
+    giant cannot be added among the existing planets without moving them.
+- **Close pairs.** In some systems the star you knew is now two stars,
+  orbiting each other.
+  - Their masses and light add up exactly to the old star's, so every
+    planet orbits them as it orbited the star, under the same light. The
+    orbits, habitable zone, world types and ports are all unchanged.
+  - The system's root is now their shared centre of mass (still `b0`). The
+    stars are `b0a` and `b0b`, opposite each other through it.
+  - A pair only forms where it fits: it orbits no faster than once a week,
+    and every planet stays outside 1.15× the critical radius for stable
+    orbits round two stars (Holman & Wiegert 1999). Pair separations are
+    0.08–0.37 AU (p10–p90).
+- **Distant companions.** A second sun circles the whole system, mostly
+  tens to hundreds of AU out (median 72 AU).
+  - No planet is left outside the zone the companion lets stay stable.
+  - Where the real separation would have disturbed a planet, the companion
+    is pushed outward instead. So the closest companions are
+    under-counted; that is what keeping every world in place costs.
+  - Her light is kept out of the planets' insolation on purpose, because
+    at that distance it is a few thousandths of Earth's sunlight.
+- **Triples.** A close pair plus a distant third star.
+- **How many.** In 120 claimed systems: 69 single, 34 with a distant
+  companion, 4 close pairs, and 13 triples (43% with more than one sun).
+- **On screen.**
+  - Each star is drawn as a star, so from the innermost world of Linira
+    you see Linira A and Linira B side by side
+    (`probe-multiples/1-two-suns.png`).
+  - The F2 BODIES list names every star, and the SYSTEM panel reads
+    "Linira (F+M+M)".
+  - The galaxy chart still shows one star per system; companions on the
+    chart are not done yet.
+- **What the ship feels matches the orbits the worlds follow.**
+  - Every planet of a close pair orbits a single point mass at the
+    barycentre. So once a ship is past 1.5–2.5 pair separations, the two
+    stars pull on her as one point there. Without this, a ship parked
+    round a circumbinary world would drift off it by hundreds of km a
+    day. Beside a world the match is exact (1e-15).
+  - A distant companion is ignored until a ship is 40–60% of the way out
+    to her. Out by her, the ship also falls toward the main system as her
+    own worlds do.
+  - Single-star systems feel exactly what they did, to the last bit.
+- **A giant in a warm zone, and the moon under it.**
+  - A companion with room for it may have a gas giant that migrated into
+    her own warm zone. About 1 system in 10 gets one: 7 of 120 in the
+    tests, 20 of 212 measured.
+  - The giant has one moon worth living on: terran or ocean, Earth-heavy,
+    with real air, and the giant 8–21° across its sky.
+  - Most of those giants are ringed, and appeal reads every such moon as a
+    postcard, 0.81–0.94 ("a ringed giant overhead").
+  - Each such moon gets a station and a pad, built the way a dig's port is,
+    with their own markets, dressing and routes, plus ferries that carry
+    people.
+  - Rings for the companion's giant come from the same per-giant stream as
+    every other ring.
+- **Tuned after the first probe.**
+  - At first 41 of 150 systems had a postcard moon, which is no longer a
+    postcard, so the chance is now 0.35.
+  - The moon first sat 14–32 giant radii out, which showed a 4° coin, so
+    it is now 6–14 radii.
+  - Round small companions, the moon could be dragged inside two giant
+    radii, inside the Roche limit, with the giant 50° across. Those are now
+    not generated.
+- **Fixed on the way:** a moon's world card always said "ports 0". It now
+  counts the moon's own docks.
+- **Found by the full suite (124 of 127 green on the first run):**
+  - Every habitable world should have at least two ports, but five
+    companion moons had one. Their giant's pull left no room for a
+    station, so they now get a second station or a second pad.
+  - One companion moon's pad stood in a sea. Those pads are made after the
+    usual walk inland, so they now take that walk themselves (and skip it
+    under `noInland`, as every other pad does). Where no dry ground exists,
+    they become sea platforms, the same as every other pad.
+    `seaplatform.test.js` pins the galaxy's count of platforms, which went
+    from 214 to 223. A new check shows the 9 extra are all on companion
+    moons.
+  - `mining.test.js` "every star has a corona to skim" looked only at the
+    root, which in a close pair is now the empty point between the two
+    stars. It now checks every sun, and each has its own corona; the game
+    already skimmed any of them.
+- **Tests:**
+  - `test/multiples.test.js`: 17 checks.
+  - `stars.test.js`: its single-star section now builds with
+    `noMultiples`, because it is the single-star guarantee.
+  - `physics.test.js`: the orbit-crossing check now compares neighbours
+    round the same parent, and the far-field 1/r² check runs on a lone
+    star. Kawartha's companion sits exactly where it sampled.
+  - `tools/probe-multiples.js` shows a pair from its innermost world, its
+    F2 map, the giant from its moon, and the moon's card.
+
+### Added (2026-11-20, worlds worth visiting, slice 1: appeal, and ferries that carry people)
+
+Astra, 2026-10-17: *"HZ worlds, especially worlds which have nice weather
+and a good view have more passenger destinations ... This also gives the
+shuttle a purpose."* The next stage after mining (`claude/after-mining-roadmap.md`
+item 8). New file `src/appeal.js`.
+
+- **Every world with air gets an appeal score from 0 to 1**, banded as
+  postcard, pleasant, livable or harsh. It is built from three parts:
+  - **Earthlike.** Gravity, air and warmth near home, and how much of the
+    world is livable: all of it, a tipped world's equator, or a locked
+    world's twilight ring. One hostile number sinks the lot.
+  - **Climate.** The world's own cloud cover, the same figure the
+    renderer draws. A little cloud is free; constant cover costs.
+  - **View.**
+    - a giant overhead, worth more if it is ringed;
+    - big moons, close enough to see as discs;
+    - aurorae, where a magnetic field sits over real air;
+    - the twilight ring's sun that never sets.
+  - The view lifts a livable world but cannot rescue a lethal one.
+  - It is worked out from what the generator already wrote, so it moves
+    no seed and is never saved.
+- **Measured over 160 claimed systems** (`tools/diag-appeal2.js`). Of the
+  1,028 worlds with air, 430 are habitable:
+
+  | | Postcard | Pleasant | Livable | Harsh |
+  |---|---|---|---|---|
+  | Habitable worlds | 24 | 146 | 178 | 82 |
+
+  - **Best:** Mirven II, where you start, at 0.85 (two big moons and
+    aurorae).
+  - **Worst:** twilight-ring worlds with thin air and the wrong sun,
+    around 0.02.
+- **Ferries carry people.** A shuttle running between two docks over the
+  same world now carries passengers in proportion to that world's appeal:
+  none below 0.3, and up to 24 on a postcard world.
+  - Across 60 systems, 7,056 of 10,344 ferries carry people. At Mirven it
+    is 96 of 156, for example the *Lodestar Drover* with 28 aboard.
+  - The passengers are what everything that already reads passenger counts
+    sees:
+    - a ferry with people aboard is a passenger ship to the ship AI;
+    - the crew you meet aboard are counted from them;
+    - a rescue of one is about the people.
+  - Generated in its own seeded stream after everything else.
+    `tools/fingerprint.cjs` gives identical hashes for five seeds with and
+    without it, so no route, time or hold moved.
+- **On the world's card (F3, NAV → WORLD), the first note** now reads,
+  e.g., "For visitors: Postcard - 2 big moons, aurorae."
+- **Found while measuring:**
+  - None of the 10 moons that orbit gas giants is livable. Giants form
+    past the frost line, so every one of those moons is cold, with thin
+    air and light gravity. The postcard Astra described (a habitable moon
+    under a giant) does not occur in this galaxy yet.
+  - There are no binary stars either: 120 of 120 claimed systems have a
+    single star.
+- **Tests:** `test/appeal.test.js` (21 checks), `tools/probe-appeal.js`.
+
+### Added (2026-11-20, hold into a hardpoint)
+
+Astra: *"adding another gun hardpoint in exchange for cargo space?"* I asked
+four questions and she chose: a flat cost by hull size, up to two per hull,
+both a registered and a concealed kind, and shuttles allowed too.
+
+- **What a conversion is.** It is one more hardpoint, added after the
+  hull's own, so nothing already fitted moves. In exchange it takes a fixed
+  bite of the hold.
+  - **Hold cost by hull size:** S 6 t, M 10 t, L 16 t, XL 24 t.
+  - **Price by hull size:** S 9,000 cr, M 15,000 cr, L 26,000 cr,
+    XL 45,000 cr.
+  - **Why flat and not a share of the hold:** a share would charge a
+    Leviathan about 100 t for one gun. Flat, a big freighter barely
+    notices, and an interceptor gives up half of very little.
+  - **Buying the gun:** you buy and fit it from BUY like any other gun,
+    against the same reactor and mass budget. That budget is usually the
+    real limit, so two conversions is a ceiling, not a recommendation.
+- **Registered.** Cut at a shipyard and on her papers. Pirates sizing her
+  up see the gun.
+- **Concealed.** Cut at any port where corruption is 60 or more, the
+  grey shelf's own threshold.
+  - It costs 1.6 times the price and takes three quarters of the hold
+    (5 t on a Talon), because nobody builds the certified magazine
+    bulkhead.
+  - **Behind its panel:** nothing is drawn on the hull, not even the
+    empty mount plate, and pirates and runners judging whether you're
+    armed don't count it.
+  - **The first shot opens the panel for good.** If a cutter or warship is
+    in sight when it fires, that's a charge (2,500 cr bounty) with its
+    faction. The Syndicate's own heavies don't care.
+- **Shuttles.** The Wren and the heavy shuttle, which have no hardpoints,
+  can take one.
+- **Cutting one back out** costs a quarter of its price, and the hold
+  comes back exactly. The mount must be empty first. Any conversions
+  above it move down a slot, taking their guns and fire groups with
+  them.
+- **It belongs to the frame.** A conversion is tied to the hull it was
+  cut into. A different hull has none, and a new hull bought at the yard
+  starts with none. It goes with her into the fleet, back out of it, and
+  into the save. Older saves load with no conversions.
+- **Where to find it:** at the bottom of the yard's FITTING tab.
+  - The registered row is always shown, with the reason when a port
+    can't do it.
+  - The concealed row only appears where one can be had.
+  - Converted slots are labelled CONVERTED, CONCEALED, or CONCEALED, SEEN.
+- **Tests:** `test/conversions.test.js` (40 checks).
+  `tools/probe-conversions.js` shows the FITTING tab at Halden Yard with
+  one of each cut and a gun in both.
+
+### Added (2026-11-20, ship AI slice 1: six roles and a captain's character)
+
+Astra asked for AI ship behaviours and for "scared", "loyal", "angered",
+"trader", "passenger", "police", "syndicate", "pirate" and "navy"
+profiles, modified by how corrupt the system is and how corrupt each
+captain is. The design is in the project doc `claude/ship-ai-profiles.md`.
+Nothing behaves differently yet. This slice gives every captain the
+numbers that later decisions will read. New file `src/shipai.js`.
+
+- **Six roles, read off the ship** (`ShipAI.roleOf`):
+  - trader;
+  - passenger (a liner, i.e. a ship with souls aboard; a feeder shuttle
+    carries freight, so it counts as a trader);
+  - police;
+  - navy;
+  - syndicate (the heavies and anything flying the outlaw flag that
+    isn't a raider; a heavy used to read as a cop);
+  - pirate.
+  - Across the first 140 claimed systems of the test galaxy there are
+    32,728 traders, 1,563 passenger ships, 909 Syndicate, 433 pirates,
+    385 police and 43 navy.
+- **Six dials per captain** (`ShipAI.dials`), each from 0 to 1:
+  - nerve, greed, probity, discipline, heat and cohesion;
+  - built from the role and from the temper and values captains already
+    had, plus a seeded wobble;
+  - worked out on demand, never saved, and no generator stream moved.
+- **Probity is the captain's own corruption**, and what it means depends
+  on the role: an honest or bent cop, a pirate with a code or one who
+  shoots the witnesses, a Syndicate captain who keeps the mob's word or
+  skims.
+  - The system's corruption pulls probity but does not set it. Bribes and
+    holdings count, since it reads `Combat.systemCorruption`.
+  - Measured on police: almost none bent at corruption 15, 37% bent at
+    80. The design's first figure (a pull of 0.5) bent only 10% in a
+    bought system, so the police pull is 1.0.
+  - Astra on the Navy: *"A few."* 4 of 43 navy captains are bent.
+  - A pirate's code doesn't move with the system, because pirates answer
+    to no institution.
+- **Cohesion** is how firmly a captain holds to her flight leader. Astra:
+  loyalty *"isn't in relation to the player, but to the 'flight leader'
+  of the group"*. Syndicate and navy captains hold together; pirates and
+  traders less so. Flights themselves are slice 2.
+- **The dials are not shown anywhere.** Astra agreed you learn a captain
+  from her tells, the dock talk and what she does.
+- **Tests:** `test/shipai.test.js` (27 checks).
+
+### Changed (2026-11-20, Astra's notes on slices 3 and 4)
+
+- **Rumours go over the wire between linked ports.** Astra: *"yes."*
+  Two ports in the same system that both reach the relay network share
+  what they hear within 10 minutes (`WIRE_S`), instead of waiting for a
+  ship to carry it. A port cut off by a dark relay (an island) does not
+  get it. In the test system all 10 linked ports heard inside 10
+  minutes, and the island only heard 38.8 hours later.
+- **The relay network has a hop limit, so hubs matter.** Astra: *"hop
+  limit to enforce the development of hub systems."*
+  - A signal can make 3 relay hops (`SAT_HOPS`) from a hub before it
+    stops. Each com-sat of yours that is live is a hub, and the count
+    starts again there.
+  - One hub reaches 25 of the 54 stars in the test galaxy; a second hub
+    raises that to 27. Where you put a hub now decides what your news
+    can reach.
+- **The canopy glass is lighter.** Astra: *"glass tint is too dark."*
+  The tint is cut by more than half (alpha 0.055 → 0.025), and so is the
+  dark vignette at the edges (0.42 → 0.16). A ship 80 m off the nose now
+  reads clearly through it.
+- **Cockpit mouselook is quicker and smoother.** Astra: *"cockpit
+  mouselook is sluggish."*
+  - The look rate is up to 0.0062 radians a pixel.
+  - Right-Alt free look in the cockpit now captures the pointer and
+    reads raw mouse movement. It used to read the cursor's position,
+    which stalls at the screen's edge and lags a frame.
+  - Frame rate was measured first and was not the cause: 55 fps in open
+    space at Mirven.
+- **Platform marks sit to the left of their station's name on the F2
+  map.** Astra: *"put icons to the left of the station's name."* Each
+  mark steps 11 px further out, so a pair reads as a pair.
+- **The start's "Docked at Threshold Dock" line is cleared once you are
+  not docked there.** The probe that showed it: launch, and the message
+  is gone.
+- **Tests:**
+  - comsats, 52 checks (the hop limit added);
+  - islands, 25 checks (the wire added);
+  - milsats, 29 checks (corridors added).
+  - `tools/probe-fixes-1120.js` shows the glass, the F2 marks at Noolm,
+    and the message clearing. The probe now opens F2 with a key press,
+    because setting the panel directly skipped the map's camera.
+
+### Added (2026-11-20, com-sats slice 4: armed defence platforms)
+
+Astra, 2026-11-19: *"a mil-sat is just an armed defense platform. We'll
+have those in high-authority systems and along the border with no-man's
+land."* New file `src/milsats.js`.
+
+- **Where they are.** I measured 120 claimed systems before setting any
+  threshold (`tools/diag-milsats.js`).
+  - **High authority:** crime score 20 or less with development 0.6 or
+    more, or a navy garrison in the system. That is 24 of 120.
+  - **The border:** an empire's star with an unclaimed star within 8 ly.
+    That is 9 of 120; the frontier is thin.
+  - None in pirate or Syndicate holds. About a quarter of claimed systems
+    have platforms; Mirven, where you start, does not (Noolm does).
+- **What they are.** A pair to each civilian orbital port, at most six
+  to a system, owned by the system's power. Astra, 2026-11-20: *"a pair
+  of them that guard the most probable insertion trajectories toward
+  that station."*
+  - The corridors are measured, not guessed. Every scheduled arrival's
+    last approach (the final 4% of the leg) is taken in the station's
+    own orbital frame, the directions are clustered, and the two
+    busiest bundles each get a platform 45 km out along them. Where all
+    traffic comes in one way, the pair flank that corridor 10 km to
+    either side.
+  - On the rails: the offset is held in the station's frame, so the
+    pair ride its orbit and keep facing the way ships come in.
+  - At Noolm, all three guarded ports turned out to have two corridors.
+    In the test system, 6 of 9 later arrivals pass within reach of a
+    platform; the two in a pair sit 88 km apart.
+- **What they shoot.** 30 km reach, 12 damage a shot, one shot every
+  1.5 s.
+  - You, only when the owner wants you (the same test its police use) or
+    when you have fired on it in the last half hour.
+  - Pirates and Syndicate raiders in reach, always. A pirate it kills is
+    not your kill.
+  - It never fires on an innocent: your standing decides whether it is
+    protection or a threat.
+- **Their RTG goes dark like a relay's.** Each platform has its own
+  service cycle. A late tender leaves it dark and unarmed.
+  - The fuel contract is military work: posted only at the owner's ports
+    and its navy's, delivered to the guarded port, at double a relay's pay
+    (24,640 cr).
+  - Cutting that supply takes a platform down without a fight.
+- **You can shoot one.** A shot down your nose that meets a platform
+  first lands on it. The first hit is assault (300 cr bounty) and it
+  answers; destroying it is a navy-class kill (12,000 cr, standing −30).
+  Its hull and death are saved (`G.milsats`).
+- **Seen:**
+  - In space: a dark armoured drum with radiators and a turret, the
+    owner's colour on its band.
+  - Far off and on the map: a new icon, solid when armed, slashed when
+    dark, dashed when destroyed, red when it is after you. It is in the
+    F3 legend.
+- **Not built yet:** hacking or bribing one, and salvage. The RTG core in
+  a dead platform is the dangerous prize.
+- **Tests:** `test/milsats.test.js` (27 checks). `tools/probe-milsats.js`
+  shows one in Noolm firing on a wanted pilot and holed.
+
+### Added (2026-11-20, weapon hits leave hot metal and wounds)
+
+Astra: *"heated metal from weapon fire striking a station or ship, as well
+as damage decals which show a glowing, arcing interior, or which show gas
+venting from the ship's interior."* New file `src/scars.js`.
+
+- **Hot metal.** Every hit that gets through a shield leaves a spot on the
+  hull, in the hull's own frame, that glows and cools over about twenty
+  seconds of game time, from white through yellow and orange to dull red.
+  - Hits close together heat the same spot, so a beam held on one place
+    cooks it white, while a spray of pulses leaves freckles.
+- **Wounds.** Enough damage in one spot (14% of the hull) opens it: a
+  dark ragged hole with a hot lip. Which kind of hole it is comes from the
+  ship and the spot, so the same fight leaves the same wounds.
+  - **Arcing:** the interior glows and the wiring shorts across the hole
+    in blue-white fits. It is fierce at first and settles to every so
+    often.
+  - **Venting:** gas streams out along the hull's normal, thinning as the
+    compartment empties over about two and a half minutes, then it is a
+    dark hole.
+  - The worst damage stays. When a hull is full the oldest cold marks go
+    first, at most ten on one hull.
+- **On ships, yours included:** each scar is placed on the actual hull
+  model by a ray against its mesh, and one on the far side is not drawn.
+  A hull repaired to full has no scars.
+- **On stations:** a shot down your nose that meets a station now stops on
+  its plating. It is tested against the station's real mesh, so a shot
+  through a wheel's spokes still goes on through.
+  - The plating heats and in the end opens, and the station logs you: an
+    assault bounty, once per ten minutes of fire. Your own stations scar
+    but do not book you.
+  - Station crews patch a cold scar after two days.
+- **The scars are not saved.** A reload is a fresh look at a patched hull.
+- **Tests:** `test/scars.test.js` (27 checks). `tools/probe-scars.js`
+  shows your hull holed, arcing and venting; a trader worked over; and a
+  station holed.
+
+### Added (2026-11-20, com-sats slice 3: islands felt everywhere)
+
+Astra, 2026-11-19: knocking a relay out *"turns a station into an island
+which gets its news by courier."* Until now an island was only a word on
+the COMMS page. Now it changes what you can see and what work there is.
+
+- **An island's prices are courier-old** (`Comsats.seenAt`).
+  - Seen from anywhere else, an island's market is as the last ship out
+    of it left it, worked out in closed form from the timetable (the same
+    berthing network rumours ride). Before it went dark its figures were
+    on the wire, so they are never older than the day it went dark.
+  - Docked at an island, it is the other way round: everyone else is as
+    the last ship in brought them, and the relay chain to other stars
+    does not reach the desk (those reports come by freighter).
+  - Your own visit counts as a courier: dock at an island and you carry
+    its prices out as they stood when you left (`G.portSeen`, not saved).
+  - Lanes between worlds are slow, so this bites. Measured over 478
+    island-moments in 60 systems: median 4 days old, and one in ten as old
+    as the dark itself.
+- **Where it shows:**
+  - **Trade analyser:** the head line turns amber and reads "ISLAND ·
+    8.0 days old, by courier"; the graph's end is marked "courier" and the
+    axis counts back from now; a locked island's bid reads "(... by
+    courier)" in the break-even.
+  - **Survey array (TRADE page):** islands are read at their courier age
+    too, so its shortages and best run are what you could actually know.
+  - **Orbit map BODIES list:** a slashed relay, amber, at the end of an
+    island's row. COMMS already said ISLAND.
+- **An island's mail** (missions.js `mailOffers`). While a world's relays
+  are dark (an RTG lapse; a geometry island is over in an hour and posts
+  nothing):
+  - each of its ports posts its own sacks (1 to 3 t) to the main port
+    still on the wire;
+  - every other desk holds the mail for it, one job per island posted at
+    them all;
+  - "Mail sacks" are freight no market lists, like the courier parcel;
+  - the pay grows with the dark: 700 cr plus 90 a day, capped at 6,500,
+    scaled by tonnage, never under a leg's floor. Ten days in, about
+    1,800 cr for 2 t.
+- **Not changed, decided by me (say if you want it otherwise): word of
+  you.** Rumours already travel only on ships (rumours.js: "no
+  faster-than-ship comms"), so an island hears of you exactly as late as
+  it always did. Gossip is people in bars, not relay traffic, so relays
+  do not speed it up anywhere. The alternative is for linked ports to
+  share what they hear over the wire, which would make your reputation
+  travel much faster everywhere except islands.
+- **Tests:** `test/islands.test.js` (23 checks: the timetable sums, an
+  island's age both ways, your visit, fuelled again, the analyser and the
+  survey array, the mail). `tools/probe-islands.js` shows it in the game;
+  `tools/diag-islands.js` measures the ages.
+
+### Added (2026-11-20, drawn icons for what things are; relays in space and on the map; the RELAY panel)
+
+Astra: relays and sats should be *"both models in space as well as on the
+map."* She asked for *"another panel selectable for the MFDs which tells
+you which sat you're connected to, and shows which links are up"*, and
+for *"small icons which indicate this information without using ascii
+characters."* Also: *"icons for the comms menu and the nav menu which
+shows what is a spaceport and what is a ship and what is a pirate ship
+and what is a planetary starport or a mining facility, or navy, or
+syndicate."*
+
+- **New code: `src/icons.js`.** It is one set of small drawn shapes, in
+  the row's own colour, so the colour still says whose a thing is and the
+  shape says what it is.
+  - **Ports, by who runs it first, then by what it does:**
+    - a shield for navy;
+    - a hexagon with a cross for the Syndicate;
+    - a pennant for yours;
+    - a ring for a station;
+    - a ring with spokes for a highport;
+    - a crane for a yard;
+    - a drop for a refinery;
+    - a pick for mining;
+    - a leaf for agri;
+    - a dome on its ground line for a planetary starport.
+    - Mining and agri ports on the ground stand on a ground line.
+  - **Ships, as chevrons:**
+    - filled for a trader;
+    - with barbs for a pirate;
+    - hollow with a bar for a warship;
+    - with a beacon for police;
+    - with a cross for a Syndicate runner.
+  - Stars, planets and moons are drawn too.
+- **Where the icons are used:**
+  - the COMMS channel list;
+  - the F3 nav list, which now has a key underneath;
+  - the CONTACTS page on the MFDs, which used to type `> * O o #`;
+  - the orbit map's BODIES list, which used to type the same marks.
+  - Measured over 30 stars: 275 ports in 11 kinds, and 4,374 hulls across
+    traders, runners, police, pirates and warships.
+- **Two shapes redrawn after looking at them:** the mining pick read as a
+  letter T at list size, so it is tilted now; the yard read as a Π, so it
+  is a crane with a hook now.
+- **Relays and your com-sats in space.**
+  - They are a small model: a foil-wrapped body, two solar wings, and a
+    dish facing the world. They are about 12 m across, and the model
+    shows once one is close enough to resolve.
+  - Further out, up to 25,000 km, a faint drawn mark stands in for one:
+    blue for a public relay, green for yours, grey and slashed for a dark
+    one.
+  - **On the orbit map** they show at any range, but only once they stand
+    clear of their world on the screen.
+- **The RELAY panel.** It is a new page, selectable for any dashboard MFD.
+  - **Who you are talking to:** the nearest live relay, or com-sat of
+    yours, with a clear line to your ship, and how far away it is.
+  - **This system:** how many of its worlds' relays are lit, which are
+    dark, and whether the uplink is lit.
+  - **The chain**, drawn with icons:
+    - a sat for each star it runs through;
+    - a line for each link;
+    - a slashed sat for one that is down;
+    - drifting wings for one destroyed but still expected;
+    - a cut, dashed line where a link is out.
+    - A marker shows where you are, and a dotted gap stands in for the
+      middle of a chain too long to show.
+  - **Which chain:** to your com-sat, else to your plotted star, else to
+    the nearest claimed star.
+  - **The bottom line** says LIVE and how many hops and hours, or where it
+    is broken and that the far end is on the other chain.
+  - **Destroyed relays:** nothing can destroy a relay yet. The state is
+    read from `G.relaysGone` for when something can.
+- Tests: `test/icons.test.js` (13 checks) runs every icon through a canvas
+  that refuses text. `test/comsats.test.js` is up to 49 checks with the
+  panel's helpers. Probes: `tools/probe-icons.js` and
+  `tools/probe-relays.js` (the model up close, the chain whole and broken,
+  the map).
+
+### Added (2026-11-20, com-sats, slice 2: RTGs, dark relays, a broken chain, RTG fuel)
+
+Astra, 2026-11-19: mil-sats and com-sats burn one fuel, refined out of
+the mildrive's waste. Her correction on 2026-11-20: *"a break in the
+relay chain turns the chain into two chains which can be re-connected."*
+
+- **RTG fuel.**
+  - It is a new good (`rtgfuel`, base 1,400 cr/t) and it is legal. Fissiles
+    are not contraband, and nothing on the ladder sits below them.
+  - It is registered the way contraband is, after the main list, so no
+    existing market, tier order or route moves.
+  - **Isotope refineries:** every reprocessing port, which already buys
+    waste, now makes 0.8 t a day. It sells for about 900 cr/t at source.
+    The COMMS row says "isotope refinery". The production is added when the
+    system is handed out, after its traffic is built.
+- **Relays go dark.**
+  - Each world's relays share an RTG service cycle: a tender every 260 to
+    620 days, seeded.
+  - About one tender in five is late, by 12 to 75 days. For that time the
+    world's relays are dark and its ports are islands. The COMMS row says
+    "ISLAND - relays dark, tender due day N".
+  - Measured: dark about 2% of world-days.
+  - It all runs on the rails: hashes of star, world and cycle number.
+- **A relay serves its own world.** It links the ports on it and over it,
+  not the next planet. The first test found Mirven I's port still linked
+  through Mirven II's relays while its own were dark.
+- **Six relays a world, not three:** three orbital planes, with an
+  opposite pair in each. With three, a ground pad saw none overhead about
+  one time in eight and flickered in and out of the network through its
+  day. A pair is almost always half above the horizon. With every relay
+  alive, islands are now nearly all RTG lapses (21 in 1,095
+  port-moments, about 2%).
+- **The chain breaks in two.**
+  - Each claimed system talks to its neighbours through one long-range
+    **uplink**, with an RTG cycle of its own.
+  - While the uplink is dark, the star drops out of the chain, which
+    splits into two chains. Each half still works on its own.
+  - **Two ways to rejoin them:** fuel the uplink, or have a live com-sat of
+    yours in that system to bridge the gap.
+  - Measured: with Mirven's uplink dark on day 532, its neighbour's chain
+    reaches 37 stars instead of 53, and two of its six neighbours land in
+    the other half.
+  - "Your com-sats" says "uplink here DARK - chain broken" when you are in
+    such a system.
+- **Refuelling contracts.**
+  - From 30 days before a dark date until the tender would have come,
+    every port in the system posts **"4t RTG fuel for the relays over X"**
+    to that world's port. Uplinks get one too, to the system's main port
+    (the highport if there is one), paying half as much again.
+  - **You bring the fuel yourself.** The contract hands you nothing at the
+    desk (a new `bring` flag on a haul).
+  - **Pay:** 2.2 × the fuel's base a tonne, 12,320 cr for a world's 4 t.
+  - **One job, not one per port:** taking it at one desk takes it off all
+    of them.
+  - **Delivered in time:** the relays never go dark. **Delivered late:**
+    they light again that day.
+  - The only state is `G.rtgFixed`.
+- **Your com-sat's fuel.**
+  - A load lasts 365 days from launch or the last refuel. After that the
+    sat is DARK and reads nothing.
+  - **Refuelling:** "Refuel a com-sat" on your COMMS channel takes 1 t of
+    RTG fuel, in orbit round its world.
+  - The channel shows each sat's days of fuel left.
+- All numbers are Claude's.
+- Tests: `test/comsats.test.js` now has 45 checks: dark rates, islands
+  during a lapse, posting, fixing in time and late, the chain splitting
+  and rejoining both ways, the contract, the refinery and the sat's fuel.
+
+### Added (2026-11-20, com-sats, slice 1: the relay network and your own com-sat)
+
+Astra, 2026-11-19: *"you can own a com-sat, keeps you updated with trade
+prices along the comsat's line of sight, basically, even across
+systems."* A dead relay *"turns a station into an island which gets its
+news by courier."* She agreed the model the same day: a chain of relays,
+8 ly a hop, an hour a hop, in two layers. The public network is the
+stations'; your com-sat is your terminal into it.
+
+- **New code: `src/comsats.js`.**
+- **The public relays.**
+  - There are three in circular orbits round every world with a port,
+    owned by whoever holds the system.
+  - They are seeded (`relays|<star>`), so where each one is at any
+    moment is a formula.
+  - They are not bodies, so no port, route or fingerprint moves.
+  - There are none in nobody's systems.
+- **Linked and island ports.**
+  - A port is linked while a relay (or a com-sat of yours) in its system
+    has line of sight to it. Any world or star between them blocks it,
+    and a surface port needs the relay above its horizon.
+  - A port no relay can see is an **island**, and its COMMS row says so.
+  - Measured over 40 stars: 5 islands in 1,095 port-moments, so islands
+    are rare while every relay is alive.
+  - Relays do not die yet. Slice 2 brings their RTG dark dates.
+- **The chain between stars.** Any star a power claims is a node, and so
+  is any star with a com-sat of yours over it. Nodes within 8 ly are
+  joined.
+- **Your com-sat.**
+  - **Buying one:** at shipyards and highports, from the port's COMMS
+    channel, for 85,000 cr. You can carry two.
+  - **Launching it:** from your own COMMS channel, **"Your com-sats"**,
+    while in orbit round a world. It goes into the orbit you are flying,
+    at your height and in your plane.
+  - It has to go at least 1.6 world radii out, and it cannot be launched
+    from a deck or the ground.
+  - The channel lists each sat you own, and whether you are LIVE and to
+    how many stars.
+- **Live prices.** With a com-sat on the network and your ship somewhere
+  on that same network, the trade analyser reads every connected star's
+  prices at **an hour a hop**. Its AGE column shows those in green hours,
+  and its header line says LIVE. Off the network, or with no sat, news
+  still rides the freighters at about 11.8 h per light year.
+  - From Mirven, one sat reaches 53 stars, so one sat on a big empire's
+    network covers all of it.
+- **Saves:** your sats in orbit (`G.comsats`) and those aboard
+  (`ship.comsats`). An old save has neither.
+- **Why launching is on COMMS.** The first cut put **LAUNCH COM-SAT
+  HERE** on the planetary scanner. The probe showed the scanner will not
+  open without a survey instrument fitted, so a pilot without one could
+  never launch, and the button moved.
+- All numbers are Claude's except the 8 ly and the hour, which are
+  Astra's.
+- Tests: `test/comsats.test.js` (22 checks, in the economy group). The
+  launch checks prove the sat starts exactly where the ship was, at its
+  height, moving the way it was. Probe: `tools/probe-comsats.js`.
+
+### Added (2026-11-19, the world's own drilling teams: new ground ports on a dated schedule)
+
+Astra, 2026-10-17: drilling teams work for "both" the player and the world;
+"there can and should be more than one land port per world sometimes";
+and the dig is mission content ("3 and 4 are good": ferry the crew, supply
+the dig). This is the world's side. The player's side is the drilling
+team at your outpost.
+
+- **New code: `src/digs.js`.** Each star has its own schedule of NPC
+  digs, built from its own seeded stream (`digs|<star>`) and the system
+  it generated. A dig has a world, a dry spot on it, a start date and a
+  finishing date. On the finishing date a ground port opens there, with
+  its own market and its own routes, whose first ships leave that day.
+- **The extra ground ports from day one.** These are simply the digs
+  that finished before day 0, so the same mechanism covers both. Measured
+  over 60 stars: about 0.75 digs per system across roughly five and a
+  half years of game time, and about 0.35 extra ports per inhabited
+  system at the start.
+- **Where digs happen:**
+  - only landable worlds (the gravity rule comes first);
+  - only dry ground (`Weather.dryAt`);
+  - never in nobody's systems;
+  - mostly worlds nobody lives on, where the new port is a mining head.
+- **Nothing else moves.** The generator is untouched. A dug port is put
+  into its system when it is open, the same way a station of yours is.
+  Every existing port, route and seed fingerprint stays as it was.
+- **Seeing them.**
+  - The planetary scanner marks a dig in progress with a blue diamond
+    and "DIG nn%".
+  - If you are in the system on the day a port opens, you hear about it
+    and it goes in the journal. A port that opened long ago is simply
+    there.
+- **Dig work on the mission board.** Ports in the system post jobs for a
+  dig in progress, delivered to the dig's **depot**: the nearest civilian
+  port on or over the same world. Navy carriers are excluded; the first
+  probe had picked FNS Sovereign.
+  - **Shoring:** structural alloys in 8 t batches, paying a quarter
+    over an ordinary haul.
+  - **Relief crew:** a passage for the drillers.
+  - Each batch delivered, and each relief crew, brings the opening day
+    **6 days** forward. It never goes earlier than the day of delivery,
+    or than half way through the dig.
+  - `G.digs` saves this, and it is the only state the digs keep.
+- **Not built:** protecting a dig. Nothing attacks one yet.
+- All numbers are Claude's.
+- Tests: `test/digs.test.js` (32 checks, in the ground group). Probe:
+  `tools/probe-digs.js` covers the scanner mark, the board and the port
+  opening on its day.
+
+### Added (2026-11-19, drilling teams: an outpost dug out into a port of yours)
+
+Astra: "Drilling teams are engineers that can be ordered to work on the
+surface at an outpost." What they do there was agreed on 2026-10-17: dig
+the outpost out into a ground port of your own.
+
+- **Setting them down.** Land at your standing outpost, pin its cell on
+  the planetary scanner, and click **SET ENGINEERS DOWN TO DIG**.
+  - Every engineer aboard goes down.
+  - They stay on your books and draw their wage. The crew screen says
+    "DRILLING ON …", and they cannot be dismissed while they are down.
+  - Your ship flies without them.
+- **What it costs:**
+  - its stores, 40 t of structural alloys over the whole dig, hauled
+    down (see "the dig's stores" below);
+  - a station licence where the law wants one, the first time. A port is
+    a station, and a Syndicate forged blank serves, as it does for a
+    Crawler.
+- **How fast.** Each engineer digs 0.6 + 0.2 × their rating a day, out of
+  120 in all:
+  - one good engineer takes about 100 days;
+  - an excellent and an exceptional together take about 40.
+- **Fetching them back.** **FETCH THE TEAM BACK** brings them aboard, and
+  the dig keeps what they did; it does not move without them. Setting a
+  team down again costs no more supplies.
+- **On the rails.** The dig is a record of the work done by a given moment
+  and the team's rate since. Every change to the team re-bases it, so the
+  finishing day is a formula and skipping time is exact.
+- **When it finishes,** wherever you are, the outpost opens as a **mining
+  station of yours** (`Stations.foundDug`):
+  - it stands on the outpost's spot, open from the day the dig finished;
+  - it has its own NPC traffic from that day, as any station of yours does;
+  - it has no Crawler over it, so there is no orbital half;
+  - its upkeep runs on a 300,000 cr build cost.
+  - Your engineers wait there: dock (or land at the outpost) and they come
+    aboard.
+- **The ground pointer** at a standing outpost now says "N empty the claim
+  at the outpost", not one drone's keys.
+- All numbers are Claude's.
+- Tests: `test/outposts.test.js` now has 43 checks. Probe:
+  `tools/probe-outpost.js` (the button, the team down, the status line).
+  stations, construction, crew, rescue, claims and the save round trip
+  all pass.
+
+### Changed (2026-11-19, the dig's stores are hauled, not a flat fee)
+
+The first cut charged 60,000 cr up front for "the dig's supplies". Astra
+left the choice between that and hauled tonnage to Claude, and Claude chose
+hauled tonnage. Supplying your own holdings is one of the three loops she
+asked for (2026-10-18), and the dig is the first holding that needs
+supplying.
+
+- **What the dig eats.** 40 t of **structural alloys** over the whole dig,
+  a third of a tonne per unit of work, eaten as the work is done.
+- **Two ways to get them there**, both from the scanner strip while you
+  are landed at the outpost:
+  - **UNLOAD ALLOYS FOR THE DIG** takes what is in your hold, up to what
+    the dig still wants. Bought at market, 40 t is about 10,600 cr.
+  - **GUILD BRINGS STORES IN** pays for the whole shortfall delivered, at
+    three times the going rate: 31,800 cr for all 40 t. It is the
+    convenient way, and the dear one.
+- **Running out.** When the stores run out the dig **stalls**: the team
+  waits there and still draws its wage. You hear about it once, wherever
+  you are, and the status line says STALLED and how many tonnes it is
+  short.
+  - A team set down with no stores at all is told so straight away, and
+    is not announced a second time.
+- **On the rails.** The record also keeps the stock on site at its
+  moment. Work done is capped by what that stock can shore, so the stall
+  day is a formula like the finishing day.
+- **Setting a team down is now free.** It needs only the licence, the
+  first time.
+- **Older saves.** A dig started before this change has no stock field.
+  It reads as fully supplied, because it was paid for in full.
+- The mining test save's shuttle, Groundbreaker, now carries 30 t of
+  alloys, so both routes can be tried: unload those 30 t, then either fly
+  back for 10 t more or contract the rest in.
+- All numbers are Claude's.
+- Tests: `test/outposts.test.js` now has 58 checks, covering unloading,
+  the stall, the contract, the legacy dig and recall keeping the stores.
+
+### Fixed (2026-11-19, the planetary scanner's marks are legible over every colour)
+
+Astra: "on the scanner display the selected point, the grid lines and the
+font need to be dynamically chosen to be visible on the scanner display in
+any of the colors it uses. They aren't, currently."
+
+- Rather than pick a colour per pixel underneath, every mark is now drawn
+  twice: a dark halo first, then the coloured stroke on top
+  (`scanHalo`, `scanText` in `src/screens.js`). A light line with a dark
+  edge reads on black, teal, green, orange and the white-pink "richest"
+  alike, so nothing has to sample the map.
+- **Grid lines** are a brighter white (0.42 alpha) with a faint dark edge.
+- **The selected point** is a warm-white box with four outward ticks, all
+  haloed. It stays visible when it sits on the brightest ore.
+- **Text and lines** on the map get the same treatment: field lines and
+  their arrowheads, pole rings and N/S, the ground track and its arrows,
+  drone marks, the outpost square and its label, and the ship marker.
+- Checked by eye at 1×, 4× and 8× over a rich deposit
+  (`tools/probe-scanner.js`).
+
+### Added (2026-11-19, saves to and from a file; a mining test save)
+
+Astra asked for a save "with a ship that has all the right gear, crew and
+another ship for sending my engineers down to the planet to test the
+mining stuff with".
+
+- **Export and import.** On the pause menu's save page, **X** writes the
+  highlighted slot to `manifest-<label>.json`. On the load page, **I**
+  picks a `.json` file and puts it in the highlighted empty slot (or the
+  first empty one), then loads it. The record keeps its version check.
+  The footer names both keys. (`Save.recordText`, `parseRecord`,
+  `writeRecord`.)
+- **`tools/make-mining-test-save.js`** builds the test save through the
+  game's own code and writes it with the probe's new `file()` helper:
+  - Mirven system, docked at Halden Depot, 748,678 cr, tutorial done;
+  - the Mule **Prospect**: deep-survey scanner, 2 drones, pilot Teo Brill
+    and engineer Ama Hoyt. Mirven I a is fully surveyed, the claim is
+    filed, and a real station licence is held;
+  - the heavy shuttle **Groundbreaker**, parked at the same port, with
+    engineers Kes Lund (3) and Mira Sable (4). Crew can't move between
+    hulls, so the drilling team rides the hull that lands.
+- **`tools/electron-probe.cjs`** gives probes a `file(name, text)` helper
+  that writes into the probe's output folder.
 
 ### Fixed (2026-11-22, the hand on the beacon was still being paid)
 
