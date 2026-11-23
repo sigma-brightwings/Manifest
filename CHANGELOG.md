@@ -40,6 +40,28 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-23, the reactor block: Astra's layout for the L hulls)
+
+Astra drew it: *"grow the hulls, put it in a like this space, split the reactor room in two so the crew can operate panels in the room for controlling the reactor."* The Kestrel, Cutter, Longhaul and Tanker now have her layout on their one deck:
+
+- **From the bridge:** a side passage down the starboard side, a cross passage behind the bridge's solid aft wall, and the passage on aft to the hold.
+- **The reactor's compartment** is off the cross passage to starboard, in two rooms:
+  - **Reactor control** forward, with the panel under the glass. The drive is run from here; it's where the engineers' rounds go.
+  - **The reactor** aft, through a reactor door: standing on the merchant hulls, lying down with the rods in from the front on the Cutter.
+- **To port,** the airlock by the cross passage, then the bunks, with the medical cabinet in them (or, where the bunks were narrowed, a first-aid cabinet on the cross passage's forward wall). There's no separate engine room or medbay any more.
+- **Two layouts.** Asked whether the block beside the side passage is the bridge itself, Astra said *"have both layouts available"*:
+  - **A:** the block is the bridge; you go in through its starboard wall at the forward end, onto a landing clear of the stations.
+  - **B:** an avionics bay is behind the bridge, and the side passage leads to the bridge's aft door.
+  - Which one a ship has comes from her own seed, so a ship is always the same ship. Where B would cost her a room, she's laid out as A (the Cutter is always A).
+- **Raised cockpits** (Kestrel, Longhaul): the stair now runs down just aft of the helm, so the bridge deck and everything aft of it are on the deck. The bridge deck takes the cockpit's move forward, so no room aft of it moved.
+- **Where a landing-gear leg would cut the ramp short** with the airlock by the cross passage, the airlock goes aft of the bunks instead, so her ramp stays a ramp (the Kestrel's would have been a stair).
+- **Fitting her:** the new rooms take part in the shrink-then-drop fit. The reactor compartment narrows from her outboard side to as little as 2.4 m, and the side passage and avionics bay to 1.0 m; they're never left out. Today:
+  - the Kestrel's side passage (A) is 1.0 m wide;
+  - the Longhaul's reactor compartment is 2.5 m wide.
+- **Growing the hulls,** as asked, made things worse: a bigger hull stands taller on her gear, her ramp gets longer, and the hold is pushed out of her tail (the Kestrel fits at no length up to 1.6× hers). So only the **Cutter** grows, **36 → 37 m**, the one metre her 6.5 m ramp and her hold need. Her cockpit keeps its place in her model (tools/grow-hulls.js scales a hull about her eye, unlike fit-hulls, which refits from scratch).
+- **Developer's panel:** a *reactor block layout* switch (A, B or her own), and *Check decks* reports a block ship's rooms reachable from the airlock.
+- **Saves:** unchanged. Layouts come from the seed, and an existing ship gets her new deck.
+
 ### Changed (2026-11-23, a damaged ship goes to general quarters by herself)
 
 - Astra: *"if the ship's hull is below 75% the ship automatically goes to GQ."* Below 75% hull a large ship is at general quarters whether or not anyone called it, so her Z fittings are dogged and her tram runs on battery. At 75% and above, GQ is the captain's to call.

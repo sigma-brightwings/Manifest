@@ -480,6 +480,20 @@
      * hull, whose cockpit is a deck of its own reached by lift. */
     var rz = opts.raised && !DECKED[opts.hullId] ? opts.raised : null;
     var rise = rz ? rz.rise : 0, run = rz ? rz.run : 0, lead = rz ? rz.fwd - rz.run : 0;
+    /* The reactor block (BLOCK_HULLS): a bridge deck always, and a raised
+     * cockpit's stair at the helm's arch, so her bridge deck and all aft of
+     * it are on the one deck and its side door is a door at deck level. */
+    var block = !!(BLOCK_HULLS[opts.hullId] && opts.block !== false && !DECKED[opts.hullId]);
+    var blockV = block ? blockVariant(opts) : null, stairFoot = null;
+    /* Variant A's door is in the bridge's starboard wall at its forward end:
+     * a landing clear of the stations there (BLOCK_LANDING), the stations
+     * aft of it. */
+    var stationTop = 0;
+    /* A raised cockpit stands `fwd` forward of where it was; the old deck
+     * ran its passage on forward under it (`lead`). Here the bridge deck
+     * takes that length instead, so every room aft of it is where it was. */
+    var blockLead = 0;
+    if (block) { blockLead = lead; lead = 0; deckLen = Math.max(deckLen, 3.0); if (blockV === 'A') { deckLen += BLOCK_LANDING; stationTop = BLOCK_LANDING; } }
     var bridge = room('cockpit', 'cockpit', -geom.sideX, geom.sideX, geom.bulkZ - (deckLen ? 0 : run), geom.frontZ, H, 'Cockpit');
     /* Its floor `rise` over the deck's forward of `stepZ`, the stair aft
      * of that down (or up) to the deck: floorAt. */
@@ -489,7 +503,11 @@
      * of the stair, when she has one. The bridge deck goes up with the
      * helm: its stations are worked from the helm's own floor. */
     var doorFront = geom.bulkZ - run, deck = null, stepZ = geom.bulkZ;
-    if (deckLen) {
+    if (deckLen && block) {
+      var bz1 = geom.bulkZ - WALL_T, bz0 = bz1 - deckLen - run - blockLead;
+      deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, bz0, bz1, H, 'Bridge');
+      doorFront = bz0; stepZ = bz1; stairFoot = bz1 - run;
+    } else if (deckLen) {
       var dz1 = geom.bulkZ - WALL_T, dz0 = dz1 - deckLen;
       deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, dz0 - run, dz1, H, 'Bridge');
       if (rz) { deck.y0 = rise; deck.y1 = rise + H; }
@@ -503,7 +521,7 @@
     var gunners = big && opts.turret && !omit.turret ? 1 : 0;
     var tLen = gunners ? 0.6 + gunners * TURRET_SEAT + 0.2 : 0;
     /* On a decked hull the engine room is far aft, down at the junction. */
-    var med = big && !omit.medbay ? MED[size].slice() : null, eng = big && !decked && !omit.engine ? ENGINE[size].slice() : null;
+    var med = big && !omit.medbay && !block ? MED[size].slice() : null, eng = big && !decked && !omit.engine && !block ? ENGINE[size].slice() : null;
     if (med) med[0] = W('medbay', med[0]);
     if (eng) eng[0] = W('engine', eng[0]);
     /* The airlock is the last room down the port side, on every hull. */
@@ -522,6 +540,7 @@
     var lockLen = LOCK_LAND + rs.len + 0.25;
     var portNeed = (crewed ? qLen : 0) + (tLen ? SIDE_GAP + WALL_T + tLen : 0) + SIDE_GAP + WALL_T + lockLen;
     var stbdNeed = big ? (med ? med[1] : 0) + (eng ? (med ? SIDE_GAP + WALL_T : 0) + eng[1] : 0) : 0;
+    if (block) stbdNeed = BLOCK_CTL + WALL_T + BLOCK_RL;
     var len = PASSAGE_LEN[size] * (0.9 + 0.2 * rng.next());
     if (crewed) len = Math.max(len, qLen + 0.6);
     len = Math.max(len, portNeed + 0.6);
@@ -538,6 +557,13 @@
      * car; the main deck's passage starts aft of the car, a deck down. */
     var lobby = null, cars = {}, carZ = null;
     var p1 = doorFront - WALL_T;
+    /* The reactor block: the avionics bay (B) aft of the bridge, then the
+     * cross passage, then the passage. */
+    var crossZ1 = null;
+    if (block) {
+      crossZ1 = doorFront - WALL_T - (blockV === 'B' ? BLOCK_BAY + WALL_T : 0);
+      p1 = crossZ1 - BLOCK_CROSS - WALL_T;
+    }
     if (decked) {
       lobby = room('lobby', 'lobby', -LOBBY_HW, LOBBY_HW, p1 - LOBBY_L - (LOBBY_EXTRA[opts.hullId] || 0), p1, PASSAGE_H, 'Lift lobby');
       carZ = [lobby.z0 - WALL_T - CAR_D, lobby.z0 - WALL_T];
@@ -552,9 +578,11 @@
      * meet at a shared wall for a door to join them. So each door's box is
      * stretched across the wall's thickness: from the cockpit's aft wall to
      * the passage's forward one. */
-    var dBridge = slider('bridge', deck || bridge, lobby || passage, doorFront, 'Bridge door');
-    var bAft = lobby ? lobby.z1 : p1;
-    dBridge.z0 = bAft - 0.8; dBridge.z1 = doorFront + 0.8; dBridge.wall = [bAft, doorFront];
+    if (!block) {
+      var dBridge = slider('bridge', deck || bridge, lobby || passage, doorFront, 'Bridge door');
+      var bAft = lobby ? lobby.z1 : p1;
+      dBridge.z0 = bAft - 0.8; dBridge.z1 = doorFront + 0.8; dBridge.wall = [bAft, doorFront];
+    }
     /* The helm's arch: the old doorway, always open. */
     if (deck) {
       doors.push({ id: 'helm', a: bridge.id, b: deck.id, axis: 'z', at: geom.bulkZ, w: ARCH_HW * 2, h: DOOR_H,
@@ -564,15 +592,16 @@
     /* The quarters, off the port side of the passage, the door at their
      * forward end. Its leaves slide fore and aft into the passage wall. */
     var quarters = null;
-    if (crewed) {
-      var qx1 = -PASSAGE_HW - WALL_T, qz1 = pTop - 0.3;
-      quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, 'Crew quarters');
+    function makeQuarters(qz1) {
+      var qx1 = -PASSAGE_HW - WALL_T;
+      quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, block ? 'Bunks' : 'Crew quarters');
       quarters.side = -1;
       var zc = qz1 - 0.7;
       doors.push({ id: 'quarters', a: passage.id, b: quarters.id, axis: 'x', at: -PASSAGE_HW, w: DOOR_HW * 2, h: DOOR_H,
                    x0: qx1 - 0.8, x1: -PASSAGE_HW + 0.8, z0: zc - DOOR_HW, z1: zc + DOOR_HW, zc: zc,
-                   wall: [qx1, -PASSAGE_HW], slide: true, open: 0, shut: true, label: 'Quarters door' });
+                   wall: [qx1, -PASSAGE_HW], slide: true, open: 0, shut: true, label: block ? 'Bunks door' : 'Quarters door' });
     }
+    if (crewed && !block) makeQuarters(pTop - 0.3);
 
     /* A room off the passage, its door at its forward end, as the
      * quarters' is. `side` -1 for port, 1 for starboard; `z1` its forward
@@ -592,7 +621,7 @@
     var turret = null, medbay = null, engine = null, cargo = null;
     if (big) {
       var zTop = pTop - SIDE_GAP;
-      if (gunners) {
+      if (gunners && !block) {
         var tz1 = quarters ? quarters.z0 - SIDE_GAP - WALL_T : zTop;
         turret = sideRoom('turret', 'turret', -1, tz1, W('turret', TURRET_W), tLen, QUARTERS_H, 'Turret', 'Turret door');
       }
@@ -618,8 +647,28 @@
      * shut whenever the room is not at the ship's own pressure. */
     var portTop = turret ? turret.z0 - SIDE_GAP - WALL_T
                 : quarters ? quarters.z0 - SIDE_GAP - WALL_T : pTop - SIDE_GAP;
+    /* The reactor block: the airlock first, by the cross passage, as she
+     * drew it; or (`blockLockAft`, render.js, where a gear leg would stand
+     * in the ramp's way there) aft of the bunks, as the old deck had it. */
+    var lockAft = block && !!opts.blockLockAft;
+    if (block && lockAft && crewed) makeQuarters(pTop - 0.3);
+    if (block) portTop = lockAft && quarters ? quarters.z0 - SIDE_GAP - WALL_T : pTop - SIDE_GAP;
     var lock = sideRoom('airlock', 'airlock', -1, portTop, Math.max(2 * rs.hw + 0.3, W('airlock', LOCK_W)), lockLen, LOCK_H, 'Airlock', 'Airlock door');
     var dLock = doors[doors.length - 1];
+    var blockOut = null;
+    if (block) {
+      /* Her bunks aft of the airlock, then her turret, if she has one. */
+      if (crewed && !lockAft) makeQuarters(lock.z0 - SIDE_GAP - WALL_T);
+      if (gunners) {
+        var lowest = quarters && quarters.z0 < lock.z0 ? quarters : lock;
+        turret = sideRoom('turret', 'turret', -1, lowest.z0 - SIDE_GAP - WALL_T, W('turret', TURRET_W), tLen, QUARTERS_H,
+                          'Turret', 'Turret door');
+      }
+      blockOut = buildBlock({ variant: blockV, geom: geom, deck: deck, passage: passage, crossZ1: crossZ1, p1: p1,
+                              stairFoot: stairFoot, rooms: rooms, doors: doors, items: items, room: room, hullId: opts.hullId,
+                              ctlW: W('engine', BLOCK_RW), sideW: W('blockSide', BLOCK_SIDE), bayW: opts.roomW && opts.roomW.blockBay,
+                              floor: geom.floorY - rise });
+    }
     dLock.id = 'lock'; dLock.seal = true;
     var hinge = lock.z1 - LOCK_LAND, rxc = (lock.x0 + lock.x1) / 2;
     var rampSpec = { room: lock.id, xc: rxc, hw: rs.hw, x0: rxc - rs.hw, x1: rxc + rs.hw,
@@ -654,7 +703,7 @@
     itemDeck = 'bridge';
     roles.forEach(function (role, i) {
       var side = sides[i % sides.length], row = Math.floor(i / sides.length);
-      var zc = deck.z1 - 0.15 - STATION_LEN * (row + 0.5);
+      var zc = (stairFoot !== null ? stairFoot : deck.z1) - stationTop - 0.15 - STATION_LEN * (row + 0.5);
       var xw = side * geom.sideX, xc = side * (geom.sideX - STATION_CON);
       var xs = side * (geom.sideX - STATION_CON - STATION_SEAT);
       var st = { role: role, side: side, z: zc, n: i };
@@ -691,6 +740,20 @@
       }
     }
 
+    /* The reactor block's bunks room keeps the medical cabinet the medbay
+     * would have had: against its forward wall, outboard of the door's
+     * way in. */
+    if (block && quarters) {
+      var mcx0 = quarters.x0 + BUNK_W + 0.1, mcx1 = Math.min(quarters.x1 - 0.9, mcx0 + 0.55);
+      if (mcx1 > mcx0 + 0.3) item('medcab', (mcx0 + mcx1) / 2, quarters.z1 - 0.22, 'Medical cabinet',
+                                  { counter: [mcx0, quarters.z1 - 0.45, mcx1, quarters.z1] });
+    }
+    /* Bunks too narrow for it (the fit narrowed them): a shallower one on
+     * the cross passage's forward wall at its port end, by the airlock. */
+    if (block && blockOut && !items.some(function (it) { return it.kind === 'medcab'; })) {
+      var xr = blockOut.cross, mx0 = xr.x0 + 0.05, mx1 = Math.min(xr.x0 + 0.65, xr.x1 - 1.0);
+      item('medcab', (mx0 + mx1) / 2, xr.z1 - 0.15, 'Medical cabinet', { counter: [mx0, xr.z1 - 0.3, mx1, xr.z1] });
+    }
     /* THE NEW ROOMS' FURNITURE (2026-10-25). Its own seeded stream, so
      * adding it moved nothing the old stream already decided. */
     var rng2 = stream('shipdeck2|' + (opts.key || opts.hullId || ''));
@@ -1039,12 +1102,18 @@
       /* The deck's floor. A raised cockpit's is `raised.rise` above it
        * (floorAt); every other hull's cockpit is on the deck. */
       floorY: geom.floorY - rise, k: k, bay: bay, size: size,
-      raised: rz ? { rise: rise, run: run, fwd: rz.fwd, treads: rz.treads || 0, stepZ: stepZ, doorZ: doorFront } : null,
+      raised: rz ? { rise: rise, run: run, fwd: rz.fwd, treads: rz.treads || 0, stepZ: stepZ,
+                     doorZ: stairFoot !== null ? stairFoot : doorFront, block: block } : null,
       stations: stations, bunks: bunks, bunkAt: bunkAt, sides: sides,
       turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit,
       ramp: rampSpec
     };
     var deckAll = deckOrder;
+    if (blockOut) {
+      out.block = blockV;
+      out.naval = { block: true, variant: blockV, style: BLOCK_MILITARY[opts.hullId] ? 'navy' : 'merchant', cx: 0,
+                    reactors: blockOut.reactors, misfit: [], narrowed: [], dropped: [], lowered: [] };
+    }
     if (decked && NAVAL_MERGE[opts.hullId] && global.NavalDeck && opts.naval !== false) {
       var nv = navalize({ out: out, geom: geom, opts: opts, carZ: carZ, deckY: deckY, rooms: rooms, doors: doors, items: items });
       if (nv) {
@@ -1383,6 +1452,108 @@
    * 51 m, Longhaul 38 to 59) puts their glass 4-8 m ahead of the seat and
    * turns their ramps into lifts. Astra's call, 2026-11-23. */
   var FLAT_HULLS = { crawler: 1 };
+  /* The reactor block's own rooms (BLOCK_HULLS, below): the side passage,
+   * the cross passage, the avionics bay (variant B), reactor control and
+   * the reactor; the bridge door; and the reactor's spec for navalMesh. Its
+   * rooms are kind 'naval', so they are drawn as the naval decks' are, wall
+   * by wall round whatever doors they have. */
+  function buildBlock(c) {
+    var g = c.geom, deck = c.deck, ps = c.passage, doors = c.doors, items = c.items, room = c.room;
+    var sx = g.sideX, V = c.variant;
+    function nroom(id, sub, x0, x1, z0, z1, h, label) {
+      var r = room('bk-' + id, 'naval', x0, x1, z0, z1, h, label);
+      r.sub = sub; r.blockRoom = true;
+      return r;
+    }
+    /* A door through the wall `wall` = [low, high] (z for 'z', x for 'x'),
+     * centred at `at` along it; its box reaches 0.8 m into each room. */
+    function ndoor(id, a, b, axis, wall, at, opt) {
+      var d = { id: id, a: a.id, b: b.id, axis: axis, w: DOOR_HW * 2, h: DOOR_H, wall: wall, at: (wall[0] + wall[1]) / 2,
+                naval: true, slide: true, open: 0, shut: true, label: 'Door' };
+      if (axis === 'z') { d.xc = at; d.x0 = at - DOOR_HW; d.x1 = at + DOOR_HW; d.z0 = wall[0] - 0.8; d.z1 = wall[1] + 0.8; }
+      else { d.zc = at; d.z0 = at - DOOR_HW; d.z1 = at + DOOR_HW; d.x0 = wall[0] - 0.8; d.x1 = wall[1] + 0.8; }
+      for (var k in (opt || {})) d[k] = opt[k];
+      if (d.arch) { d.slide = false; d.open = 1; d.shut = false; }
+      doors.push(d);
+      return d;
+    }
+    var cz1 = c.crossZ1, cz0 = cz1 - BLOCK_CROSS, spX0, spX1, spZ0, spZ1, bay = null;
+    if (V === 'A') {
+      /* Down her side outboard of the bridge, its whole length. */
+      spX0 = sx + WALL_T; spX1 = spX0 + c.sideW; spZ0 = deck.z0; spZ1 = deck.z1;
+    } else {
+      /* Inside the bridge's width, beside the avionics bay, up to the
+       * bridge's aft door. */
+      spX1 = sx; spX0 = sx - c.sideW; spZ1 = deck.z0 - WALL_T; spZ0 = cz1 + WALL_T;
+      var bayX1 = spX0 - WALL_T, bayX0 = c.bayW > 0 ? Math.max(-sx, bayX1 - c.bayW) : -sx;
+      bay = nroom('bay', 'aux', bayX0, bayX1, spZ0, spZ1, PASSAGE_H, 'Avionics bay');
+    }
+    var side = nroom('side', 'passage', spX0, spX1, spZ0, spZ1, PASSAGE_H, 'Passage');
+    var ctlX0 = PASSAGE_HW + WALL_T, ctlX1 = ctlX0 + c.ctlW;
+    var cross = nroom('cross', 'cross', ps.x0, Math.max(spX1, ctlX1), cz0, cz1, PASSAGE_H, 'Cross passage');
+    var ctl = nroom('ctl', 'reactorctl', ctlX0, ctlX1, c.p1 - BLOCK_CTL, c.p1, ENGINE_H, 'Reactor control');
+    var rxr = nroom('reactor', 'reactor', ctlX0, ctlX1, ctl.z0 - WALL_T - BLOCK_RL, ctl.z0 - WALL_T, ENGINE_H, 'Reactor');
+    /* The bridge door: through the bridge's side at its forward end (A,
+     * aft of a raised cockpit's stair), or through its aft wall (B). */
+    if (V === 'A') {
+      ndoor('bridge', deck, side, 'x', [sx, spX0], (c.stairFoot !== null ? c.stairFoot : deck.z1) - BLOCK_LANDING / 2, { label: 'Bridge door' });
+    } else {
+      ndoor('bridge', side, deck, 'z', [side.z1, deck.z0], (spX0 + spX1) / 2, { label: 'Bridge door' });
+      ndoor('bk-bay', bay, side, 'x', [bay.x1, spX0], (spZ0 + spZ1) / 2, { label: 'Avionics bay door' });
+    }
+    ndoor('bk-side', cross, side, 'z', [cz1, spZ0], (spX0 + spX1) / 2, { arch: true, label: '' });
+    ndoor('bk-aft', ps, cross, 'z', [ps.z1, cz0], 0, { arch: true, label: '' });
+    ndoor('bk-ctl', ctl, cross, 'z', [ctl.z1, cz0], ctlX0 + 0.65, { label: 'Reactor control door' });
+    var rdX = ctlX1 - 0.6;
+    ndoor('bk-reactor', rxr, ctl, 'z', [rxr.z1, ctl.z0], rdX, { fit: 'X', reactorDoor: true, label: 'Reactor door  (X)' });
+    /* The reactor: lying down on the Cutter, as the Navy's are, the rods in
+     * from the front; standing on the rest, the rods from the top. The
+     * glass inboard of the reactor door, the panel under it. */
+    var military = !!BLOCK_MILITARY[c.hullId], axis = military ? 'h' : 'v';
+    var wx0 = ctlX0 + 0.25, wx1 = rdX - DOOR_HW - 0.2;
+    var cr = Math.min(0.4, BLOCK_RL * 0.08), clen = axis === 'h' ? Math.min(2.4, (wx1 - wx0) * 0.6) : Math.min(2.0, ENGINE_H * 0.6);
+    var cxr = Math.max((wx0 + wx1) / 2, ctlX0 + (axis === 'h' ? clen / 2 : cr) + 0.55);
+    var spec = {
+      id: 'reactor-0', room: rxr.id, control: ctl.id, axis: axis, military: military,
+      core: { x: cxr, y: c.floor + 1.2, z: (rxr.z0 + rxr.z1) / 2, r: cr, len: clen }, jacket: 1.2,
+      rods: axis === 'h' ? { face: 'fwd', n: 5 } : { face: 'top', n: 5 },
+      window: { z: (rxr.z1 + ctl.z0) / 2, x0: wx0, x1: wx1, y0: c.floor + 0.7, y1: c.floor + Math.min(ENGINE_H - 0.3, 2.3), faces: 'fwd' }
+    };
+    /* The tank is in the way (navalMesh draws it this size). */
+    var hx = axis === 'h' ? clen / 2 : cr, hz = cr;
+    items.push({ kind: 'core', x: cxr, z: spec.core.z, label: '', silent: true,
+                 counter: [cxr - hx - 0.5, spec.core.z - hz - 0.5, cxr + hx + 0.5, spec.core.z + hz + 0.5] });
+    /* The panel under the glass: the reactor's controls and the drive's,
+     * worked by whoever has the engineering watch. */
+    items.push({ kind: 'engine', x: cxr, z: ctl.z0 + 0.3, yaw: Math.PI, label: 'Reactor and drive control  \u2014  the glass',
+                 counter: [wx0, ctl.z0, wx1, ctl.z0 + 0.45] });
+    return { reactors: [spec], side: side, cross: cross, bay: bay, ctl: ctl, reactor: rxr };
+  }
+  /* THE REACTOR BLOCK (Astra, 2026-11-23, her sketch): "grow the hulls, put
+   * it in a like this space, split the reactor room in two so the crew can
+   * operate panels in the room for controlling the reactor." The L hulls'
+   * one deck, laid out as she drew it: a side passage down the starboard
+   * side to the bridge, a cross passage aft of the bridge's solid aft wall,
+   * the passage on aft to the hold; the reactor's compartment off the cross
+   * passage to starboard (control forward, the reactor aft of the glass),
+   * the airlock and then the bunks to port. Asked whether the block by the
+   * side passage is the bridge itself or a wall with the bridge forward of
+   * it, she said "have both layouts available": variant A, the block IS the
+   * bridge and you come into it through its side at the forward end;
+   * variant B, the bridge is further forward, the block is an avionics bay,
+   * and the side passage runs on to the bridge's aft door. Which one a ship
+   * has is her own seed's (planned by `opts.key`), so a ship is always the
+   * same ship. No engine room or medbay of their own: the reactor's control
+   * room is where the drive is run from, and the medical cabinet is in the
+   * bunks room. */
+  var BLOCK_HULLS = { kestrel: 1, cutter: 1, longhaul: 1, tanker: 1 };
+  var BLOCK_MILITARY = { cutter: 1 };
+  var BLOCK_MIN_W = { engine: 2.4, blockSide: 1.0, blockBay: 1.0 };
+  var BLOCK_LANDING = 1.3, BLOCK_SIDE = 1.3, BLOCK_CROSS = 1.3, BLOCK_BAY = 2.6, BLOCK_RW = 3.0, BLOCK_CTL = 2.8, BLOCK_RL = 3.6;
+  function blockVariant(opts) {
+    if (opts.blockVariant === 'A' || opts.blockVariant === 'B') return opts.blockVariant;
+    return hash('block|' + (opts.key || opts.hullId || '')) % 2 ? 'A' : 'B';
+  }
   function flatten(c) {
     var N = global.NavalDeck, out = c.out, opts = c.opts, rooms = c.rooms, doors = c.doors, items = c.items;
     var hullId = opts.hullId, under = c.decked ? 'junction' : 'main';
@@ -1498,10 +1669,11 @@
   var NAVAL_TINT = { engine: 'lockWall', aux: 'lockWall', reactor: 'lockWall', reactorctl: 'console', magazine: 'lockWall',
                      hangar: 'lockWall', platform: 'lockWall', tramway: 'lockWall', passage: 'passWall', cross: 'passWall', lobby: 'passWall', landing: 'passWall' };
   var CHERENKOV = '!#58b8ff', CHERENKOV_DIM = '!#2a6fb8';
+  function deckFy(p, dk) { return p.deckY && p.deckY[dk] !== undefined ? p.deckY[dk] : p.floorY; }
   function navalMesh(m, pal, p) {
     var rs = p.rooms.filter(function (r) { return r.kind === 'naval'; });
     rs.forEach(function (r) {
-      var fy = p.deckY[r.deck], h = r.y1, cy = fy + h;
+      var fy = deckFy(p, r.deck), h = r.y1, cy = fy + h;
       var wall = pal[NAVAL_TINT[r.sub] || 'wall'] || pal.wall;
       var floor = r.sub === 'passage' || r.sub === 'cross' || r.sub === 'lobby' ? pal.passFloor : pal.floor;
       quad(m, [r.x0, fy, r.z0], [r.x1, fy, r.z0], [r.x1, fy, r.z1], [r.x0, fy, r.z1], floor);
@@ -1548,7 +1720,7 @@
     /* The jambs, through the wall between a door's two rooms. */
     p.doors.forEach(function (d) {
       if (!d.naval || !d.wall) return;
-      var fy = p.deckY[d.deck], t0 = d.wall[0], t1 = d.wall[1];
+      var fy = deckFy(p, d.deck), t0 = d.wall[0], t1 = d.wall[1];
       if (t1 - t0 < 1e-4) return;
       if (d.axis === 'x') {
         [d.zc - DOOR_HW, d.zc + DOOR_HW].forEach(function (z) { quad(m, [t0, fy, z], [t1, fy, z], [t1, fy + DOOR_H, z], [t0, fy + DOOR_H, z], pal.jamb); });
@@ -1563,7 +1735,7 @@
     /* Ladders, scuttles and trunk hatches, from their items' lower ends. */
     p.items.forEach(function (it) {
       if (it.kind !== 'climb' || !it.up) return;
-      var fy = p.deckY[it.deck], top = fy + (it.dy || 3);
+      var fy = deckFy(p, it.deck), top = fy + (it.dy || 3);
       var r = p.rooms.filter(function (q) { return q.id && q.deck === it.deck && it.x >= q.x0 && it.x <= q.x1 && it.z >= q.z0 && it.z <= q.z1; })[0];
       var ceilY = r ? fy + r.y1 : top;
       if (it.via === 'ladder' || it.via === 'stair') {
@@ -1597,7 +1769,7 @@
     ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
       var rr = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
       if (!rr) return;
-      var fy = p.deckY[rr.deck], c = rx.core, x = c.x, z = c.z;
+      var fy = deckFy(p, rr.deck), c = rx.core, x = c.x, z = c.z;
       var half = rx.axis === 'h' ? [c.len / 2, c.r, c.r] : [c.r, c.len / 2, c.r];
       var yc = fy + Math.min(rr.y1 * 0.45, 1.5);
       /* The water jacket's tank, steel, with the core somewhere in it; its
@@ -1667,7 +1839,7 @@
     var out = [];
     (p.decks ? Object.keys(p.decks).map(function (k) { return p.decks[k]; }) : [p]).forEach(function (dp) {
       /* The naval decks fit themselves (navalize: shrink, then drop). */
-      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && r.kind !== 'naval' && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
+      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && (r.kind !== 'naval' || r.blockRoom) && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
     });
     return out;
   }
@@ -1682,12 +1854,30 @@
       p = plan(geom, o);
       var bad = null;
       fitRooms(p).some(function (e) {
-        if (misfit.indexOf(e.r.kind) >= 0) return false;
+        if (misfit.indexOf(e.r.blockRoom ? e.r.id : e.r.kind) >= 0) return false;
         if (roomInside(fit, e.r, e.fy, e.r.x0, e.r.x1, e.r.z0, e.r.z1)) return false;
         bad = e; return true;
       });
       if (!bad) break;
       var r = bad.r, kind = r.kind, done = false;
+      /* THE REACTOR BLOCK (BLOCK_HULLS): its compartment narrower from her
+       * outboard side, down to what the glass and the reactor door need;
+       * the side passage the same, down to a body's width; the avionics
+       * bay from its port side. They are never left out: what is still
+       * outside her after that is reported (misfit). */
+      if (r.blockRoom) {
+        var bk = r.sub === 'reactorctl' || r.sub === 'reactor' ? 'engine' : r.id === 'bk-side' ? 'blockSide' : r.id === 'bk-bay' ? 'blockBay' : null;
+        if (bk) {
+          var fromX1 = bk !== 'blockBay', w2 = r.x1 - r.x0, bw = 0, minW = BLOCK_MIN_W[bk];
+          for (var t2 = w2 - 0.1; t2 >= minW - 1e-9; t2 -= 0.1) {
+            var a2 = fromX1 ? r.x0 : r.x1 - t2, b2 = fromX1 ? r.x0 + t2 : r.x1;
+            if (roomInside(fit, r, bad.fy, a2 - (fromX1 ? 0 : FIT_MARGIN), b2 + (fromX1 ? FIT_MARGIN : 0), r.z0, r.z1)) { bw = t2; break; }
+          }
+          if (bw) { o.roomW[bk] = bw; done = true; }
+        }
+        if (!done) misfit.push(r.id);
+        continue;
+      }
       /* A side room: as wide as she allows from the passage wall out. */
       if (r.side && FIT_MIN_W[kind] !== undefined) {
         var inb = r.side < 0 ? r.x1 : r.x0, w = r.x1 - r.x0, best = 0;
@@ -1735,6 +1925,19 @@
       if (!done) misfit.push(kind);
     }
     p.fitted = { omitted: Object.keys(o.omit), narrowed: o.roomW, shortened: o.roomL, lowered: o.roomH, misfit: misfit };
+    /* The reactor block's layout B is longer by the avionics bay: where that
+     * would cost her a room (or leave one outside her), she is laid out as
+     * A. Never the other way: A is the shorter. */
+    if (p.block === 'B' && !opts.noFallback && (p.fitted.omitted.length || p.fitted.misfit.length)) {
+      var oa = {};
+      for (var ka in opts) oa[ka] = opts[ka];
+      oa.blockVariant = 'A'; oa.noFallback = true;
+      var pa = planFitted(geom, oa);
+      if (pa.fitted.omitted.length + pa.fitted.misfit.length < p.fitted.omitted.length + p.fitted.misfit.length) {
+        pa.fitted.blockFrom = 'B';
+        return pa;
+      }
+    }
     return p;
   }
 
@@ -2086,7 +2289,45 @@
      * (below), on a raised cockpit (RAISED) the deck the stair comes down
      * to. Built at the cockpit's floor height like every leaf is. */
     var shipRoom = room, shipPortals = portals, dyMain = 0, rs = p.raised;
-    if (dH && deck) {
+    /* A wall of constant z from x0 to x1, a doorway through it at each xc. */
+    function zWall(m2, x0, x1, z, y0, y1, xcs, col) {
+      var at = x0, dh = y0 + DOOR_H;
+      xcs.slice().sort(function (a, b) { return a - b; }).forEach(function (xc) {
+        var a = xc - DOOR_HW, b = xc + DOOR_HW;
+        if (a > at) quad(m2, [at, y0, z], [a, y0, z], [a, y1, z], [at, y1, z], col);
+        if (y1 > dh) quad(m2, [a, dh, z], [b, dh, z], [b, y1, z], [a, y1, z], col);
+        at = b;
+      });
+      if (x1 > at) quad(m2, [at, y0, z], [x1, y0, z], [x1, y1, z], [at, y1, z], col);
+    }
+    if (p.block && dH && deck) {
+      /* THE REACTOR BLOCK'S BRIDGE (BLOCK_HULLS): the helm's bulkhead as
+       * ever; a raised cockpit's stair just aft of it, down to the deck; the
+       * bridge deck on the deck, its aft wall solid (A) or with the door
+       * through it (B), its starboard wall with the door through it (A). */
+      bulkhead(room, pal, fy, dH.wall[1], g.sideX, cy, dH.wall[0], g.sideX, cy, true, [pal.bulk, pal.wall]);
+      if (rs) {
+        stairMesh(room, pal, g, fy, cy, rs);
+        if (rs.rise > 0) {
+          var ySoff = fy - rs.rise + (cy - fy);
+          quad(room, [-g.sideX, ySoff, rs.doorZ], [g.sideX, ySoff, rs.doorZ], [g.sideX, cy, rs.doorZ], [-g.sideX, cy, rs.doorZ], pal.wall);
+        }
+        dyMain = -rs.rise;
+        room = mesh(); portals = mesh();
+      }
+      var bz1 = rs ? rs.doorZ : deck.z1;
+      quad(room, [deck.x0, fy, deck.z0], [deck.x1, fy, deck.z0], [deck.x1, fy, bz1], [deck.x0, fy, bz1], pal.floor);
+      quad(room, [deck.x0, cy, deck.z0], [deck.x1, cy, deck.z0], [deck.x1, cy, bz1], [deck.x0, cy, bz1], pal.ceil);
+      quad(room, [deck.x0, fy, deck.z0], [deck.x0, fy, bz1], [deck.x0, cy, bz1], [deck.x0, cy, deck.z0], pal.wall);
+      if (dB.axis === 'x') wallDoors(room, deck.x1, deck.z0, bz1, fy, cy, [dB.zc], pal.wall);
+      else quad(room, [deck.x1, fy, deck.z0], [deck.x1, fy, bz1], [deck.x1, cy, bz1], [deck.x1, cy, deck.z0], pal.wall);
+      zWall(room, deck.x0, deck.x1, deck.z0, fy, cy, dB.axis === 'z' ? [dB.xc] : [], pal.bulk);
+      [-1, 1].forEach(function (s) {
+        var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
+        lightRun(room, [x0, y, deck.z0 + 0.25], [x1, y, deck.z0 + 0.25], [x1, y, bz1 - 0.25], [x0, y, bz1 - 0.25], pal.light, pal.ceil);
+      });
+      p.stations.forEach(function (st) { if (!st.cockpit) station(room, pal, fy, g.sideX, st); });
+    } else if (dH && deck) {
       /* The helm's bulkhead stays where the seat has always had it, rear
        * screens and all, with the doorway open as an arch; the bridge deck
        * is through it, and the sliding door at the deck's aft end. */
@@ -2163,6 +2404,7 @@
     if (portZ.length) skipP.push('x0');
     if (stbdZ.length) skipP.push('x1');
     boxRoom(room, ps.x0, fy, ps.z0, ps.x1, fy + PASSAGE_H, ps.z1, pal.passWall, pal.passFloor, pal.ceil, skipP);
+    if (p.block) zWall(room, ps.x0, ps.x1, ps.z1, fy, fy + PASSAGE_H, [0], pal.passWall);
     /* Each side wall with its doorways through it, into walls as thick as
      * a bulkhead; the rooms behind them are built below. */
     if (portZ.length) wallDoors(room, -PASSAGE_HW, ps.z0, ps.z1, fy, fy + PASSAGE_H, portZ, pal.passWall);
@@ -2230,6 +2472,13 @@
     /* THE QUARTERS, and the leaves of their door, which slide fore and
      * aft into the passage wall. */
     if (dQ && qr) quartersMesh(room, pal, fy, qr, dQ, p);
+    if (p.block) p.items.forEach(function (it) {
+      if (it.kind !== 'medcab') return;
+      var c2 = it.counter;
+      box(room, c2[0], fy, c2[1], c2[2], fy + 1.9, c2[3], MEDCOL.cab);
+      quad(room, [c2[0] + 0.05, fy + 1.55, c2[1] - 0.004], [c2[2] - 0.05, fy + 1.55, c2[1] - 0.004],
+           [c2[2] - 0.05, fy + 1.62, c2[1] - 0.004], [c2[0] + 0.05, fy + 1.62, c2[1] - 0.004], MEDCOL.lit);
+    });
     /* Every side door's leaves, sliding fore and aft into the wall. */
     function sideLeaves(d) {
       var xm = (d.wall[0] + d.wall[1]) / 2;
@@ -2311,7 +2560,7 @@
       car: car, tram: tramCar, lampDy: dyMain,
       fittings: fittings.f.length ? fittings : null,
       leaves: (function () {
-        var lv = { bridge: leaves(dB.wall[0], dB.wall[1]) };
+        var lv = dB.naval ? {} : { bridge: leaves(dB.wall[0], dB.wall[1]) };
         if (dC) lv.cargo = leaves(dC.wall[0], dC.wall[1]);
         sideDoors.forEach(function (d) { lv[d.id] = sideLeaves(d); });
         if (p.naval) { var nl = navalLeaves(pal, p, fy); for (var nk in nl) lv[nk] = nl[nk]; }
@@ -2384,6 +2633,11 @@
     if (!rs || (p.deck && p.deck !== 'main')) return 0;
     var r = roomByKind(p, 'cockpit'), bd = roomByKind(p, 'bridgedeck');
     var inR = function (q) { return q && x >= q.x0 && x <= q.x1 && z >= q.z0 && z <= q.z1; };
+    /* The helm's doorway, between the bridge deck's forward wall and the
+     * cockpit's aft one, is at the cockpit's floor when the stair is aft of
+     * it in the bridge deck (the reactor block's). */
+    var inGap = rs.block && r && bd && x >= Math.max(r.x0, bd.x0) && x <= Math.min(r.x1, bd.x1) && z > bd.z1 && z < r.z0;
+    if (inGap) return rs.rise;
     if (z < rs.doorZ || !(inR(r) || inR(bd))) return 0;
     if (z >= rs.stepZ) return rs.rise;
     if (rs.stepZ - rs.doorZ < 0.2) return rs.rise;
@@ -3343,7 +3597,7 @@
   var ShipDeck = {
     DOOR_HW: DOOR_HW, DOOR_H: DOOR_H, WALL_T: WALL_T, PASSAGE_LEN: PASSAGE_LEN,
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
-    PALETTES: PALETTES, FLAT_HULLS: FLAT_HULLS, SYNDICATE: SYNDICATE, NAVY: NAVY,
+    PALETTES: PALETTES, FLAT_HULLS: FLAT_HULLS, BLOCK_HULLS: BLOCK_HULLS, blockVariant: blockVariant, SYNDICATE: SYNDICATE, NAVY: NAVY,
     CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
     paletteFor: paletteFor, plan: plan, planFitted: planFitted, updateDoors: updateDoors, leafTravel: leafTravel,
     meshes: meshes, frame: frame,

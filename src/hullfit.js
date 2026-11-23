@@ -160,15 +160,15 @@
    },
    "cutter": {
     "id": "cutter",
-    "len": 36,
+    "len": 37,
     "at": [
      0,
-     -0.842,
-     7.9
+     -0.865,
+     8.119
     ],
-    "ground": -4.932,
-    "drop": 2.66,
-    "dropRoom": 2.75,
+    "ground": -5.069,
+    "drop": 2.774,
+    "dropRoom": 3,
     "mode": "ramp",
     "rampLen": 5.5,
     "miss": "8/1400"

@@ -117,6 +117,17 @@
    * general quarters, and at GQ with the tram out (navaldeck.js). */
   function checkDecks() {
     var d = interior(), N = global.NavalDeck;
+    if (d && d.plan.block) {
+      /* The reactor block: every room joined to her airlock through doors. */
+      var pl = d.plan, adj = {}, seen = {}, q = ['airlock'];
+      pl.rooms.forEach(function (r) { adj[r.id] = []; });
+      pl.doors.forEach(function (dr) { if (adj[dr.a] && adj[dr.b]) { adj[dr.a].push(dr.b); adj[dr.b].push(dr.a); } });
+      seen.airlock = true;
+      while (q.length) { var id = q.shift(); adj[id].forEach(function (o) { if (!seen[o]) { seen[o] = true; q.push(o); } }); }
+      var cut = pl.rooms.filter(function (r) { return r.walk !== false && !seen[r.id]; });
+      log('reactor block, layout ' + pl.block + ': ' + (cut.length ? cut.length + ' rooms cut off: ' + cut.map(function (r) { return r.id; }).join(', ') : 'every room reachable'));
+      return;
+    }
     if (!d || !d.plan.naval || !N) { log('no naval decks on this hull'); return; }
     var L = d.plan.naval.layout, from = L.airlock || L.bridge;
     /* Under 75 % hull she is at GQ by herself (NavalDeck.GQ_BELOW). */
@@ -189,6 +200,19 @@
   }
   function opt(v, t) { var o = el('option', { value: v, text: t }); return o; }
 
+  /* The reactor block's layout (shipdeck.js BLOCK_HULLS): A or B, or her
+   * own seed's. Rebuilt and stood up again where you were standing. */
+  function setBlock(v) {
+    var s = ship(), SD = global.ShipDeck, g = G();
+    if (!s || !SD || !SD.BLOCK_HULLS || !SD.BLOCK_HULLS[s.hullId]) { log('only the Kestrel, Cutter, Longhaul and Tanker have it'); return; }
+    var was = !!g.walk;
+    if (v) s.blockVariant = v; else delete s.blockVariant;
+    g.walk = null;
+    if (was) standUp();
+    var d = interior();
+    log('reactor block layout ' + (d && d.plan.block) + (v ? '' : ' (her own)'));
+  }
+  var blockSel;
   var st = null, hullSel, livSel, crewChk, deckSel, roomSel, starIn, starSel, portSel, hullIn, credIn;
   function build() {
     var style = el('style', { text: CSS });
@@ -197,6 +221,7 @@
     hullSel = el('select');
     Object.keys(global.Combat.HULLS).sort().forEach(function (id) { hullSel.appendChild(opt(id, id + ' — ' + (global.Combat.HULLS[id].name || ''))); });
     livSel = el('select', {}, [opt('civ', 'civilian'), opt('navy', 'navy'), opt('syn', 'syndicate')]);
+    blockSel = el('select', {}, [opt('', 'her own'), opt('A', 'A: side door into the bridge'), opt('B', 'B: avionics bay, bridge forward')]);
     crewChk = el('input', { type: 'checkbox', checked: 'checked' });
     deckSel = el('select', { on: { change: fillRooms } });
     roomSel = el('select');
@@ -213,6 +238,8 @@
       el('h4', { text: 'SHIP' }),
       hullSel, livSel, el('label', { text: ' crew ' }), crewChk,
       el('button', { text: 'Become', on: { click: function () { become(hullSel.value, livSel.value, crewChk.checked); refresh(true); } } }),
+      el('br'), el('label', { text: 'reactor block layout ' }), blockSel,
+      el('button', { text: 'Use', on: { click: function () { setBlock(blockSel.value); refresh(true); } } }),
       el('h4', { text: 'ABOARD' }),
       el('button', { text: 'Stand up', on: { click: function () { standUp(); refresh(true); } } }),
       el('button', { text: 'Refresh decks', on: { click: function () { refresh(true); } } }),

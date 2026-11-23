@@ -174,6 +174,29 @@ function walkAft(p, from, z) {
   }
   return w;
 }
+/* Walk `p` through each point of `pts` in turn, turning to face the next
+ * (the reactor block's way aft is not a straight line: along the bridge,
+ * out by its door, down the side passage, across, and aft). */
+function walkVia(p, from, pts) {
+  var w = Walk.start({ rooms: p.rooms, doors: p.doors, items: p.items, spawn: from }), k = 0;
+  for (var i = 0; i < 4000 && k < pts.length; i++) {
+    var dx = pts[k][0] - w.x, dz = pts[k][1] - w.z;
+    if (Math.hypot(dx, dz) < 0.15) { k++; continue; }
+    w.yaw = Math.atan2(dx, dz);
+    SD.updateDoors(p, w, 1 / 30);
+    Walk.step(w, { w: true }, 1 / 30);
+  }
+  return w;
+}
+function blockWay(p, lockZ) {
+  var bd = SD.roomByKind(p, 'bridgedeck'), dB = SD.doorById(p, 'bridge');
+  var side = p.rooms.filter(function (r) { return r.id === 'bk-side'; })[0], cross = p.rooms.filter(function (r) { return r.id === 'bk-cross'; })[0];
+  var sx = (side.x0 + side.x1) / 2, cz = (cross.z0 + cross.z1) / 2, pts = [];
+  if (dB.axis === 'x') pts.push([0, dB.zc], [sx, dB.zc]);
+  else pts.push([dB.xc, bd.z0 + 0.5], [dB.xc, side.z1 - 0.5]);
+  pts.push([sx, cz], [0, cz], [0, lockZ - 0.2]);
+  return pts;
+}
 ids.forEach(function (id) {
   var d = R.shipInterior(ship(id)), whole = d.plan;
   whole.doors.forEach(function (dd) { dd.open = 0; dd.shut = true; });
@@ -181,10 +204,15 @@ ids.forEach(function (id) {
    * on the main deck out of it aft to the airlock. */
   var p = whole.decks ? whole.decks.bridge : whole;
   /* Shut, the doorway is wall: a step into the sill is refused. */
-  var bz = SD.doorById(whole, 'bridge').wall[1];
-  if (Walk.standable(p, 0, bz)) early.push(id);
+  var dBr = SD.doorById(whole, 'bridge'), bz = dBr.wall[1];
+  /* The reactor block's door is off the centreline: its own middle. */
+  if (whole.block ? Walk.standable(p, dBr.axis === 'x' ? (dBr.wall[0] + dBr.wall[1]) / 2 : dBr.xc,
+                                   dBr.axis === 'x' ? dBr.zc : (dBr.wall[0] + dBr.wall[1]) / 2) : Walk.standable(p, 0, bz)) early.push(id);
   var lockZ = SD.roomByKind(whole, 'airlock').z1 - 0.5;
-  if (whole.decks && whole.carZ) {
+  if (whole.block) {
+    var wb = walkVia(p, p.spawn, blockWay(whole, lockZ));
+    if (!(wb.z < lockZ)) stuck.push(id + ' (' + whole.block + ') x=' + wb.x.toFixed(2) + ' z=' + wb.z.toFixed(2));
+  } else if (whole.decks && whole.carZ) {
     var carMid = (whole.carZ[0] + whole.carZ[1]) / 2;
     var w1 = walkAft(p, p.spawn, carMid);
     if (!(w1.z < carMid)) stuck.push(id + ' bridge z=' + w1.z.toFixed(2));
@@ -332,8 +360,18 @@ var kd = R.shipInterior(ship('kestrel'));
 var helm = SD.doorById(kd.plan, 'helm'), bdoor = SD.doorById(kd.plan, 'bridge');
 check('the helm\'s bulkhead has not moved', !!helm && Math.abs(helm.wall[1] - kd.geom.bulkZ) < 1e-9);
 check('its doorway is an open arch, never shut', helm.arch && !helm.slide && helm.shut === false);
-check('the bridge door is at the bridge deck\'s aft end',
-      Math.abs(bdoor.wall[1] - SD.roomByKind(kd.plan, 'bridgedeck').z0) < 1e-9);
+/* The reactor block (shipdeck.js BLOCK_HULLS, Astra's sketch): through
+ * the bridge's starboard wall at its forward end (A), or its aft wall from
+ * the side passage (B). Every other crewed hull: its aft end. */
+/* B on the Tanker: the Kestrel's hull has no room for B's avionics bay
+ * without costing her hold, so she is always laid out as A. */
+var kdA = R.shipInterior(Object.assign(ship('kestrel'), { blockVariant: 'A' })).plan, kdB = R.shipInterior(Object.assign(ship('tanker'), { blockVariant: 'B' })).plan;
+var bdA = SD.doorById(kdA, 'bridge'), bdB = SD.doorById(kdB, 'bridge'), dkA = SD.roomByKind(kdA, 'bridgedeck'), dkB = SD.roomByKind(kdB, 'bridgedeck');
+check('the bridge door is at the bridge deck\'s aft end (the reactor block: its side, or its aft wall)',
+      bdA.axis === 'x' && Math.abs(bdA.wall[0] - dkA.x1) < 1e-9 && bdA.zc > (dkA.z0 + dkA.z1) / 2 &&
+      bdB.axis === 'z' && Math.abs(bdB.wall[1] - dkB.z0) < 1e-9 && bdB.xc > 0 &&
+      ['wren', 'bollard'].every(function (h) { var q = R.shipInterior(ship(h)).plan, b = SD.doorById(q, 'bridge'), dk = SD.roomByKind(q, 'bridgedeck');
+        return !dk || Math.abs(b.wall[1] - dk.z0) < 1e-9; }));
 /* E at a station says whose it is. */
 var st0 = kd.plan.stations[0];
 var at = Walk.start({ rooms: kd.plan.rooms, doors: kd.plan.doors, items: kd.plan.items,
@@ -433,7 +471,13 @@ ids.forEach(function (id) {
     if (p.second !== WANT_SECOND[id]) wrongSecond.push(id + ':' + p.second);
     if (!p.items.some(function (it) { return it.kind === 'medkit'; })) noKit.push(id);
   } else {
-    if (!has('medbay') || !has('engine') || !has('cargo')) wrongRooms.push(id + ' ' + ks.join('/'));
+    /* The reactor block: reactor control (the drive console's place) and
+     * the reactor for the engine room, the medical cabinet in the bunks
+     * room for the medbay. */
+    var cab = p.items.some(function (it) { return it.kind === 'medcab'; });
+    if (p.block ? (!has('reactorctl') || !has('reactor') || !has('cargo') || !cab ||
+                   !p.items.some(function (it) { return it.kind === 'engine'; }))
+                : (!has('medbay') || !has('engine') || !has('cargo'))) wrongRooms.push(id + ' ' + ks.join('/'));
     /* And the turret-fitted deck is walked too, below. */
     p = R.shipInterior(Object.assign(ship(id), { turret: 'turret' })).plan;
     /* No turret fitted, no turret position; fit one and it is there, one
@@ -441,7 +485,7 @@ ids.forEach(function (id) {
     if (has('turret')) wrongRooms.push(id + ' turret without a turret');
     var pt = R.shipInterior(Object.assign(ship(id), { turret: 'turret' })).plan;
     if (pt.turrets.length !== 1 || !pt.rooms.some(function (r) { return r.kind === 'turret'; })) wrongTurrets.push(id + ' ' + pt.turrets.length);
-    if (p.beds.length !== (size === 'M' ? 1 : 2)) wrongBeds.push(id + ' ' + p.beds.length);
+    if (!p.block && p.beds.length !== (size === 'M' ? 1 : 2)) wrongBeds.push(id + ' ' + p.beds.length);
   }
   /* Every room and every labelled thing in it can be walked to from the
    * airlock, with the doors open: a flood fill over the deck at 10 cm. */

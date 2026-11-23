@@ -85,7 +85,10 @@ Object.keys(SD.RAISED).forEach(function (id) {
 
   /* The rest of her where it was. */
   delete SD.RAISED[id];
-  var shp0 = shipOf(id, '0'), d0 = R.shipInterior(shp0), at0 = R.cockpitAt(shp0);
+  var shp0 = shipOf(id, '0');
+  /* The same one of the reactor block's two layouts as hers. */
+  if (d.plan.block) shp0.blockVariant = d.plan.block;
+  var d0 = R.shipInterior(shp0), at0 = R.cockpitAt(shp0);
   SD.RAISED[id] = rz;
   var a = hullRooms(d0, at0), b = hullRooms(d, at), moved = [];
   Object.keys(a).forEach(function (k) {
@@ -94,6 +97,22 @@ Object.keys(SD.RAISED).forEach(function (id) {
      * (or gives up its forward end, where the cockpit moved aft): its
      * aft end and its floor stay. */
     var same = k === 'passage' ? [0, 1, 2, 4] : [0, 1, 2, 3, 4];
+    /* The reactor block (shipdeck.js BLOCK_HULLS) puts the stair inside
+     * her bridge deck, aft of the helm: every room aft of it moves aft by
+     * the same run, and keeps its shape. */
+    if (d.plan.block) {
+      /* ...but the bridge deck takes the cockpit's move forward, and the
+       * side passage (layout A) runs its whole length: its forward end, like
+       * the passage's, may go with it. */
+      var runsOn = k === 'passage' || k === 'bk-side';
+      /* The side passage's outboard wall is fitted to her skin (narrower
+       * where her raised nose sits differently in her): its inboard wall,
+       * aft end and floor stay. */
+      var keep = k === 'bk-side' ? [0, 2, 4] : [0, 1, 2, 4];
+      if (keep.some(function (q) { return Math.abs(a[k][q] - b[k][q]) > 1e-6; }) ||
+          (!runsOn && Math.abs(b[k][3] - a[k][3]) > 1e-6)) moved.push(k + ' ' + JSON.stringify(a[k]) + ' -> ' + JSON.stringify(b[k]));
+      return;
+    }
     if (same.some(function (q) { return Math.abs(a[k][q] - b[k][q]) > 1e-6; })) moved.push(k + ' ' + JSON.stringify(a[k]) + ' -> ' + JSON.stringify(b[k]));
   });
   check(id + ': every other room is where it was in her', !moved.length, moved.slice(0, 3).join('; '));
@@ -112,7 +131,10 @@ Object.keys(SD.RAISED).forEach(function (id) {
         Math.abs(SD.floorAt(p, seat.x, seat.z) - rs.rise) < 1e-9);
   check(id + ': and the stair has no step in it a walker jumps', jump < 0.1, jump.toFixed(3) + ' m');
   var dB = SD.doorById(p, 'bridge');
-  check(id + ': the bridge door is down at the deck', dB && Math.abs(dB.yOff + rs.rise) < 1e-9 && dB.wall[1] === rs.doorZ);
+  /* The reactor block's bridge door is in the deck's side (A) or its aft
+   * wall (B), at the deck's floor, aft of the stair's foot. */
+  check(id + ': the bridge door is down at the deck', dB && Math.abs(dB.yOff + rs.rise) < 1e-9 &&
+        (p.block ? (dB.axis === 'x' ? dB.zc + SD.DOOR_HW <= rs.doorZ + 1e-9 : dB.wall[1] <= rs.doorZ + 1e-9) : dB.wall[1] === rs.doorZ));
   var bad = 0;
   ['room', 'portals', 'seat'].forEach(function (k) { d.meshes[k].v.forEach(function (v) { if (!v.every(isFinite)) bad++; }); });
   check(id + ': her room meshes are finite', bad === 0, bad + ' bad vertices');

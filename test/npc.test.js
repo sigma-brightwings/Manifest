@@ -338,7 +338,11 @@ var cut = runShip('cutter', [
 check('the best gunner sits under the turret dome', !!cut.been['Gun One|turret|sit'] && cut.sc.people[0].turret);
 check('the other works the forward guns from a bridge gunnery station', !cut.sc.people[1].turret &&
       cut.sc.people[1].station && cut.sc.people[1].station.role === 'gunner' && !!cut.been['Gun Two|bridgedeck|sit']);
-check('an engineer\'s rounds go to the engine room', !!(cut.been['Eng One|engine|work'] || cut.been['Eng Two|engine|work']));
+/* The reactor block (shipdeck.js BLOCK_HULLS): her drive is run from the
+ * panel under the glass in reactor control, a room of kind 'naval'. */
+var engRoom = cut.plan.block ? 'naval' : 'engine';
+check('an engineer\'s rounds go to the engine room (reactor control, on the reactor block)',
+      !!(cut.been['Eng One|' + engRoom + '|work'] || cut.been['Eng Two|' + engRoom + '|work']));
 var cutBare = runShip('cutter', [{ id: 'g1', name: 'Gun One', role: 'gunner', rating: 4 }], 600);
 check('with no turret fitted, a gunner is on the bridge', !cutBare.sc.people[0].turret && !!cutBare.been['Gun One|bridgedeck|sit']);
 var wren = runShip('wren', [{ id: 'p1', name: 'Co Pilot', role: 'pilot', rating: 3 }], 600);

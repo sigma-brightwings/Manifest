@@ -17579,8 +17579,12 @@
     /* Her canopy bars are her livery's colour, so a repaint rebuilds the
      * room too (barColour). */
     var bars = barColour(ship);
+    /* Which of the reactor block's two layouts (shipdeck.js BLOCK_HULLS) is
+     * hers is her own seed's; `blockVariant` on the ship overrides it, for
+     * the developer's panel and the tests. */
+    var blockV = ship.blockVariant || null;
     if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur &&
-        spec._deck.loadKey === load.key && spec._deck.bars === bars) return spec._deck;
+        spec._deck.loadKey === load.key && spec._deck.bars === bars && spec._deck.blockV === blockV) return spec._deck;
     var g = cockpitGeometry(spec);
     /* Who works her, with you at the helm (crew.js), off the hull's own
      * default outfit so a refit does not move the furniture. */
@@ -17588,7 +17592,7 @@
     /* How far her airlock deck stands above the ground on her gear: the
      * ramp's drop (hullfit.js). */
     var fit = hullFit(ship), capScale = 1;
-    var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
+    var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur, blockVariant: blockV,
                   rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
                   load: load.load,
                   /* Her cockpit up in her nose block (shipdeck.js RAISED). */
@@ -17607,7 +17611,10 @@
     var cutWant = null;
     if (plan.ramp && plan.ramp.mode === 'ramp' && SD.RAMP_CUT_SLOPE && plan.ramp.drop > 0) {
       var cutLen = plan.ramp.drop / Math.sin(SD.RAMP_CUT_SLOPE);
-      var kindsOf = function (pl) { var k = {}; pl.rooms.forEach(function (r) { k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
+      /* The naval and reactor-block rooms are never left out for a ramp
+       * (they are narrowed, and the block's layout B gives way to A, which
+       * has one room fewer): only the rooms a ramp can cost her count. */
+      var kindsOf = function (pl) { var k = {}; pl.rooms.forEach(function (r) { if (r.kind !== 'naval') k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
       var lacks = function (pl, want) { for (var kk in want) if ((kindsOf(pl)[kk] || 0) < want[kk]) return true; return false; };
       if (plan.ramp.len > cutLen + 0.05) {
         var cutOpts = Object.create(popts); cutOpts.rampMax = cutLen;
@@ -17627,11 +17634,42 @@
      * deck - the ramp is cut back to end a stride short of it and planned
      * again: steeper on those two, and a stair if that is what it takes.
      * Twice at most, since the room can move the hinge. */
-    for (var rpass = 0; rpass < 2 && plan.ramp && plan.ramp.mode !== 'lift' && fit && fit.drop > 0; rpass++) {
-      var lim = rampLegLimit(ship, plan, fit);
-      if (!(lim > 0) || lim >= plan.ramp.len - 0.05) break;
-      popts.rampMax = (popts.rampMax ? Math.min(popts.rampMax, lim) : lim);
-      plan = (SD.planFitted || SD.plan)(g, popts);
+    function clearLegs(pl, po) {
+      for (var rpass = 0; rpass < 2 && pl.ramp && pl.ramp.mode !== 'lift' && fit && fit.drop > 0; rpass++) {
+        var lim = rampLegLimit(ship, pl, fit);
+        if (!(lim > 0) || lim >= pl.ramp.len - 0.05) break;
+        po.rampMax = (po.rampMax ? Math.min(po.rampMax, lim) : lim);
+        pl = (SD.planFitted || SD.plan)(g, po);
+      }
+      return pl;
+    }
+    var preLegs = popts.rampMax;
+    plan = clearLegs(plan, popts);
+    /* THE REACTOR BLOCK'S AIRLOCK (shipdeck.js BLOCK_HULLS, 2026-11-23).
+     * Astra drew it forward, by the cross passage; where one of her legs
+     * stands in its ramp's way there, the ramp is cut short (the Kestrel's
+     * to a stair). So she is planned again with it aft of the bunks, where
+     * the old deck had it, and whichever gives her the better ramp (a ramp
+     * before a stair, then the longer) is hers. */
+    if (plan.block && popts.rampMax !== undefined && !popts.blockLockAft) {
+      var aopts = {};
+      for (var ak in popts) aopts[ak] = popts[ak];
+      aopts.blockLockAft = true;
+      delete aopts.rampMax;
+      var alt = (SD.planFitted || SD.plan)(g, aopts);
+      /* The same yardstick as hers: a longer ramp never costs a room. */
+      if (cutWant) {
+        for (var arl = alt.ramp.len - 0.25; lacks(alt, cutWant) && arl > cutLen - 1e-9; arl -= 0.25) {
+          aopts.rampMax = Math.max(cutLen, arl);
+          alt = (SD.planFitted || SD.plan)(g, aopts);
+        }
+      }
+      alt = clearLegs(alt, aopts);
+      var rampScore = function (pl) {
+        var f = pl.fitted || { omitted: [], misfit: [] };
+        return -1000 * (f.omitted.length + f.misfit.length) + (pl.ramp ? (pl.ramp.mode === 'ramp' ? 100 : 0) + pl.ramp.len : 0);
+      };
+      if (rampScore(alt) > rampScore(plan) + 0.05) { plan = alt; popts = aopts; }
     }
     /* What the old cut left her, kept on the plan so airlock.test.js can
      * hold the longer ramp to it. */
@@ -17681,7 +17719,7 @@
     }
     plan.barColour = bars;
     spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur, loadKey: load.key,
-                   bars: bars,
+                   bars: bars, blockV: blockV,
                    /* What her hold takes, at the size it is drawn (her screens read it). */
                    holdCap: (ship.cargoCap || (hull && hull.cargoCap) || 0) * capScale };
     return spec._deck;
