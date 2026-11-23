@@ -180,7 +180,7 @@
     tanker:   { hw: 3.5, zf: 0.10, zl: 0.30, len: 51, mainY: -1.25 },
     /* The Crawler's flat is under her junction deck, forward of her craft
      * bay, where she is solid. */
-    crawler:  { hw: 3.5, z1: -38, z0: -52, mainY: -8.2, under: 'junction', len: 164 }
+    crawler:  { hw: 2.6, z1: -38, z0: -52, mainY: -8.2, under: 'junction', len: 164 }
   };
   var CRAWLER_MILITARY = { crawler_navy: true, crawler_syndicate: true };
 
@@ -681,6 +681,7 @@
    * space — and a watertight door between the two below. */
   function flat(hullId, f, opts) {
     var military = !!f.military || !!CRAWLER_MILITARY[opts.libId];
+    if (opts.hw) f = Object.assign({}, f, { hw: Math.min(f.hw, opts.hw) });
     var spec = { style: hullId === 'cutter' || (hullId === 'crawler' && military) ? 'navy' : 'merchant',
                  military: military, cx: 0, hw: f.hw, zBow: (f.len || 30) * 0.35 };
     var p = newPlan(hullId, spec, opts);
@@ -689,20 +690,29 @@
     var main = addDeck(p, { id: f.under || 'main', num: navy ? '1' : 'Main', name: f.under === 'junction' ? 'Engineering · tram' : 'Main deck', role: 'stub', y: mainY, h: 2.25 });
     var h = 3.0;
     var low = addDeck(p, { id: 'flat', num: navy ? '2' : 'Lower', name: 'Engineering flat', role: 'flat', y: mainY - SLAB - h, h: h });
-    var z1 = f.z1 !== undefined ? f.z1 : -(f.len * f.zf), z0 = f.z0 !== undefined ? f.z0 : z1 - f.len * f.zl;
+    /* Where it goes in her (shipdeck.js: under her passage and hold) may be
+     * given; otherwise the table's fractions of her length. */
+    var z1 = opts.z1 !== undefined ? opts.z1 : f.z1 !== undefined ? f.z1 : -(f.len * f.zf);
+    var z0 = opts.z0 !== undefined ? opts.z0 : f.z0 !== undefined ? f.z0 : z1 - f.len * f.zl;
     var zm = (z0 + z1) / 2;
     var stub = room(p, main, 'stub', -f.hw, f.hw, z0, z1, { label: main.name });
     p.zones = [[z0, zm], [zm, z1]];
     p.bulkheads.push({ z: zm, frame: frameAt(spec.zBow, zm), main: true });
-    var eng = room(p, low, 'engine', -f.hw, f.hw, z0 + WALL / 2, zm - WALL / 2, { zone: 0 });
+    /* Her engine room is on her own deck (shipdeck.js, off the passage):
+     * down here, the auxiliary machinery — pumps, the reactor's coolant
+     * plant, the turbines' condensers. */
+    var eng = room(p, low, 'aux', -f.hw, f.hw, z0 + WALL / 2, zm - WALL / 2, { zone: 0 });
     var rr = reactorRoom(p, low, [zm, z1], 0, f.hw, military ? 'h' : 'v', military);
     /* The watertight door between them is on the control room's side. */
     link(p, 'wtdoor', eng, rr.control, navy ? 'Z' : 'D', [f.hw - 0.8, zm], { bulkhead: zm });
-    var zl = z1 - 1.2;
-    ladder(p, rr.control, stub, navy ? 'Z' : null, f.hw * 0.5, zl, 1, 'up', navy);
-    ladder(p, rr.control, stub, navy ? 'Z' : null, -f.hw * 0.5, zl, -1, 'down', navy);
-    link(p, 'trunk', eng, stub, null, [-f.hw + 0.8, z0 + 1.2], { climb: true });
-    link(p, 'trunk', rr.reactor, stub, null, [-f.hw + 0.8, zm + 1.0], { climb: true });
+    /* The ladders' heads and the trunks' tops may be placed (opts.ladderAt:
+     * [starboard, port] centres; opts.trunkAt: { aux, reactor }), so they
+     * come up into the rooms over them. */
+    var zl = z1 - 1.2, la = opts.ladderAt || [[f.hw * 0.5, zl], [-f.hw * 0.5, zl]], ta = opts.trunkAt || {};
+    ladder(p, rr.control, stub, navy ? 'Z' : null, la[0][0], la[0][1], 1, 'up', navy);
+    ladder(p, rr.control, stub, navy ? 'Z' : null, la[1][0], la[1][1], -1, 'down', navy);
+    link(p, 'trunk', eng, stub, null, ta.aux || [-f.hw + 0.8, z0 + 1.2], { climb: true });
+    link(p, 'trunk', rr.reactor, stub, null, ta.reactor || [-f.hw + 0.8, zm + 1.0], { climb: true });
     p.airlock = stub.id;          // her own airlock is on her own deck
     p.bridge = stub.id;
     labelAll(p, spec);

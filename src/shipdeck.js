@@ -1052,7 +1052,19 @@
         out.naval = nv.naval; out.deckName = nv.deckName; out.hangarY = nv.hangarY; out.drive = null;
       }
     }
-    if (decked) {
+    /* THE ENGINEERING FLAT (2026-11-23): the L hulls and the Crawler, a deck
+     * under her own with her reactor. No lift goes there: ladders and
+     * trunks do. */
+    var flat = null;
+    if (FLAT_HULLS[opts.hullId] && global.NavalDeck && opts.naval !== false) {
+      flat = flatten({ out: out, geom: geom, opts: opts, decked: decked, deckY: deckY, rooms: rooms, doors: doors, items: items });
+      if (flat) {
+        deckY = flat.deckY; deckAll = flat.deckAll; out.naval = flat.naval;
+        out.deckName = flat.deckName;
+        if (!decked) deckOrder = [];
+      }
+    }
+    if (decked || flat) {
       /* A walk.js plan per deck: the same objects, filtered, with that
        * deck's floor. `ship` points back at the whole. */
       out.deckY = deckY; out.deckOrder = deckOrder; out.deckAll = deckAll; out.tram = tram; out.hangarPads = hangarPads;
@@ -1066,6 +1078,10 @@
         v.items = items.filter(function (it) { return it.deck === dk; });
         out.decks[dk] = v;
       });
+      /* A hull with no lift has no bridge deck of her own: you get up from
+       * the seat onto her one deck, which walks as it always did (no deck
+       * name: the cockpit is seen through its door from it, shipWalkClip). */
+      if (!decked) { out.decks.bridge = out.decks.main; out.decks.main.deck = undefined; }
     }
     return out;
   }
@@ -1351,6 +1367,127 @@
       naval: { style: naval.style, cx: nd.cx, hw: nd.hw, reactors: nd.reactors.map(function (r) {
         var o = {}; for (var k in r) o[k] = r[k]; o.room = 'nv-' + r.room; o.control = 'nv-' + r.control; return o;
       }), links: nd.links.length, doors: nDoor, layout: nd, misfit: misfit, narrowed: narrowed, dropped: dropped, lowered: lowered }
+    };
+  }
+
+  /* ---- THE ENGINEERING FLAT IN HER (2026-11-23) ---------------------------
+   * navaldeck.js's flat, under her own deck: under the aft end of her
+   * passage and her hold on an L hull (her own engine room stays where her
+   * crew work it, off the passage; down here are the reactor, its control
+   * room and the auxiliary machinery), under the far tram platform and the
+   * engine room on the Crawler. Its ladders come up into the passage (the
+   * platform), its trunks into the rooms over them. */
+  /* The L hulls (kestrel, cutter, longhaul, tanker) are laid out
+   * (navaldeck.js FLATS) but not aboard: at their length a 3 m flat does
+   * not fit under their deck, and growing them (fit-hulls: Kestrel 34 to
+   * 51 m, Longhaul 38 to 59) puts their glass 4-8 m ahead of the seat and
+   * turns their ramps into lifts. Astra's call, 2026-11-23. */
+  var FLAT_HULLS = { crawler: 1 };
+  function flatten(c) {
+    var N = global.NavalDeck, out = c.out, opts = c.opts, rooms = c.rooms, doors = c.doors, items = c.items;
+    var hullId = opts.hullId, under = c.decked ? 'junction' : 'main';
+    var stubY = c.decked ? c.deckY.junction : out.floorY;
+    if (stubY === undefined) return null;
+    var up = rooms.filter(function (r) { return r.deck === under && r.walk !== false && r.kind !== 'cockpit'; });
+    var pas = c.decked ? up.filter(function (r) { return r.id === 'platform-aft'; })[0] : up.filter(function (r) { return r.kind === 'passage'; })[0];
+    var hold = c.decked ? up.filter(function (r) { return r.kind === 'engine'; })[0] : (up.filter(function (r) { return r.kind === 'cargo'; })[0] || pas);
+    if (!pas || !hold) return null;
+    var h = 3.0, flatY = stubY - N.SLAB - h, run = (stubY - flatY) / Math.tan(Math.PI / 3);
+    var px = (pas.x0 + pas.x1) / 2;
+    /* The ladders' heads in the passage's aft end (on the platform), one
+     * a little forward of the other; their feet in reactor control. */
+    var headA = Math.min(pas.z1 - 0.4, pas.z0 + (c.decked ? 2.0 : 4.6)), headB = Math.min(pas.z1 - 0.4, pas.z0 + (c.decked ? 2.0 : 3.4));
+    var xA = c.decked ? px + 0.9 : px, xB = c.decked ? px - 0.9 : px;
+    var z1 = Math.max(headA, headB) + 0.6, FL = c.decked ? 14 : 12;
+    var z0 = z1 - FL, zm = (z0 + z1) / 2;
+    var hw = Math.max(2.4, Math.min(3.5, (hold.x1 - hold.x0) / 2 + 0.5));
+    var hz = (hold.z0 + hold.z1) / 2;
+    var nd = N.layout(hullId, {
+      libId: opts.libId, mainY: stubY, z0: z0, z1: z1, hw: hw, key: opts.key,
+      ladderAt: [[xA, headA - run / 2], [xB, headB - run / 2]],
+      trunkAt: { aux: [(hold.x0 + hold.x1) / 2 + 0.4, Math.max(z0 + 0.8, Math.min(zm - 0.8, hz))],
+                 reactor: [-hw + 0.8, zm + 1.0] }
+    });
+    if (!nd) return null;
+    var deckY = {}, k;
+    if (c.deckY) for (k in c.deckY) deckY[k] = c.deckY[k];
+    if (!c.decked) deckY.main = out.floorY;
+    deckY.flat = nd.decks.filter(function (d) { return d.id === 'flat'; })[0].y;
+    var deckName = {};
+    if (out.deckName) for (k in out.deckName) deckName[k] = out.deckName[k];
+    var navy = nd.style === 'navy';
+    deckName.flat = (navy ? '2  ' : '') + 'Engineering flat';
+    var ndRoom = {}, mine = {};
+    nd.rooms.forEach(function (r) { ndRoom[r.id] = r; });
+    nd.rooms.forEach(function (r) {
+      if (r.kind === 'stub') return;
+      var m = { id: 'nv-' + r.id, kind: 'naval', sub: r.kind, x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, y0: 0, y1: r.y1 - r.y0,
+                label: r.label + (navy ? '   ' + r.comp : ''), deck: 'flat', comp: r.comp };
+      rooms.push(m); mine[r.id] = m;
+    });
+    function roomOver(x, z) {
+      var hit = up.filter(function (r) { return x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1; })[0];
+      if (hit) return hit;
+      var best = null, bd = Infinity;
+      up.forEach(function (r) {
+        var dx = Math.max(r.x0 - x, 0, x - r.x1), dz = Math.max(r.z0 - z, 0, z - r.z1), d = Math.hypot(dx, dz);
+        if (d < bd) { bd = d; best = r; }
+      });
+      return best;
+    }
+    function inside(r, x, z) {
+      var px2 = Math.min(0.5, (r.x1 - r.x0) / 2 - 0.01), pz2 = Math.min(0.5, (r.z1 - r.z0) / 2 - 0.01);
+      return [Math.max(r.x0 + px2, Math.min(r.x1 - px2, x)), Math.max(r.z0 + pz2, Math.min(r.z1 - pz2, z))];
+    }
+    var VERB = { ladder: 'Ladder', stair: 'Stairs', scuttle: 'Scuttle', trunk: 'Escape trunk' };
+    var dName = function (d) { return deckName[d] || DECK_NAME[d] || (d === 'main' ? 'Main deck' : d); };
+    nd.links.forEach(function (l) {
+      var a = mine[l.a], b = mine[l.b];
+      if (a && b) {
+        /* The watertight door between her two compartments down here. */
+        var A = a.z1 <= b.z0 + 1e-6 ? a : b, F = A === a ? b : a;
+        var xc = Math.max(Math.max(a.x0, b.x0) + DOOR_HW + 0.05, Math.min(Math.min(a.x1, b.x1) - DOOR_HW - 0.05, l.x));
+        doors.push({ id: 'nv-' + l.id, a: a.id, b: b.id, axis: 'z', at: (A.z1 + F.z0) / 2, w: DOOR_HW * 2, h: DOOR_H, xc: xc,
+                     x0: xc - DOOR_HW, x1: xc + DOOR_HW, z0: A.z1 - 0.8, z1: F.z0 + 0.8, wall: [A.z1, F.z0],
+                     slide: true, open: 0, shut: true, deck: 'flat', naval: true, fit: l.fit || null,
+                     label: l.reactorDoor ? 'Reactor door  (X)' : 'Watertight door' + (l.fit ? '  (' + l.fit + ')' : '') });
+        return;
+      }
+      if (!VERB[l.type]) return;
+      var lo = a || b;
+      if (!lo) return;
+      var topX = l.x, topZ = l.headZ !== undefined ? l.headZ : l.z;
+      var hi = roomOver(topX, topZ);
+      if (!hi) return;
+      var zLo = l.footZ !== undefined ? l.footZ - 0.35 : l.z;
+      var pLo = inside(lo, l.x, zLo), pHi = inside(hi, topX, l.headZ !== undefined ? l.headZ + 0.35 : l.z);
+      var sx = pLo[0] - l.x, sz = pLo[1] - zLo, dy = stubY - flatY;
+      var base = { link: l.id, via: l.type, fit: l.fit || null, rule: l.rule || null, side: l.side || 0, aim: true,
+                   foot: [l.x + sx, (l.footZ !== undefined ? l.footZ : l.z) + sz], head: [l.x + sx, (l.headZ !== undefined ? l.headZ : l.z) + sz] };
+      [[pLo, lo, hi, pHi, true], [pHi, hi, lo, pLo, false]].forEach(function (e) {
+        var it = { kind: 'climb', x: e[0][0], z: e[0][1], deck: e[1].deck, to: e[2].deck, tx: e[3][0], tz: e[3][1], up: e[4], dy: e[4] ? dy : -dy,
+                   label: (e[4] ? '▲  ' : '▼  ') + VERB[l.type] + (e[4] ? ' up to ' : ' down to ') + dName(e[2].deck) };
+        for (var q in base) it[q] = base[q];
+        items.push(it);
+      });
+    });
+    /* Reactor control's panel, by the glass. */
+    nd.reactors.forEach(function (rx) {
+      var ctl = mine[rx.control];
+      if (!ctl) return;
+      var cxm = (ctl.x0 + ctl.x1) / 2;
+      items.push({ kind: 'reactorctl', x: cxm, z: ctl.z0 + 0.6, deck: 'flat', label: 'Reactor control  —  the glass',
+                   counter: [cxm - 0.9, ctl.z0, cxm + 0.9, ctl.z0 + 0.45] });
+    });
+    doors.forEach(function (d) { if (d.deck === 'flat') d.yOff = deckY.flat - c.geom.floorY; });
+    var deckAll = c.decked ? (c.deckAll || []).slice() : ['main'];
+    if (c.decked) deckAll = Object.keys(c.deckY);
+    deckAll.push('flat');
+    deckAll.sort(function (p1, p2) { return deckY[p2] - deckY[p1]; });
+    return {
+      deckY: deckY, deckAll: deckAll, deckName: deckName,
+      naval: { style: nd.style, cx: 0, hw: hw, flat: true, layout: nd, misfit: [], narrowed: [], dropped: [], lowered: [],
+               reactors: nd.reactors.map(function (r) { var o = {}; for (var q in r) o[q] = r[q]; o.room = 'nv-' + r.room; o.control = 'nv-' + r.control; return o; }) }
     };
   }
 
@@ -1992,7 +2129,7 @@
      * down to the main deck at the end. Door leaves are moved there by
      * their door's `yOff` (render.js), so they are built here at the
      * bridge's height like every other leaf. */
-    if (p.decks) {
+    if (p.decks && p.carZ) {
       var lob = roomByKind(p, 'lobby'), dLB = doorById(p, 'lift-bridge');
       boxRoom(room, lob.x0, fy, lob.z0, lob.x1, fy + PASSAGE_H, lob.z1, pal.passWall, pal.passFloor, pal.ceil, ['z0', 'z1']);
       lightRun(room, [-0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3],
@@ -2150,7 +2287,7 @@
     /* The main deck goes down to where it is, and the decks below it are
      * built in place. */
     var car = null, tramCar = null;
-    if (p.decks) {
+    if (p.decks && p.carZ) {
       merge(shipRoom, room, dyMain);
       merge(shipPortals, portals, dyMain);
       [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
@@ -2166,6 +2303,8 @@
       [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
       room = shipRoom; portals = shipPortals;
     }
+    /* An engineering flat with no lift (the L hulls), built in place. */
+    if (p.naval && !p.carZ) navalMesh(room, pal, p);
 
     return {
       room: room, portals: portals, seat: seat, lampOk: lampOk, lampNo: lampNo,
@@ -3204,7 +3343,7 @@
   var ShipDeck = {
     DOOR_HW: DOOR_HW, DOOR_H: DOOR_H, WALL_T: WALL_T, PASSAGE_LEN: PASSAGE_LEN,
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
-    PALETTES: PALETTES, SYNDICATE: SYNDICATE, NAVY: NAVY,
+    PALETTES: PALETTES, FLAT_HULLS: FLAT_HULLS, SYNDICATE: SYNDICATE, NAVY: NAVY,
     CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
     paletteFor: paletteFor, plan: plan, planFitted: planFitted, updateDoors: updateDoors, leafTravel: leafTravel,
     meshes: meshes, frame: frame,

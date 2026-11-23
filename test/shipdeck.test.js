@@ -184,7 +184,7 @@ ids.forEach(function (id) {
   var bz = SD.doorById(whole, 'bridge').wall[1];
   if (Walk.standable(p, 0, bz)) early.push(id);
   var lockZ = SD.roomByKind(whole, 'airlock').z1 - 0.5;
-  if (whole.decks) {
+  if (whole.decks && whole.carZ) {
     var carMid = (whole.carZ[0] + whole.carZ[1]) / 2;
     var w1 = walkAft(p, p.spawn, carMid);
     if (!(w1.z < carMid)) stuck.push(id + ' bridge z=' + w1.z.toFixed(2));
@@ -295,8 +295,13 @@ function groupStarts(list) {
  * ladder, a scuttle or a trunk lands you. A deck no lift stops at is
  * reached by climbing. */
 function deckStarts(whole) {
-  var mid = { x: 0, z: (whole.carZ[0] + whole.carZ[1]) / 2 }, out = [];
-  whole.deckOrder.forEach(function (dk) { out.push([whole.decks[dk], mid]); });
+  var out = [];
+  /* A hull with an engineering flat and no lift (2026-11-23): her own deck
+   * from where you come aboard. */
+  if (whole.carZ) {
+    var mid = { x: 0, z: (whole.carZ[0] + whole.carZ[1]) / 2 };
+    whole.deckOrder.forEach(function (dk) { out.push([whole.decks[dk], mid]); });
+  } else out.push([whole.decks.main, whole.aboard], [whole.decks.main, whole.spawn]);
   if (whole.tram) {
     var td = whole.decks[whole.tram.deck || 'junction'];
     out.push([td, { x: whole.tram.x || 0, z: whole.tram.offB }], [td, { x: whole.tram.x || 0, z: whole.tram.offA }]);
@@ -497,8 +502,16 @@ console.log('--- conning towers, decks and the lift (2026-10-25) ---');
  * top and an elevator down; the stops are the bridge, the main deck and
  * airlock, the hangar (Carrier only), and a junction from which engineering
  * is reached — by tram, she chose; the other XL hulls get decks and a lift. */
-var decked = ids.filter(function (id) { return !!R.shipInterior(ship(id)).plan.decks; }).sort();
-check('the five XL hulls have decks, and nothing else does', decked.join(',') === 'capital,carrier,crawler,leviathan,meridian', decked.join(','));
+var decked = ids.filter(function (id) { return !!R.shipInterior(ship(id)).plan.carZ; }).sort();
+check('the five XL hulls have a lift, and nothing else does', decked.join(',') === 'capital,carrier,crawler,leviathan,meridian', decked.join(','));
+/* Every L and XL hull has more than one deck (2026-11-23): the L hulls an
+ * engineering flat, reached by ladder and trunk. */
+var multi = ids.filter(function (id) { return !!R.shipInterior(ship(id)).plan.decks; }).sort();
+check('the XL hulls have more than one deck; the Crawler an engineering flat as well', multi.join(',') === 'capital,carrier,crawler,leviathan,meridian', multi.join(','));
+var cw = R.shipInterior(ship('crawler')).plan;
+check('the Crawler\'s flat: a reactor, its control room and auxiliary machinery, under her junction',
+      ['reactor', 'reactorctl', 'aux'].every(function (k) { return cw.rooms.some(function (r) { return r.deck === 'flat' && r.sub === k; }); }) &&
+      cw.deckY.flat < cw.deckY.junction && cw.items.some(function (it) { return it.kind === 'climb' && it.deck === 'junction' && it.to === 'flat'; }));
 var badDeck = [];
 decked.forEach(function (id) {
   var p = R.shipInterior(ship(id)).plan, order = p.deckOrder;
@@ -533,7 +546,7 @@ decked.forEach(function (id) {
    * on the naval decks, on her engineering deck with the tram. */
   var engs = p.rooms.filter(function (r) { return r.kind === 'engine'; });
   var nEng = p.rooms.filter(function (r) { return r.kind === 'naval' && r.sub === 'engine'; });
-  if (p.naval) {
+  if (p.naval && !p.naval.flat) {
     if (!nEng.length || (p.tram && !nEng.every(function (r) { return r.deck === p.tram.deck; }))) badDeck.push(id + ' naval engine room');
   } else if (engs.length !== 1 || engs[0].deck !== 'junction' || !(engs[0].z1 <= p.tram.z0)) badDeck.push(id + ' engine room');
   /* A long spine, unless her hull is not there to hold one (shipdeck.js
