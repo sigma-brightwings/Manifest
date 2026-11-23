@@ -40,6 +40,12 @@ before they update.
 
 ## Unreleased
 
+### Changed (2026-11-23, a damaged ship goes to general quarters by herself)
+
+- Astra: *"if the ship's hull is below 75% the ship automatically goes to GQ."* Below 75% hull a large ship is at general quarters whether or not anyone called it, so her Z fittings are dogged and her tram runs on battery. At 75% and above, GQ is the captain's to call.
+- It follows that the tram goes out below 40% hull whenever that happens, because a ship that damaged is always at GQ.
+- For now this lives in the deck rules (`NavalDeck.GQ_BELOW`, `condAt`), which decide crew routes and the developer panel's deck check. GQ as something you see aboard (the alarm, lamps, doors swinging shut) comes with stage 4.
+
 ### Added (2026-11-23, the developer's panel)
 
 - A developer's harness for testing features without playing all the way to them (`src/devharness.js`). It is on only in a developer's run. The page has to be opened with `?dev`, which the Electron shell does when it isn't packaged or is started with `--dev`. The released game has no key or code to reach it.

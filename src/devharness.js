@@ -119,7 +119,9 @@
     var d = interior(), N = global.NavalDeck;
     if (!d || !d.plan.naval || !N) { log('no naval decks on this hull'); return; }
     var L = d.plan.naval.layout, from = L.airlock || L.bridge;
-    [['at sea', 'normal', 1], ['general quarters', 'zebra', 1], ['GQ, hull under 40 %', 'zebra', 0.3]].forEach(function (c) {
+    /* Under 75 % hull she is at GQ by herself (NavalDeck.GQ_BELOW). */
+    [['at sea, hull 100 %', 'normal', 1], ['GQ called', 'zebra', 1], ['hull 60 % (GQ by itself)', 'normal', 0.6],
+     ['hull 30 % (tram out)', 'normal', 0.3]].forEach(function (c) {
       var seen = N.reachable(L, from, c[1], null, c[2]);
       var miss = L.rooms.filter(function (r) { return r.walk !== false && !seen[r.id]; });
       log(c[0] + ': ' + (miss.length ? miss.length + ' rooms cut off: ' + miss.slice(0, 4).map(function (r) { return r.comp || r.id; }).join(', ') : 'every room reachable'));

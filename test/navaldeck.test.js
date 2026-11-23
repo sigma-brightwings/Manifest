@@ -183,7 +183,9 @@ check('a merchant\'s watertight doors close on damage', (function () {
   var tn = rn.steps.some(function (s) { return s.link.type === 'tram'; }), tz = rz.steps.some(function (s) { return s.link.type === 'tram'; });
   check('at GQ the tram runs on battery at half speed', tn && tz && rz.cost > rn.cost * 1.5, Math.round(rn.cost) + ' m vs ' + Math.round(rz.cost) + ' m');
   check('with the hull under 40 % at GQ the tram is out', N.passable(tr, 'zebra', null, 0.39) === false &&
-        N.passable(tr, 'zebra', null, 0.4) === true && N.passable(tr, 'normal', null, 0.2) === true);
+        N.passable(tr, 'zebra', null, 0.4) === true &&
+        /* and a ship at 20 % is at GQ by herself (GQ_BELOW), so out too */
+        N.passable(tr, 'normal', null, 0.2) === false);
   var miss = [];
   NAVY.concat(['leviathan']).forEach(function (h) {
     var q = plans[h], seen = N.reachable(q, q.airlock, 'zebra', null, 0.3);
@@ -331,6 +333,26 @@ console.log('--- fitted to her (stage 2) ---');
       return r === way || r.deck !== way.deck || !(r.x0 < way.x1 && way.x0 < r.x1 && r.z0 < way.z1 && way.z0 < r.z1);
     });
   }));
+})();
+
+console.log('--- GQ on damage ---');
+/* Astra: "if the ship's hull is below 75% the ship automatically goes to GQ". */
+check('a hull under 75 % is at GQ whatever was ordered',
+      N.condAt('normal', 0.74) === 'zebra' && N.condAt(undefined, 0.5) === 'zebra');
+check('at 75 % and over, the order stands', N.condAt('normal', 0.75) === 'normal' && N.condAt('zebra', 1) === 'zebra' &&
+      N.condAt('normal') === 'normal');
+(function () {
+  var p = plans.capital, z = p.links.filter(function (l) { return l.fit === 'Z'; })[0];
+  check('a Z fitting is dogged on a damaged ship even if nobody called GQ', !!z &&
+        N.passable(z, 'normal', null, 1) && !N.passable(z, 'normal', null, 0.6), z && z.id);
+  var tr = p.links.filter(function (l) { return l.type === 'tram'; })[0];
+  check('...and the tram is out under 40 % with nobody calling GQ', !!tr &&
+        N.passable(tr, 'normal', null, 0.5) && !N.passable(tr, 'normal', null, 0.3));
+  var atSea = N.reachable(p, p.airlock || p.bridge, 'normal', null, 1);
+  var hurt = N.reachable(p, p.airlock || p.bridge, 'normal', null, 0.6);
+  var gq = N.reachable(p, p.airlock || p.bridge, 'zebra', null, 1);
+  check('a ship at 60 % reaches what a ship at GQ reaches', JSON.stringify(Object.keys(hurt).sort()) === JSON.stringify(Object.keys(gq).sort()) &&
+        Object.keys(atSea).length >= Object.keys(hurt).length);
 })();
 
 console.log('--- the same ship ---');

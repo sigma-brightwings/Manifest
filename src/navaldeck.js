@@ -65,6 +65,15 @@
    * to use; on battery she runs at half speed, and with the hull under
    * 40 % the battery's feed is gone and she stands where she is. */
   var TRAM_BATTERY = { speed: 0.5, outBelow: 0.4 };
+  /* GENERAL QUARTERS ON DAMAGE (Astra, 2026-11-23): "if the ship's hull is
+   * below 75% the ship automatically goes to GQ". Below it she is at GQ
+   * whatever was ordered; above it, GQ is the captain's to call or stand
+   * down. So the tram's 40 % only ever bites at GQ, because a hull under
+   * 40 % is a ship already at GQ. */
+  var GQ_BELOW = 0.75;
+  function condAt(cond, hull) {
+    return hull !== undefined && hull !== null && hull < GQ_BELOW ? 'zebra' : (cond || 'normal');
+  }
 
   /* ---- THE HULLS ----------------------------------------------------------
    * Measured with tools/hull-envelope.js (2026-11-23), in the plan frame.
@@ -740,6 +749,7 @@
    * Z fitting is dogged; X and Y you open as you pass; a D door closes only
    * on damage (opts.damaged, a list of link ids). */
   function passable(l, cond, damaged, hull) {
+    cond = condAt(cond, hull);
     if (cond === 'zebra' && l.fit === 'Z') return false;
     if (cond === 'zebra' && l.battery && hull !== undefined && hull < l.battery.outBelow) return false;
     if (damaged && l.fit === 'D' && damaged.indexOf(l.id) >= 0) return false;
@@ -792,7 +802,7 @@
   }
   function route(p, from, to, opts) {
     opts = opts || {};
-    var cond = opts.cond || 'normal';
+    var cond = condAt(opts.cond, opts.hull);
     var adj = adjacency(p, cond, opts.damaged, opts.hull);
     var dist = {}, prev = {}, done = {};
     dist[from] = 0;
@@ -813,7 +823,7 @@
   }
 
   global.NavalDeck = {
-    NAVAL: NAVAL, FLATS: FLATS, USE: USE, TRAM_BATTERY: TRAM_BATTERY, LANDING: LANDING, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
+    NAVAL: NAVAL, FLATS: FLATS, USE: USE, TRAM_BATTERY: TRAM_BATTERY, GQ_BELOW: GQ_BELOW, condAt: condAt, LANDING: LANDING, FRAME: FRAME, SLAB: SLAB, RULE_COST: RULE_COST,
     layout: layout, reachable: reachable, route: route, passable: passable, frameAt: frameAt,
     hulls: function () { return Object.keys(NAVAL).concat(Object.keys(FLATS)); }
   };
