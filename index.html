@@ -124,6 +124,7 @@
      shipdeck.js at call time). -->
 <script src="src/cargokit-data.js"></script>
 <script src="src/cargokit.js"></script>
+<script src="src/navaldeck.js"></script>
 <script src="src/shipdeck.js"></script>
 <script src="src/airlock.js"></script>
 <script src="src/tithe.js"></script>
@@ -237,6 +238,9 @@
      (captains.js, above, is the captains out in their ships.) -->
 <script src="src/captain-stories.js"></script>
 <script src="src/main.js"></script>
+<!-- The developer's panel: does nothing unless the page was opened with
+     ?dev (the unpackaged Electron shell, or `--dev`). ` toggles it. -->
+<script src="src/devharness.js"></script>
 <!-- The reader model (messages.js). A MODULE, so it runs after every classic
      script above and can find window.Messages; it loads in the background
      and the game reads with the phrase matcher until it is ready, or if

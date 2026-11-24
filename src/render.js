@@ -18693,8 +18693,12 @@
     /* Her canopy bars are her livery's colour, so a repaint rebuilds the
      * room too (barColour). */
     var bars = barColour(ship);
+    /* Which of the reactor block's two layouts (shipdeck.js BLOCK_HULLS) is
+     * hers is her own seed's; `blockVariant` on the ship overrides it, for
+     * the developer's panel and the tests. */
+    var blockV = ship.blockVariant || null;
     if (spec._deck && spec._deck.libId === libId && spec._deck.turret === tur &&
-        spec._deck.loadKey === load.key && spec._deck.bars === bars) return spec._deck;
+        spec._deck.loadKey === load.key && spec._deck.bars === bars && spec._deck.blockV === blockV) return spec._deck;
     var g = cockpitGeometry(spec);
     /* Who works her, with you at the helm (crew.js), off the hull's own
      * default outfit so a refit does not move the furniture. */
@@ -18702,7 +18706,7 @@
     /* How far her airlock deck stands above the ground on her gear: the
      * ramp's drop (hullfit.js). */
     var fit = hullFit(ship), capScale = 1;
-    var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur,
+    var popts = { hullId: ship.hullId, libId: libId, size: hull && hull.size, key: spec.key, crew: crew, turret: tur, blockVariant: blockV,
                   rampDrop: fit && (fit.dropRoom || fit.drop), rampReach: fit && fit.drop,
                   load: load.load,
                   /* Where her cockpit fit seats you (cabinOf): off the
@@ -18725,7 +18729,10 @@
     var cutWant = null;
     if (plan.ramp && plan.ramp.mode === 'ramp' && SD.RAMP_CUT_SLOPE && plan.ramp.drop > 0) {
       var cutLen = plan.ramp.drop / Math.sin(SD.RAMP_CUT_SLOPE);
-      var kindsOf = function (pl) { var k = {}; pl.rooms.forEach(function (r) { k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
+      /* The naval and reactor-block rooms are never left out for a ramp
+       * (they are narrowed, and the block's layout B gives way to A, which
+       * has one room fewer): only the rooms a ramp can cost her count. */
+      var kindsOf = function (pl) { var k = {}; pl.rooms.forEach(function (r) { if (r.kind !== 'naval') k[r.kind] = (k[r.kind] || 0) + 1; }); return k; };
       var lacks = function (pl, want) { for (var kk in want) if ((kindsOf(pl)[kk] || 0) < want[kk]) return true; return false; };
       if (plan.ramp.len > cutLen + 0.05) {
         var cutOpts = Object.create(popts); cutOpts.rampMax = cutLen;
@@ -18745,11 +18752,42 @@
      * deck - the ramp is cut back to end a stride short of it and planned
      * again: steeper on those two, and a stair if that is what it takes.
      * Twice at most, since the room can move the hinge. */
-    for (var rpass = 0; rpass < 2 && plan.ramp && plan.ramp.mode !== 'lift' && fit && fit.drop > 0; rpass++) {
-      var lim = rampLegLimit(ship, plan, fit);
-      if (!(lim > 0) || lim >= plan.ramp.len - 0.05) break;
-      popts.rampMax = (popts.rampMax ? Math.min(popts.rampMax, lim) : lim);
-      plan = (SD.planFitted || SD.plan)(g, popts);
+    function clearLegs(pl, po) {
+      for (var rpass = 0; rpass < 2 && pl.ramp && pl.ramp.mode !== 'lift' && fit && fit.drop > 0; rpass++) {
+        var lim = rampLegLimit(ship, pl, fit);
+        if (!(lim > 0) || lim >= pl.ramp.len - 0.05) break;
+        po.rampMax = (po.rampMax ? Math.min(po.rampMax, lim) : lim);
+        pl = (SD.planFitted || SD.plan)(g, po);
+      }
+      return pl;
+    }
+    var preLegs = popts.rampMax;
+    plan = clearLegs(plan, popts);
+    /* THE REACTOR BLOCK'S AIRLOCK (shipdeck.js BLOCK_HULLS, 2026-11-23).
+     * Astra drew it forward, by the cross passage; where one of her legs
+     * stands in its ramp's way there, the ramp is cut short (the Kestrel's
+     * to a stair). So she is planned again with it aft of the bunks, where
+     * the old deck had it, and whichever gives her the better ramp (a ramp
+     * before a stair, then the longer) is hers. */
+    if (plan.block && popts.rampMax !== undefined && !popts.blockLockAft) {
+      var aopts = {};
+      for (var ak in popts) aopts[ak] = popts[ak];
+      aopts.blockLockAft = true;
+      delete aopts.rampMax;
+      var alt = (SD.planFitted || SD.plan)(g, aopts);
+      /* The same yardstick as hers: a longer ramp never costs a room. */
+      if (cutWant) {
+        for (var arl = alt.ramp.len - 0.25; lacks(alt, cutWant) && arl > cutLen - 1e-9; arl -= 0.25) {
+          aopts.rampMax = Math.max(cutLen, arl);
+          alt = (SD.planFitted || SD.plan)(g, aopts);
+        }
+      }
+      alt = clearLegs(alt, aopts);
+      var rampScore = function (pl) {
+        var f = pl.fitted || { omitted: [], misfit: [] };
+        return -1000 * (f.omitted.length + f.misfit.length) + (pl.ramp ? (pl.ramp.mode === 'ramp' ? 100 : 0) + pl.ramp.len : 0);
+      };
+      if (rampScore(alt) > rampScore(plan) + 0.05) { plan = alt; popts = aopts; }
     }
     /* What the old cut left her, kept on the plan so airlock.test.js can
      * hold the longer ramp to it. */
@@ -18799,7 +18837,7 @@
     }
     plan.barColour = bars;
     spec._deck = { spec: spec, geom: g, plan: plan, meshes: SD.meshes(g, plan), libId: libId, turret: tur, loadKey: load.key,
-                   bars: bars,
+                   bars: bars, blockV: blockV,
                    /* What her hold takes, at the size it is drawn (her screens read it). */
                    holdCap: (ship.cargoCap || (hull && hull.cargoCap) || 0) * capScale };
     return spec._deck;
@@ -19630,7 +19668,7 @@
                         f: lib.f, c: lib.c };
       }
       var pd = plan.hangarPads[i];
-      out.push({ mesh: lib._hangar, off: [pd.x, plan.deckY.hangar, pd.z] });
+      out.push({ mesh: lib._hangar, off: [pd.x, plan.hangarY !== undefined ? plan.hangarY : plan.deckY.hangar, pd.z] });
     });
     return out;
   }
@@ -19639,6 +19677,7 @@
    * only while you are out of it; seated, you are where it is, and its
    * back would stand between you and the rear screens. Door leaves are
    * moved by however far each door's `open` has eased (shipdeck.js). */
+  var GLOW_STEPS = 16;
   function queueCockpitRoom(cam, ship, opts) {
     opts = opts || {};
     var d = shipInterior(ship), SD = global.ShipDeck;
@@ -19661,6 +19700,18 @@
      * far down it is, in the same metres as the room. */
     var AL = global.Airlock, base = ship._base || ship;
     parts.push({ mesh: (AL && base.airlock ? AL.lampGreen(base) : false) ? d.meshes.lampOk : d.meshes.lampNo });
+    /* HER REACTORS' GLOW (2026-11-23): the water and core behind the glass,
+     * at the power she is making now (shipdeck.js reactorPower: idle at a
+     * berth, up with the drive, an afterglow after a scram). In GLOW_STEPS
+     * steps, on the square root of her power so the dim end - the
+     * afterglow - still has steps of its own; each step's mesh made once. */
+    if (d.plan.naval && d.plan.naval.reactors && d.plan.naval.reactors.length && SD.reactorGlowMesh) {
+      var Gm = global.Game, pw = SD.reactorPower(base, Gm && isFinite(Gm.t) ? Gm.t : 0);
+      var gs = Math.round(Math.sqrt(Math.max(0, Math.min(1, pw))) * GLOW_STEPS);
+      d.glowMeshes = d.glowMeshes || {};
+      if (!d.glowMeshes[gs]) d.glowMeshes[gs] = SD.reactorGlowMesh(d.plan, Math.pow(gs / GLOW_STEPS, 2));
+      parts.push({ mesh: d.glowMeshes[gs] });
+    }
     /* Not from outside her (noPortals): there her exterior model draws the
      * ramp, and drawing it a second time here, in the room's metres, put
      * two copies of every rail in the same place - the shimmer Astra saw
@@ -19681,8 +19732,11 @@
       var carY = live.carY !== undefined ? live.carY : d.plan.deckY.bridge;
       parts.push({ mesh: d.meshes.car.body, off: [0, carY, 0] });
       if (live.moving) parts.push({ mesh: d.meshes.car.doors, off: [0, carY, 0] });
-      var tz = live.tramZ !== undefined ? live.tramZ : d.plan.tram.a;
-      parts.push({ mesh: d.meshes.tram, off: [0, d.plan.deckY.junction, tz] });
+      var tz = live.tramZ !== undefined ? live.tramZ : (d.plan.tram ? d.plan.tram.a : 0);
+      /* The naval decks' tram runs down her trunk, off the centreline, on
+       * her engineering deck (shipdeck.js navalize). */
+      var tp = d.plan.tram;
+      if (tp) parts.push({ mesh: d.meshes.tram, off: [tp.x || 0, d.plan.deckY[tp.deck || 'junction'], tz] });
       if (d.plan.hangarPads) hangarCraft(ship, d.plan).forEach(function (pc) { parts.push(pc); });
     }
     if (opts.seat) parts.push({ mesh: d.meshes.seat });

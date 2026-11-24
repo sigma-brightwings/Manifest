@@ -46,9 +46,22 @@ Worlds with a second body inside them, and systems with a second sun.
 *Stella octangula* means eight-pointed star: two tetrahedra pushed through
 each other, so that one solid is made of two. This is the release where
 a system can have two suns, every world got an interior under its
-surface and weather over it, and the space between worlds filled with
-relays, drilling teams and captains who decide things for themselves.
+surface and weather over it, the big ships got decks under their own,
+and the space between worlds filled with relays, drilling teams and
+captains who decide things for themselves.
 
+- **Decks for the big ships:** the Capital and the Carrier laid out on US
+  naval practice, the Meridian and Leviathan as merchants, and the
+  Crawler's engineering flat, all walkable, with ladders, the tram and
+  watertight fittings. A damaged ship goes to general quarters by herself
+  below 75% hull.
+- **The reactor room:** Kestrel, Cutter, Longhaul and Tanker get Astra's
+  reactor block, a control room with a window onto the reactor. Every
+  reactor's core sits in a tank of water and glows Cherenkov blue with
+  its power. The glow falls to decay heat on a scram, and spills out
+  through the window in straight lines. The tank is welded and dressed,
+  its control rods spread across the whole core, and the Meridian and
+  Leviathan get a shielded tunnel past it.
 - **More than one sun,** and a giant over a living moon.
 - **Worlds worth visiting:** appeal, ferries that carry people, a passage
   board that follows appeal, and the resort pad.
@@ -56,7 +69,8 @@ relays, drilling teams and captains who decide things for themselves.
   lows, the magnetometer hears its core, and the INTERIOR cutaway shows it.
   The scanner's readout sits over the surface, and its map is a globe.
 - **Weather with a climate:** clouds with a body, a storm you descend
-  through, vapour off the tips, a sky when you fly in air.
+  through, vapour off the tips, a sky when you fly in air. The three grades
+  of weather sounder have their own models.
 - **Com-sats:** the relay network and your own com-sat, RTGs and dark
   relays, islands felt everywhere, armed defence platforms, and drawn
   icons for what things are.
@@ -75,6 +89,228 @@ relays, drilling teams and captains who decide things for themselves.
 - **Saves:** careers from 1.5.x load as they are. The save format is
   unchanged (VERSION 6).
 
+### Added (2026-11-23, the weather sounder has its pictures)
+
+Astra modelled the three grades of the meteorological sounder, the last
+equipment on sale without an icon:
+
+- **Grade I, the weather radiometer:** a dish on an azimuth ring and an
+  elevation gimbal.
+- **Grade II, the atmospheric sounder:** a scanning drum behind its window,
+  with three receiver horns on a mast.
+- **Grade III, the limb sounder array:** three long telescopes in cradles,
+  with sunshades, cryocoolers and radiator fins.
+
+They're in `ref/icons/` (stored as `.glb.gz`) and baked into
+`src/itemmodels.js` by `tools/item-models.cjs`. Each found its mounting
+foot, and they grow with the grade, from 0.74 x 1.08 x 0.70 m to
+1.36 x 0.84 x 1.36 m. The shipyard card and the catalogue show them.
+`guns.test.js` "every item of equipment has a model": 19 of 19.
+
+### Added (2026-11-23, the glow spills out, and the pit dressed)
+
+- **The glow spills out of the window.** Astra: *"the glow should spill out into the hallway in straight lines from where it starts."*
+  - The core's light leaves through the window, and the tunnel's port, in straight lines. What it lights in the room beyond is the wedge traced from the core through the opening's four edges.
+  - On reactor control's far wall and side walls, its floor and ceiling, and the reactor tunnel's far wall, that's a straight-edged patch of blue, cut around the doorways.
+  - The patch follows the reactor's power: strongest near the opening, fading with distance, dimmer after a scram.
+  - It's drawn in the surface's own colour and takes the room's lighting, so a cold reactor leaves no visible edge.
+  - It's traced from the core's centre, which keeps the edges sharp.
+- **The pit has texture.** Astra: *"the reactor room needs texture, the pit there would have more than flat matte walls around it."*
+  - **The liner:** stainless plates a metre square, their welds dark lines on the lit steel, across the tank's back, sides and floor. Not across the window or the port.
+  - **Inside, dark against the glow:** a ladder down the back wall, and a spent-fuel rack on the floor behind the core, where it never blocks the view of the core.
+  - **Outside, in the reactor room:** stiffening ribs on the tank, a flange around its rim, a hazard-striped kick plate at its foot, and two coolant pipes from its back to the aft bulkhead.
+- **Tests:** `reactorglow.test.js` checks that every reactor's spill lies in the room beyond the window, traces back through the window to the core, matches the surface exactly at no power, and brightens at full power.
+- **Saves:** unchanged.
+
+### Changed (2026-11-23, the control rods, the reactor tunnel, and four layout faults)
+
+- **Control rods across the whole core.** Astra, looking at the Capital through the glass: *"the control rods are only at the top of the core"*. With every rod in a row along one edge, that edge of the core runs cold and the far side hot, so the neutron field is badly tilted.
+  - The rods now go in as a square lattice about 45 cm apart across the whole face they enter by: the front of a lying-down core, the top of a standing one. They reach to within an eighth of the core's edges, and there are at least 2 by 2.
+  - The Capital's are 5 by 3, each from its own drive on a frame hung in the water between the core and the glass. The Kestrel's are 2 by 2, from the lid.
+  - Over the window, a rod-position panel shows a lamp for each rod, laid out the same way.
+  - From the window, at least 77% of any core's face is in sight past its rods.
+- **The reactor tunnel** (Meridian, Leviathan). Their deck runs aft through the reactor's zone, and the watertight door from the aft spaces into reactor control was 4.6 m deep: it ran straight through the reactor room and its tank, so anyone going aft walked through the reactor. Asked how to fix it, Astra chose a shielded tunnel (as a submarine has):
+  - a walled **reactor tunnel** down the centreline, from the aft bulkhead to reactor control;
+  - the **reactor** to port of it, the core in its tank, its door from control on the port side;
+  - **reactor auxiliaries** (the coolant pumps) to starboard;
+  - a **port in the tunnel's wall** onto the side of the tank: walking through, you look across the water at the core.
+- **The Crawler's engineering flat** had the same stretched door, from the auxiliary room into reactor control. The flat is too narrow for a centre tunnel, so a shielded passage now runs down her starboard side past the reactor room. The reactor is still entered only from reactor control, or by its escape trunk.
+- **Nobody walks into the water.** On the big ships nothing stopped you walking into a reactor tank; only the L hulls' reactor block fenced it. Every tank now has a footprint you can't walk through.
+- **Escape trunks** from the Meridian's reactor and the flats' reactors came up inside the tank. They now stand in the reactor room's free aft corner.
+- **The core sits on a support plate,** at the window's height, so all of a tall core is in sight over the control panel. Before, the Meridian's sat on the tank floor with its bottom below the sill.
+- **The tank's front glows too,** around the window, so from the tunnel's port the water runs to the glass, not to a dark wall.
+- **Tests:** `reactorglow.test.js` now also checks:
+  - no doorway is deeper than a wall;
+  - the tunnel's port looks on the core;
+  - no ladder, trunk or doorway stands in a tank;
+  - every reactor's rods are spread evenly over the core's face, centred and within the pitch;
+  - from the window, a 9×9 grid of sight-lines finds no wall in the way.
+- **Saves:** unchanged. Layouts come from the seed, so an existing Meridian, Leviathan or Crawler gets her new deck.
+
+### Added (2026-11-23, the reactor glow: a window into the water)
+
+- **Reactor control looks into the reactor.** The window over the control panel opens onto the reactor's water tank. The core sits in the water, and the control rods come in from above (in from the front on the Cutter and the other lying-down reactors). Every reactor gets this: the reactor block on the L hulls, and the naval reactor rooms on the Capital, Carrier, Meridian, Leviathan and Crawler.
+- **There's no glass pane.** The game's see-through glass draws as a grey dither, which spoiled the view, so the window is a bolted frame and a deep reveal with nothing in it. Reading it as heavy glass is left to you.
+- **The glow follows the reactor's power.**
+  - At the berth she runs at hotel load (20%), and the water is a soft blue.
+  - In flight her power is 30% plus 70% of the throttle. The water goes bright blue, and white-hot round the core at full drive.
+  - Power rises over a few seconds and falls quicker than that. The brightness goes with the square root of the power, so low power still shows. The light is strongest at the core and fades out to the tank's walls.
+- **Scram.** Rods in, and the chain reaction stops at once. What's left is decay heat: about 7% of full, falling over minutes to a faint 1.5%. The water dims to that dull blue but doesn't go dark. A restart climbs back up slowly, over about 20 seconds.
+- **E at the reactor control panel** gives the power and why it's at that level: *"her hotel load, at the berth"*, *"the rods follow the drive"*, or *"scrammed: the glow is her decay heat"*.
+- **Developer's panel:** a reactor line in the status section, and *Scram* and *Restart* buttons.
+- **Nothing in play scrams a reactor yet.** It's the developer panel's button for now; when a scram should happen in play is still to be decided.
+- **Tests:** `reactorglow.test.js` checks that nothing solid stands between the window and the core on every reactor-carrying hull and layout, that the tank's back wall is brightest behind the core, that the glow rises with power, and that a scram falls to its decay heat.
+- **Saves:** unchanged. The reactor's state isn't saved; a loaded ship's reactor is running.
+
+### Changed (2026-11-23, the reactor block: Astra's layout for the L hulls)
+
+Astra drew it: *"grow the hulls, put it in a like this space, split the reactor room in two so the crew can operate panels in the room for controlling the reactor."* The Kestrel, Cutter, Longhaul and Tanker now have her layout on their one deck:
+
+- **From the bridge:** a side passage down the starboard side, a cross passage behind the bridge's solid aft wall, and the passage on aft to the hold.
+- **The reactor's compartment** is off the cross passage to starboard, in two rooms:
+  - **Reactor control** forward, with the panel under the glass. The drive is run from here; it's where the engineers' rounds go.
+  - **The reactor** aft, through a reactor door: standing on the merchant hulls, lying down with the rods in from the front on the Cutter.
+- **To port,** the airlock by the cross passage, then the bunks, with the medical cabinet in them (or, where the bunks were narrowed, a first-aid cabinet on the cross passage's forward wall). There's no separate engine room or medbay any more.
+- **Two layouts.** Asked whether the block beside the side passage is the bridge itself, Astra said *"have both layouts available"*:
+  - **A:** the block is the bridge; you go in through its starboard wall at the forward end, onto a landing clear of the stations.
+  - **B:** an avionics bay is behind the bridge, and the side passage leads to the bridge's aft door.
+  - Which one a ship has comes from her own seed, so a ship is always the same ship. Where B would cost her a room, she's laid out as A (the Cutter is always A).
+- **Raised cockpits** (Kestrel, Longhaul): the stair now runs down just aft of the helm, so the bridge deck and everything aft of it are on the deck. The bridge deck takes the cockpit's move forward, so no room aft of it moved.
+- **Where a landing-gear leg would cut the ramp short** with the airlock by the cross passage, the airlock goes aft of the bunks instead, so her ramp stays a ramp (the Kestrel's would have been a stair).
+- **Fitting her:** the new rooms take part in the shrink-then-drop fit. The reactor compartment narrows from her outboard side to as little as 2.4 m, and the side passage and avionics bay to 1.0 m; they're never left out. Today:
+  - the Kestrel's side passage (A) is 1.0 m wide;
+  - the Longhaul's reactor compartment is 2.5 m wide.
+- **Growing the hulls,** as asked, made things worse: a bigger hull stands taller on her gear, her ramp gets longer, and the hold is pushed out of her tail (the Kestrel fits at no length up to 1.6× hers). So only the **Cutter** grows, **36 → 37 m**, the one metre her 6.5 m ramp and her hold need. Her cockpit keeps its place in her model (tools/grow-hulls.js scales a hull about her eye, unlike fit-hulls, which refits from scratch).
+- **Developer's panel:** a *reactor block layout* switch (A, B or her own), and *Check decks* reports a block ship's rooms reachable from the airlock.
+- **Saves:** unchanged. Layouts come from the seed, and an existing ship gets her new deck.
+
+### Changed (2026-11-23, a damaged ship goes to general quarters by herself)
+
+- Astra: *"if the ship's hull is below 75% the ship automatically goes to GQ."* Below 75% hull a large ship is at general quarters whether or not anyone called it, so her Z fittings are dogged and her tram runs on battery. At 75% and above, GQ is the captain's to call.
+- It follows that the tram goes out below 40% hull whenever that happens, because a ship that damaged is always at GQ.
+- For now this lives in the deck rules (`NavalDeck.GQ_BELOW`, `condAt`), which decide crew routes and the developer panel's deck check. GQ as something you see aboard (the alarm, lamps, doors swinging shut) comes with stage 4.
+
+### Added (2026-11-23, the developer's panel)
+
+- A developer's harness for testing features without playing all the way to them (`src/devharness.js`). It is on only in a developer's run. The page has to be opened with `?dev`, which the Electron shell does when it isn't packaged or is started with `--dev`. The released game has no key or code to reach it.
+- `` ` `` (the key left of 1) opens and closes it. While one of its fields has the keyboard, the game hears nothing.
+- What it shows and does:
+  - **Status:** system, port, hull type and integrity, deck, room and compartment number, x/z/floor, fps.
+  - **Ship:** become any hull, including the Crawler in any livery, with a full crew if you want one.
+  - **Aboard:** stand up, go straight to any room on any deck, and check her decks. The check confirms every room can be reached from her airlock at sea, at general quarters, and at GQ with the tram out. It also lists rooms narrowed, lowered, dropped, or outside her hull.
+  - **World:** go to any star by name, dock at any port in the system, launch.
+  - **State:** a hull-integrity slider, which is what the tram's battery rule reads, and credits.
+- Everything it does goes through the game's own functions, so a save made afterwards is an ordinary save of that state. Use a scratch career.
+- `main.js` now lends the panel three of its functions (`GameDev`: stand up, say, deck label). `tools/probe-devharness.js` drives the panel in the real game.
+
+### Added (2026-11-23, decks for the other ships: the Crawler's engineering flat)
+
+- The Crawler has a lower engineering flat (auxiliary machinery and the reactor) under her junction deck. Ladders and an escape trunk lead up to it, and it has the merchant-style vertical core behind its glass.
+- The L hulls (Kestrel, Cutter, Longhaul, Tanker) have the same flat, built but switched off (`FLAT_HULLS`). A 3 m flat doesn't fit inside them unless the hulls grow 13 to 21 m, and that would break the nose-cockpit fit. That decision is waiting on Astra.
+
+### Added (2026-11-23, decks for the large ships — stage 2, walk them)
+
+Astra: *"okay. let's build it."* The Capital, the Carrier, the Meridian and
+the Leviathan now have the stage 1 layout aboard, and you can walk all of it.
+
+- **Her own airlock deck is unchanged:** the rooms at the foot of her tower,
+  her airlock, ramp and hatch are as they were. A passage through the wall
+  of her hold joins it to the new decks. The old engineering junction and
+  the Carrier's old hangar are gone; her engineering deck and **three hangar
+  bays** replace them, and your parked craft stand on pads in the middle bay.
+  - **The Carrier's airlock deck is her hangar deck now,** 43.6 m under her
+    island cab (was 35). Only her entry in `src/hullfit.js` changed: her
+    ramp drops 25.6 m instead of 34.2. (A full `tools/fit-hulls.js` run
+    would also move most other hulls, from a month of other changes since
+    the table was made; that was not taken.)
+- **The lift stops at every deck the layout gives it:** Capital bridge, 03
+  CIC, 1, 2, 4; Carrier bridge, 08 flag bridge, 04 island base, 03 gallery,
+  1 hangar, 2, 4; Meridian bridge, B, C; Leviathan bridge, A, B. The buttons
+  close up to fit a car with seven stops.
+- **Ladders, stairs, scuttles and escape trunks** are climbed: look at one,
+  E, and you go up (or down) its incline or its rungs to where it lands you
+  on the other deck. The prompt says which and where:
+  *▲ Ladder up to 1 Main deck · airlock*.
+- **The tram** runs down her port-side trunk on the engineering deck.
+- **Rooms carry their compartment numbers** on the room banner
+  (`Passageway 2-92-1-L`, `Reactor control 4-111-1-C`).
+- **The reactor**: a steel tank with a glowing face in the reactor room,
+  and the glass in the bulkhead to reactor control lit blue. This is a
+  stand-in: the real glass (a window into the water, with depth) is stage 3.
+- **Fitted to her hull** (Astra's rule: shrink, then drop). Where her hull
+  pinches in, a room is narrowed, then given a lower deckhead, and only a
+  dead end is left out. Today nothing is left out: the Capital and Carrier
+  fit as laid out; the Meridian has 6 rooms narrowed and the Leviathan 3.
+  - **The Meridian's A deck ends aft of the waist in her hull** (z −39), up
+    the stairs from B; the lift does not stop there.
+  - **The Leviathan has no tram**: her own deck takes her forward 28 m and
+    the 20 m aft of it is a walk. Three compartments, not four.
+- `tools/probe-naval.js` and `tools/probe-reactor.js` walk it in the real
+  game; `tools/naval-fit.js` lists any naval room outside her skin;
+  `tools/electron-probe.cjs` takes `ELECTRON_EXE` so a worktree can run it.
+- Tests: `shipdeck.test.js` walks every deck from the lift, the tram and
+  every ladder; the naval decks flood at 20 cm.
+
+**Not yet:** the Kestrel, Cutter, Longhaul, Tanker and Crawler's engineering
+flats (laid out in stage 1, not aboard); general quarters as a game state;
+the crew using ladders (they still ride the lift between decks); the real
+reactor glass and fittings.
+
+### Added (2026-11-23, decks for the large ships — stage 1, the layout)
+
+Astra: *"for the capital and carrier, use the precedent of US naval ships of
+the post WW2 era for the multi-deck layout. I want there to be multiple ways
+to connect up those decks and rooms"*, and *"all large size ships need
+multiple decks and different rooms, larger reactor rooms"*, the military
+reactor lying down with its rods fed from the front and a slab of glass
+holding back the water, *"so we can see the cherenkov glow."* The design is
+`claude/naval-decks.md`. This is its first stage: the layout as data, and
+the tests that hold it. **Nothing in the game reads it yet**, so no ship has
+changed inside; stages 2-3 put walls round it and let you walk it.
+
+- **`src/navaldeck.js`** (`NavalDeck.layout(hullId)`) lays out every L and
+  XL hull:
+  - **Capital** as the nuclear cruiser *Long Beach*: CIC under the bridge;
+    main deck; 2nd deck (damage control); 3rd deck with missile magazines
+    fore and aft; 4th deck engineering with **two reactor rooms**.
+  - **Carrier** as *Forrestal* / *Kitty Hawk*: flag bridge and island base
+    (04, the flight deck); gallery deck 03 with ready rooms and CIC; hangar
+    deck 1 in three bays behind fire curtains, the airlock in the starboard
+    sponson; 2nd deck; 4th deck engineering with two reactors and the tram.
+  - **Meridian** (A promenade, B cabins, C crew and machinery) and
+    **Leviathan** (accommodation, then a tunnel and machinery deck with the
+    tram), after merchant practice: lettered decks, stair towers,
+    watertight doors that close on damage only.
+  - **Kestrel, Cutter, Longhaul, Tanker, Crawler**: an engineering flat
+    under their own deck, with an engine room and a reactor.
+- **Navy rules kept:** deck numbers (1 main, 2, 3 below; 01, 02 above);
+  compartment numbers deck-frame-position-use (`2-120-1-L`, odd to
+  starboard, even to port, frames of 4 ft from the stem); **no door through
+  a main bulkhead below the damage-control deck**; ladders in pairs, **up
+  and forward to starboard, down and aft to port**, which crew routes keep.
+- **Ways between decks:** inclined ladders, scuttles, escape trunks, twin
+  side passageways with cross-passages, the lift, the tram. Every
+  watertight compartment has its own way up.
+- **General quarters (condition Zebra)** dogs every Z fitting: on the 2nd
+  deck the passage doors in the main bulkheads and the hatches over the
+  ladders. The scuttles in those hatches, the trunks, the lift and the tram
+  stay open, so every room is still reachable. Bow to stern on the
+  Capital's 2nd deck goes up over the main deck instead.
+- **The tram at general quarters runs on battery, at half speed, and goes
+  out if the hull falls below 40 %** (Astra: *"the tram can run on a battery
+  system during GQ - half speed - it goes out if the ship's hull reaches
+  below 40%"*). Bow to stern on the 2nd deck: Capital 110 m at sea, 140 m
+  at GQ; Carrier 97 m and 138 m. With the tram out every room is still
+  reachable, by the ladders, scuttles and trunks.
+- **Reactor rooms:** a compact core in a water jacket that is both coolant
+  and shield; military cores (Capital, Carrier, Cutter, Navy and Syndicate
+  Crawlers) lie down with rod drives on the forward face, civilian ones
+  stand with drives on top. The glass is in the bulkhead to reactor
+  control; the reactor is entered only through control's X-ray door or up
+  its escape trunk.
+- `tools/hull-envelope.js` measures each large hull's inside slice by slice;
+  the band the decks are laid in comes from it.
+- `test/navaldeck.test.js` (ships group, 51 checks).
 ### Changed (2026-11-23, the title is set in Aldrich)
 
 The wordmark on the title card and the loading screen is now "MANIFEST"

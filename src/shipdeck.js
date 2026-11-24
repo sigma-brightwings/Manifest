@@ -40,6 +40,11 @@
  */
 (function (global) {
   'use strict';
+  /* The naval decks' layout (navaldeck.js): in the page a script tag before
+   * this one; headless (the tests, the tools), a file beside it. */
+  if (!global.NavalDeck && typeof require === 'function') {
+    try { require('./navaldeck.js'); } catch (e) { /* without it, the decks are as they were */ }
+  }
 
   /* ---- its own seeded stream, as walk.js has, so nothing else moves ---- */
   function hash(str) {
@@ -306,6 +311,15 @@
    * gallery stands ~41.5 m over a main deck at her waterline, the
    * Carrier's island cab ~35 m over one just under her flight deck. */
   var TOWER = { capital: 41.5, carrier: 35, leviathan: 8, crawler: 5, meridian: 4 };
+  /* THE NAVAL DECKS (claude/naval-decks.md, stage 2, 2026-11-23). On these
+   * four the decks under the bridge are navaldeck.js's: her own airlock deck
+   * (this file's main deck, the rooms at the foot of her tower) becomes the
+   * deck NAVAL_MERGE names, and the old junction and the Carrier's old
+   * hangar give way to her engineering deck and her hangar bays. The
+   * Carrier's airlock deck is her hangar deck, 43.6 m under her island cab
+   * rather than 35 (the deck her island stood on). */
+  var NAVAL_MERGE = { capital: '1', carrier: '1', meridian: 'B', leviathan: 'A' };
+  TOWER.carrier = 43.6;
   var LOBBY_L = 1.8, LOBBY_HW = 1.0;
   /* A LONGER LOBBY WHERE THE SHAFT HAS TO GO FURTHER AFT (2026-11-02).
    * Astra: "fit the lift in the crawler to the hull". The car sits straight
@@ -319,6 +333,10 @@
    * the gap. */
   var LOBBY_EXTRA = { crawler: 2.1 };
   var CAR_HW = 1.0, CAR_D = 1.9, CAR_H = 2.4;
+  /* The buttons down the car's wall, as many as she has stops: 0.4 m apart,
+   * closer when that would run them off the end of the car (a Carrier's
+   * seven stops, 2026-11-23). */
+  function btnStep(n) { return Math.min(0.4, (CAR_D - 0.7) / Math.max(1, n - 1)); }
   var LIFT_SPEED = 3.0;                    // m/s, the car between decks
   /* A fast car in the tall towers, or forty metres is a quarter-minute in
    * a box. */
@@ -462,6 +480,20 @@
      * hull, whose cockpit is a deck of its own reached by lift. */
     var rz = opts.raised && !DECKED[opts.hullId] ? opts.raised : null;
     var rise = rz ? rz.rise : 0, run = rz ? rz.run : 0, lead = rz ? rz.fwd - rz.run : 0;
+    /* The reactor block (BLOCK_HULLS): a bridge deck always, and a raised
+     * cockpit's stair at the helm's arch, so her bridge deck and all aft of
+     * it are on the one deck and its side door is a door at deck level. */
+    var block = !!(BLOCK_HULLS[opts.hullId] && opts.block !== false && !DECKED[opts.hullId]);
+    var blockV = block ? blockVariant(opts) : null, stairFoot = null;
+    /* Variant A's door is in the bridge's starboard wall at its forward end:
+     * a landing clear of the stations there (BLOCK_LANDING), the stations
+     * aft of it. */
+    var stationTop = 0;
+    /* A raised cockpit stands `fwd` forward of where it was; the old deck
+     * ran its passage on forward under it (`lead`). Here the bridge deck
+     * takes that length instead, so every room aft of it is where it was. */
+    var blockLead = 0;
+    if (block) { blockLead = lead; lead = 0; deckLen = Math.max(deckLen, 3.0); if (blockV === 'A') { deckLen += BLOCK_LANDING; stationTop = BLOCK_LANDING; } }
     var bridge = room('cockpit', 'cockpit', -geom.sideX, geom.sideX, geom.bulkZ - (deckLen ? 0 : run), geom.frontZ, H, 'Cockpit');
     /* Its floor `rise` over the deck's forward of `stepZ`, the stair aft
      * of that down (or up) to the deck: floorAt. */
@@ -471,7 +503,11 @@
      * of the stair, when she has one. The bridge deck goes up with the
      * helm: its stations are worked from the helm's own floor. */
     var doorFront = geom.bulkZ - run, deck = null, stepZ = geom.bulkZ;
-    if (deckLen) {
+    if (deckLen && block) {
+      var bz1 = geom.bulkZ - WALL_T, bz0 = bz1 - deckLen - run - blockLead;
+      deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, bz0, bz1, H, 'Bridge');
+      doorFront = bz0; stepZ = bz1; stairFoot = bz1 - run;
+    } else if (deckLen) {
       var dz1 = geom.bulkZ - WALL_T, dz0 = dz1 - deckLen;
       deck = room('bridgedeck', 'bridgedeck', -geom.sideX, geom.sideX, dz0 - run, dz1, H, 'Bridge');
       if (rz) { deck.y0 = rise; deck.y1 = rise + H; }
@@ -485,7 +521,7 @@
     var gunners = big && opts.turret && !omit.turret ? 1 : 0;
     var tLen = gunners ? 0.6 + gunners * TURRET_SEAT + 0.2 : 0;
     /* On a decked hull the engine room is far aft, down at the junction. */
-    var med = big && !omit.medbay ? MED[size].slice() : null, eng = big && !decked && !omit.engine ? ENGINE[size].slice() : null;
+    var med = big && !omit.medbay && !block ? MED[size].slice() : null, eng = big && !decked && !omit.engine && !block ? ENGINE[size].slice() : null;
     if (med) med[0] = W('medbay', med[0]);
     if (eng) eng[0] = W('engine', eng[0]);
     /* The airlock is the last room down the port side, on every hull. */
@@ -504,6 +540,7 @@
     var lockLen = LOCK_LAND + rs.len + 0.25;
     var portNeed = (crewed ? qLen : 0) + (tLen ? SIDE_GAP + WALL_T + tLen : 0) + SIDE_GAP + WALL_T + lockLen;
     var stbdNeed = big ? (med ? med[1] : 0) + (eng ? (med ? SIDE_GAP + WALL_T : 0) + eng[1] : 0) : 0;
+    if (block) stbdNeed = BLOCK_CTL + WALL_T + BLOCK_RL;
     var len = PASSAGE_LEN[size] * (0.9 + 0.2 * rng.next());
     if (crewed) len = Math.max(len, qLen + 0.6);
     len = Math.max(len, portNeed + 0.6);
@@ -520,6 +557,13 @@
      * car; the main deck's passage starts aft of the car, a deck down. */
     var lobby = null, cars = {}, carZ = null;
     var p1 = doorFront - WALL_T;
+    /* The reactor block: the avionics bay (B) aft of the bridge, then the
+     * cross passage, then the passage. */
+    var crossZ1 = null;
+    if (block) {
+      crossZ1 = doorFront - WALL_T - (blockV === 'B' ? BLOCK_BAY + WALL_T : 0);
+      p1 = crossZ1 - BLOCK_CROSS - WALL_T;
+    }
     if (decked) {
       lobby = room('lobby', 'lobby', -LOBBY_HW, LOBBY_HW, p1 - LOBBY_L - (LOBBY_EXTRA[opts.hullId] || 0), p1, PASSAGE_H, 'Lift lobby');
       carZ = [lobby.z0 - WALL_T - CAR_D, lobby.z0 - WALL_T];
@@ -534,9 +578,11 @@
      * meet at a shared wall for a door to join them. So each door's box is
      * stretched across the wall's thickness: from the cockpit's aft wall to
      * the passage's forward one. */
-    var dBridge = slider('bridge', deck || bridge, lobby || passage, doorFront, 'Bridge door');
-    var bAft = lobby ? lobby.z1 : p1;
-    dBridge.z0 = bAft - 0.8; dBridge.z1 = doorFront + 0.8; dBridge.wall = [bAft, doorFront];
+    if (!block) {
+      var dBridge = slider('bridge', deck || bridge, lobby || passage, doorFront, 'Bridge door');
+      var bAft = lobby ? lobby.z1 : p1;
+      dBridge.z0 = bAft - 0.8; dBridge.z1 = doorFront + 0.8; dBridge.wall = [bAft, doorFront];
+    }
     /* The helm's arch: the old doorway, always open. */
     if (deck) {
       doors.push({ id: 'helm', a: bridge.id, b: deck.id, axis: 'z', at: geom.bulkZ, w: ARCH_HW * 2, h: DOOR_H,
@@ -546,15 +592,16 @@
     /* The quarters, off the port side of the passage, the door at their
      * forward end. Its leaves slide fore and aft into the passage wall. */
     var quarters = null;
-    if (crewed) {
-      var qx1 = -PASSAGE_HW - WALL_T, qz1 = pTop - 0.3;
-      quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, 'Crew quarters');
+    function makeQuarters(qz1) {
+      var qx1 = -PASSAGE_HW - WALL_T;
+      quarters = room('quarters', 'quarters', qx1 - W('quarters', QUARTERS_W), qx1, qz1 - qLen, qz1, QUARTERS_H, block ? 'Bunks' : 'Crew quarters');
       quarters.side = -1;
       var zc = qz1 - 0.7;
       doors.push({ id: 'quarters', a: passage.id, b: quarters.id, axis: 'x', at: -PASSAGE_HW, w: DOOR_HW * 2, h: DOOR_H,
                    x0: qx1 - 0.8, x1: -PASSAGE_HW + 0.8, z0: zc - DOOR_HW, z1: zc + DOOR_HW, zc: zc,
-                   wall: [qx1, -PASSAGE_HW], slide: true, open: 0, shut: true, label: 'Quarters door' });
+                   wall: [qx1, -PASSAGE_HW], slide: true, open: 0, shut: true, label: block ? 'Bunks door' : 'Quarters door' });
     }
+    if (crewed && !block) makeQuarters(pTop - 0.3);
 
     /* A room off the passage, its door at its forward end, as the
      * quarters' is. `side` -1 for port, 1 for starboard; `z1` its forward
@@ -574,7 +621,7 @@
     var turret = null, medbay = null, engine = null, cargo = null;
     if (big) {
       var zTop = pTop - SIDE_GAP;
-      if (gunners) {
+      if (gunners && !block) {
         var tz1 = quarters ? quarters.z0 - SIDE_GAP - WALL_T : zTop;
         turret = sideRoom('turret', 'turret', -1, tz1, W('turret', TURRET_W), tLen, QUARTERS_H, 'Turret', 'Turret door');
       }
@@ -600,8 +647,28 @@
      * shut whenever the room is not at the ship's own pressure. */
     var portTop = turret ? turret.z0 - SIDE_GAP - WALL_T
                 : quarters ? quarters.z0 - SIDE_GAP - WALL_T : pTop - SIDE_GAP;
+    /* The reactor block: the airlock first, by the cross passage, as she
+     * drew it; or (`blockLockAft`, render.js, where a gear leg would stand
+     * in the ramp's way there) aft of the bunks, as the old deck had it. */
+    var lockAft = block && !!opts.blockLockAft;
+    if (block && lockAft && crewed) makeQuarters(pTop - 0.3);
+    if (block) portTop = lockAft && quarters ? quarters.z0 - SIDE_GAP - WALL_T : pTop - SIDE_GAP;
     var lock = sideRoom('airlock', 'airlock', -1, portTop, Math.max(2 * rs.hw + 0.3, W('airlock', LOCK_W)), lockLen, LOCK_H, 'Airlock', 'Airlock door');
     var dLock = doors[doors.length - 1];
+    var blockOut = null;
+    if (block) {
+      /* Her bunks aft of the airlock, then her turret, if she has one. */
+      if (crewed && !lockAft) makeQuarters(lock.z0 - SIDE_GAP - WALL_T);
+      if (gunners) {
+        var lowest = quarters && quarters.z0 < lock.z0 ? quarters : lock;
+        turret = sideRoom('turret', 'turret', -1, lowest.z0 - SIDE_GAP - WALL_T, W('turret', TURRET_W), tLen, QUARTERS_H,
+                          'Turret', 'Turret door');
+      }
+      blockOut = buildBlock({ variant: blockV, geom: geom, deck: deck, passage: passage, crossZ1: crossZ1, p1: p1,
+                              stairFoot: stairFoot, rooms: rooms, doors: doors, items: items, room: room, hullId: opts.hullId,
+                              ctlW: W('engine', BLOCK_RW), sideW: W('blockSide', BLOCK_SIDE), bayW: opts.roomW && opts.roomW.blockBay,
+                              floor: geom.floorY - rise });
+    }
     dLock.id = 'lock'; dLock.seal = true;
     var hinge = lock.z1 - LOCK_LAND, rxc = (lock.x0 + lock.x1) / 2;
     var rampSpec = { room: lock.id, xc: rxc, hw: rs.hw, x0: rxc - rs.hw, x1: rxc + rs.hw,
@@ -644,7 +711,7 @@
     itemDeck = 'bridge';
     roles.forEach(function (role, i) {
       var side = sides[i % sides.length], row = Math.floor(i / sides.length);
-      var zc = deck.z1 - 0.15 - STATION_LEN * (row + 0.5);
+      var zc = (stairFoot !== null ? stairFoot : deck.z1) - stationTop - 0.15 - STATION_LEN * (row + 0.5);
       var xw = side * geom.sideX, xc = side * (geom.sideX - STATION_CON);
       var xs = side * (geom.sideX - STATION_CON - STATION_SEAT);
       var st = { role: role, side: side, z: zc, n: i };
@@ -681,6 +748,20 @@
       }
     }
 
+    /* The reactor block's bunks room keeps the medical cabinet the medbay
+     * would have had: against its forward wall, outboard of the door's
+     * way in. */
+    if (block && quarters) {
+      var mcx0 = quarters.x0 + BUNK_W + 0.1, mcx1 = Math.min(quarters.x1 - 0.9, mcx0 + 0.55);
+      if (mcx1 > mcx0 + 0.3) item('medcab', (mcx0 + mcx1) / 2, quarters.z1 - 0.22, 'Medical cabinet',
+                                  { counter: [mcx0, quarters.z1 - 0.45, mcx1, quarters.z1] });
+    }
+    /* Bunks too narrow for it (the fit narrowed them): a shallower one on
+     * the cross passage's forward wall at its port end, by the airlock. */
+    if (block && blockOut && !items.some(function (it) { return it.kind === 'medcab'; })) {
+      var xr = blockOut.cross, mx0 = xr.x0 + 0.05, mx1 = Math.min(xr.x0 + 0.65, xr.x1 - 1.0);
+      item('medcab', (mx0 + mx1) / 2, xr.z1 - 0.15, 'Medical cabinet', { counter: [mx0, xr.z1 - 0.3, mx1, xr.z1] });
+    }
     /* THE NEW ROOMS' FURNITURE (2026-10-25). Its own seeded stream, so
      * adding it moved nothing the old stream already decided. */
     var rng2 = stream('shipdeck2|' + (opts.key || opts.hullId || ''));
@@ -989,7 +1070,7 @@
         deckOrder.forEach(function (to, ti) {
           if (to === here) return;
           var arrow = ti < hi ? '▲' : '▼';
-          item('liftbtn', CAR_HW - 0.12, carZ[0] + 0.35 + n * 0.4, arrow + '  ' + DECK_NAME[to], { to: to, aim: true });
+          item('liftbtn', CAR_HW - 0.12, carZ[0] + 0.35 + n * btnStep(deckOrder.length - 1), arrow + '  ' + DECK_NAME[to], { to: to, aim: true });
           n++;
         });
       });
@@ -1009,7 +1090,7 @@
      * follow when she has them. */
     var ORDER = { cockpit: 0, passage: 1, airlock: 2, bridgedeck: 3, quarters: 4,
                   turret: 5, medbay: 6, engine: 7, cargo: 8, lobby: 9, lift: 10,
-                  platform: 11, tramway: 12, hangar: 13 };
+                  platform: 11, tramway: 12, hangar: 13, naval: 14 };
     rooms.sort(function (a, b) { return ORDER[a.kind] - ORDER[b.kind]; });
 
     /* Every room, door and item knows its deck. */
@@ -1035,17 +1116,43 @@
       /* The deck's floor. A raised cockpit's is `raised.rise` above it
        * (floorAt); every other hull's cockpit is on the deck. */
       floorY: geom.floorY - rise, k: k, bay: bay, size: size,
-      raised: rz ? { rise: rise, run: run, fwd: rz.fwd, treads: rz.treads || 0, stepZ: stepZ, doorZ: doorFront } : null,
+      raised: rz ? { rise: rise, run: run, fwd: rz.fwd, treads: rz.treads || 0, stepZ: stepZ,
+                     doorZ: stairFoot !== null ? stairFoot : doorFront, block: block } : null,
       stations: stations, bunks: bunks, bunkAt: bunkAt, sides: sides,
       turrets: turrets, beds: beds, crates: crates, drive: drive, second: second, medkit: medkit,
       ramp: rampSpec
     };
-    if (decked) {
+    var deckAll = deckOrder;
+    if (blockOut) {
+      out.block = blockV;
+      out.naval = { block: true, variant: blockV, style: BLOCK_MILITARY[opts.hullId] ? 'navy' : 'merchant', cx: 0,
+                    reactors: blockOut.reactors, misfit: [], narrowed: [], dropped: [], lowered: [] };
+    }
+    if (decked && NAVAL_MERGE[opts.hullId] && global.NavalDeck && opts.naval !== false) {
+      var nv = navalize({ out: out, geom: geom, opts: opts, carZ: carZ, deckY: deckY, rooms: rooms, doors: doors, items: items });
+      if (nv) {
+        deckY = nv.deckY; deckOrder = nv.deckOrder; deckAll = nv.deckAll; tram = nv.tram; hangarPads = nv.hangarPads;
+        out.naval = nv.naval; out.deckName = nv.deckName; out.hangarY = nv.hangarY; out.drive = null;
+      }
+    }
+    /* THE ENGINEERING FLAT (2026-11-23): the L hulls and the Crawler, a deck
+     * under her own with her reactor. No lift goes there: ladders and
+     * trunks do. */
+    var flat = null;
+    if (FLAT_HULLS[opts.hullId] && global.NavalDeck && opts.naval !== false) {
+      flat = flatten({ out: out, geom: geom, opts: opts, decked: decked, deckY: deckY, rooms: rooms, doors: doors, items: items });
+      if (flat) {
+        deckY = flat.deckY; deckAll = flat.deckAll; out.naval = flat.naval;
+        out.deckName = flat.deckName;
+        if (!decked) deckOrder = [];
+      }
+    }
+    if (decked || flat) {
       /* A walk.js plan per deck: the same objects, filtered, with that
        * deck's floor. `ship` points back at the whole. */
-      out.deckY = deckY; out.deckOrder = deckOrder; out.tram = tram; out.hangarPads = hangarPads;
+      out.deckY = deckY; out.deckOrder = deckOrder; out.deckAll = deckAll; out.tram = tram; out.hangarPads = hangarPads;
       out.carZ = carZ; out.decks = {};
-      deckOrder.forEach(function (dk) {
+      deckAll.forEach(function (dk) {
         var v = {};
         for (var key in out) v[key] = out[key];
         v.deck = dk; v.floorY = deckY[dk]; v.ship = out; v.decks = null;
@@ -1054,6 +1161,10 @@
         v.items = items.filter(function (it) { return it.deck === dk; });
         out.decks[dk] = v;
       });
+      /* A hull with no lift has no bridge deck of her own: you get up from
+       * the seat onto her one deck, which walks as it always did (no deck
+       * name: the cockpit is seen through its door from it, shipWalkClip). */
+      if (!decked) { out.decks.bridge = out.decks.main; out.decks.main.deck = undefined; }
     }
     return out;
   }
@@ -1073,6 +1184,1102 @@
    * side, shortened from its aft end, or left out — and the deck is planned
    * again, until every room is inside or nothing more can be done. The
    * cockpit is not asked: its canopy stands proud of her skin by design. */
+  /* ---- THE NAVAL DECKS IN HER (stage 2, 2026-11-23) --------------------
+   * navaldeck.js's layout, made into this file's plan: its rooms (kind
+   * 'naval', `sub` what they are), its doors as sliding doors through their
+   * walls, every ladder, scuttle and trunk an item at each end you climb
+   * from (main.js startRide 'climb'), a lift stop on each of its decks with
+   * the car's own landing door, the tram in her trunk, and the Carrier's
+   * craft on the pads of her middle bay. Her bridge, her lift and her own
+   * airlock deck are this file's, as before; the old junction and the old
+   * hangar are gone. */
+  function navalize(c) {
+    var N = global.NavalDeck, out = c.out, geom = c.geom, opts = c.opts, carZ = c.carZ;
+    var rooms = c.rooms, doors = c.doors, items = c.items;
+    var hullId = opts.hullId, merge = NAVAL_MERGE[hullId];
+    var main = c.deckY.main, cargo = rooms.filter(function (r) { return r.kind === 'cargo' && r.deck === 'main'; })[0];
+    var aftMost = cargo || rooms.filter(function (r) { return r.deck === 'main'; }).sort(function (a, b) { return a.z0 - b.z0; })[0];
+    var naval = N.NAVAL[hullId];
+    if (!naval || !aftMost) return null;
+    var merchant = naval.style === 'merchant';
+    var jo = merchant ? { x: 0, z: aftMost.z0, axis: 'z' }
+                      : { x: naval.cx < 0 ? aftMost.x0 : aftMost.x1, z: (aftMost.z0 + aftMost.z1) / 2, axis: 'x' };
+    var nd = N.layout(hullId, {
+      bridgeY: geom.floorY, mainY: main, mergeDeck: merge, noAirlock: true,
+      lift: { x: 0, z: carZ[0] - WALL_T - N.LANDING / 2 },
+      z1: merchant ? aftMost.z0 - WALL_T - 1.6 : undefined, join: jo, key: opts.key
+    });
+    if (!nd) return null;
+
+    /* Out with the old junction and hangar. */
+    var gone = { junction: 1, hangar: 1 };
+    function keep(o) { return !gone[o.deck]; }
+    [rooms, doors, items].forEach(function (arr) {
+      for (var i = arr.length - 1; i >= 0; i--) if (!keep(arr[i])) arr.splice(i, 1);
+    });
+    for (var i = items.length - 1; i >= 0; i--) if (items[i].kind === 'liftbtn') items.splice(i, 1);
+
+    /* Her decks: the bridge, her own (merged) one, and the rest. */
+    var id = {}, deckY = { bridge: c.deckY.bridge, main: main }, deckName = {};
+    deckName.bridge = DECK_NAME.bridge;
+    nd.decks.forEach(function (d) {
+      var mine = d.id === 'bridge' ? 'bridge' : d.id === merge ? 'main' : 'n' + d.id;
+      id[d.id] = mine;
+      if (mine !== 'bridge' && mine !== 'main') deckY[mine] = d.y;
+      var nm = merchant ? d.name : d.num + '  ' + d.name;
+      if (mine === 'main') nm = (merchant ? d.name : d.num + '  ' + d.name) + ' · airlock';
+      if (mine !== 'bridge') deckName[mine] = nm;
+    });
+    var ndRoom = {}, mineRoom = {};
+    nd.rooms.forEach(function (r) { ndRoom[r.id] = r; });
+    nd.rooms.forEach(function (r) {
+      if (r.kind === 'stub' || r.deck === 'bridge') return;
+      var m = { id: 'nv-' + r.id, kind: 'naval', sub: r.kind, x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1,
+                y0: 0, y1: r.y1 - r.y0, label: r.label + (r.comp && !merchant ? '   ' + r.comp : ''), deck: id[r.deck],
+                comp: r.comp };
+      if (r.walk === false) m.walk = false;
+      rooms.push(m);
+      mineRoom[r.id] = m;
+    });
+    var dName = function (d) { return deckName[d] || DECK_NAME[d] || d; };
+
+    /* FITTED TO HER (Astra, 2026-10-31: shrink, then drop). An outboard
+     * room that leaves her skin is narrowed from its outboard side, down to
+     * 2 m; one that still does not fit, and is a dead end (one door, so
+     * nothing is reached through it), is left out. Passages, landings,
+     * machinery and the reactors are never cut: a misfit there is reported
+     * (out.naval.misfit) for the hull fit to answer. */
+    var misfit = [], narrowed = [], dropped = [], lowered = [];
+    if (opts.fit && opts.fit.inside) {
+      var doorsOf = {};
+      nd.links.forEach(function (l) { if (l.type === 'door' || l.type === 'wtdoor') { doorsOf[l.a] = (doorsOf[l.a] || 0) + 1; doorsOf[l.b] = (doorsOf[l.b] || 0) + 1; } });
+      var frac = function (m) {
+        var fy = deckY[m.deck], n2 = 0, k2 = 0;
+        for (var x = m.x0 + 0.1; x <= m.x1 - 0.1 + 1e-9; x += Math.max(0.1, (m.x1 - m.x0 - 0.2) / 4)) {
+          for (var z = m.z0 + 0.1; z <= m.z1 - 0.1 + 1e-9; z += Math.max(0.1, (m.z1 - m.z0 - 0.2) / 6)) {
+            n2 += 2;
+            if (opts.fit.inside(x, fy + 0.1, z)) k2++;
+            if (opts.fit.inside(x, fy + m.y1 - 0.1, z)) k2++;
+          }
+        }
+        return n2 ? k2 / n2 : 1;
+      };
+      var KEEP = { passage: 1, cross: 1, lobby: 1, landing: 1, engine: 1, aux: 1, reactor: 1, reactorctl: 1, hangar: 1,
+                   platform: 1, tramway: 1, dccentral: 1, cic: 1, flagplot: 1 };
+      /* Where she pinches in (a waist in her hull, 2026-11-23: three metres
+       * of it on the Meridian at z −38, four on the Leviathan at z −34),
+       * a room is cut to fit it: an outboard room from its outboard side,
+       * anything else from both sides, down to a width it still works at;
+       * then a lower deckhead, down to 2.1 m; and only then, for a dead-end
+       * room, left out. */
+      var NARROWEST = { passage: 0, cross: 0, lobby: 0, landing: 0, platform: 0, tramway: 0, hangar: 12, reactor: 3.6, reactorctl: 3.6 };
+      Object.keys(mineRoom).forEach(function (nid) {
+        var m = mineRoom[nid], src = ndRoom[nid];
+        if (frac(m) >= 0.97) return;
+        var w0 = m.x1 - m.x0, h0 = m.y1, min = NARROWEST[m.sub] !== undefined ? NARROWEST[m.sub] : 2.0;
+        if (min > 0 && src.side) {
+          var out0 = src.side > 0 ? 'x1' : 'x0';
+          while ((m.x1 - m.x0) > min + 1e-6 && frac(m) < 0.97) m[out0] += src.side > 0 ? -0.25 : 0.25;
+        } else if (min > 0) {
+          while ((m.x1 - m.x0) > min + 0.5 - 1e-6 && frac(m) < 0.97) { m.x0 += 0.25; m.x1 -= 0.25; }
+        }
+        while (m.y1 > 2.1 + 1e-6 && frac(m) < 0.97) m.y1 = Math.round((m.y1 - 0.1) * 100) / 100;
+        if (frac(m) >= 0.97) {
+          if (m.x1 - m.x0 < w0 - 1e-6) narrowed.push(m.id);
+          if (m.y1 < h0 - 1e-6) lowered.push(m.id);
+          return;
+        }
+        /* A ship drawn bigger than her hull (render.js shipInterior,
+         * `stretch`) keeps the rooms she has at her own size, as her own
+         * deck does: her hold is what grows. */
+        if (!KEEP[m.sub] && (doorsOf[nid] || 0) <= 1 && !(opts.stretch > 0)) {
+          rooms.splice(rooms.indexOf(m), 1); delete mineRoom[nid]; dropped.push(m.id);
+          return;
+        }
+        misfit.push(m.id + ' ' + Math.round(frac(m) * 100) + '%');
+      });
+    }
+
+    /* Doors through her walls. */
+    var nDoor = 0;
+    function door(a, b, l) {
+      var dd = { id: 'nv-' + l.id, a: a.id, b: b.id, w: DOOR_HW * 2, h: DOOR_H, slide: true, open: 0, shut: true,
+                 deck: a.deck, naval: true, fit: l.fit || null };
+      var G = 0.05;
+      if (a.x1 <= b.x0 + 1e-6 || b.x1 <= a.x0 + 1e-6) {
+        var L = a.x1 <= b.x0 + 1e-6 ? a : b, R = L === a ? b : a;
+        var zlo = Math.max(a.z0, b.z0) + DOOR_HW + G, zhi = Math.min(a.z1, b.z1) - DOOR_HW - G;
+        if (zhi < zlo) return null;
+        var zc = Math.max(zlo, Math.min(zhi, l.z));
+        dd.axis = 'x'; dd.wall = [L.x1, R.x0]; dd.at = (L.x1 + R.x0) / 2; dd.zc = zc;
+        dd.x0 = L.x1 - 0.8; dd.x1 = R.x0 + 0.8; dd.z0 = zc - DOOR_HW; dd.z1 = zc + DOOR_HW;
+      } else if (a.z1 <= b.z0 + 1e-6 || b.z1 <= a.z0 + 1e-6) {
+        var A = a.z1 <= b.z0 + 1e-6 ? a : b, F = A === a ? b : a;
+        var xlo = Math.max(a.x0, b.x0) + DOOR_HW + G, xhi = Math.min(a.x1, b.x1) - DOOR_HW - G;
+        if (xhi < xlo) return null;
+        var xc = Math.max(xlo, Math.min(xhi, l.x));
+        dd.axis = 'z'; dd.wall = [A.z1, F.z0]; dd.at = (A.z1 + F.z0) / 2; dd.xc = xc;
+        dd.x0 = xc - DOOR_HW; dd.x1 = xc + DOOR_HW; dd.z0 = A.z1 - 0.8; dd.z1 = F.z0 + 0.8;
+      } else return null;                       // a platform in its compartment: no wall between
+      dd.label = l.type === 'wtdoor' ? (l.fit === 'Z' ? 'Watertight door  (Z)' : l.fit === 'Y' ? 'Watertight door  (Y)' : 'Watertight door')
+               : l.type === 'curtain' ? 'Fire curtain' : '';
+      if (l.type === 'curtain') { dd.arch = true; dd.open = 1; dd.shut = false; }
+      doors.push(dd); nDoor++;
+      return dd;
+    }
+    /* Well inside a room, a body's width and more off its walls (walk.js
+     * stands you only clear of them), and in the middle of a narrow one. */
+    function inside(r, x, z) {
+      var px = Math.min(0.5, (r.x1 - r.x0) / 2 - 0.01), pz = Math.min(0.5, (r.z1 - r.z0) / 2 - 0.01);
+      return [Math.max(r.x0 + px, Math.min(r.x1 - px, x)), Math.max(r.z0 + pz, Math.min(r.z1 - pz, z))];
+    }
+    /* Each reactor's control panel, by the glass. */
+    nd.reactors.forEach(function (rx) {
+      var ctl = mineRoom[rx.control];
+      if (!ctl) return;
+      var cxm = rx.window ? (rx.window.x0 + rx.window.x1) / 2 : (ctl.x0 + ctl.x1) / 2;
+      items.push({ kind: 'reactorctl', x: cxm, z: ctl.z0 + 0.6, deck: ctl.deck, label: 'Reactor control  —  the glass',
+                   counter: [cxm - 1.0, ctl.z0, cxm + 1.0, ctl.z0 + 0.45] });
+      /* Her tank: nobody walks into the water. */
+      var rrm = mineRoom[rx.room];
+      if (rrm && rx.window) {
+        var tf = tankFoot(rrm, rx);
+        items.push({ kind: 'core', x: (tf.x0 + tf.x1) / 2, z: (tf.z0 + tf.zb) / 2, deck: rrm.deck, label: '', silent: true,
+                     counter: [tf.x0, tf.z0, tf.x1, tf.zb] });
+      }
+    });
+
+    /* ...and off any counter in it (reactor control's panel by the glass):
+     * a landing you cannot stand on is no landing. */
+    function clear(r, pt) {
+      items.forEach(function (it) {
+        var cn = it.counter;
+        if (!cn || it.deck !== r.deck) return;
+        if (pt[0] > cn[0] - 0.5 && pt[0] < cn[2] + 0.5 && pt[1] > cn[1] - 0.5 && pt[1] < cn[3] + 0.5) {
+          var up = cn[3] + 0.6, dn = cn[1] - 0.6;
+          pt[1] = up < r.z1 - 0.4 ? up : Math.max(r.z0 + 0.4, dn);
+        }
+      });
+      return pt;
+    }
+    var VERB = { ladder: 'Ladder', stair: 'Stairs', scuttle: 'Scuttle', trunk: 'Escape trunk' };
+    nd.links.forEach(function (l) {
+      var a = mineRoom[l.a], b = mineRoom[l.b];
+      if (!a || !b) return;
+      if (l.type === 'door' || l.type === 'wtdoor' || l.type === 'curtain') { door(a, b, l); return; }
+      if (!VERB[l.type]) return;                 // the lift and the tram are built below
+      var lo = ndRoom[l.a].y0 < ndRoom[l.b].y0 ? a : b, hi = lo === a ? b : a;
+      var zLo = l.footZ !== undefined ? l.footZ - 0.35 : l.z, zHi = l.headZ !== undefined ? l.headZ + 0.35 : l.z;
+      var pLo = clear(lo, inside(lo, l.x, zLo)), pHi = clear(hi, inside(hi, l.x, zHi));
+      var dy = deckY[hi.deck] - deckY[lo.deck];
+      /* Drawn where its foot was put (inside its room, off the counters):
+       * the whole ladder moves with it. */
+      var sx = pLo[0] - l.x, sz = pLo[1] - zLo;
+      var base = { link: l.id, via: l.type, fit: l.fit || null, rule: l.rule || null, side: l.side || 0, aim: true,
+                   foot: [l.x + sx, (l.footZ !== undefined ? l.footZ : l.z) + sz], head: [l.x + sx, (l.headZ !== undefined ? l.headZ : l.z) + sz] };
+      function climbItem(at, from, to, toAt, up) {
+        var it = { kind: 'climb', x: at[0], z: at[1], deck: from.deck, to: to.deck, tx: toAt[0], tz: toAt[1], up: up, dy: up ? dy : -dy,
+                   label: (up ? '▲  ' : '▼  ') + VERB[l.type] + (up ? ' up to ' : ' down to ') + dName(to.deck) };
+        for (var k in base) it[k] = base[k];
+        items.push(it);
+      }
+      climbItem(pLo, lo, hi, pHi, true);
+      climbItem(pHi, hi, lo, pLo, false);
+    });
+
+    /* Her lift: a car on every deck it stops at, its landing door aft. */
+    var stops = ['bridge', 'main'];
+    nd.rooms.forEach(function (r) {
+      if (r.kind !== 'landing' || !mineRoom[r.id]) return;
+      var dk = id[r.deck], land = mineRoom[r.id];
+      var car = { id: 'lift-' + dk, kind: 'lift', x0: -CAR_HW, x1: CAR_HW, z0: carZ[0], z1: carZ[1], y0: 0, y1: CAR_H, label: 'Lift', deck: dk };
+      rooms.push(car);
+      var ld = { id: 'lift-' + dk, a: car.id, b: land.id, axis: 'z', at: carZ[0], w: DOOR_HW * 2, h: DOOR_H,
+                 x0: -DOOR_HW, x1: DOOR_HW, z0: land.z1 - 0.8, z1: carZ[0] + 0.8, wall: [land.z1, carZ[0]],
+                 slide: true, open: 0, shut: true, label: 'Lift', deck: dk, lift: true };
+      doors.push(ld);
+      stops.push(dk);
+    });
+    /* Her own airlock deck to the band: through her hold's wall. */
+    if (nd.join && mineRoom[nd.join.room]) door(aftMost, mineRoom[nd.join.room], { id: 'join', x: nd.join.x, z: nd.join.z, type: 'door' });
+
+    var deckAll = ['bridge', 'main'];
+    nd.decks.forEach(function (d) { var m = id[d.id]; if (deckAll.indexOf(m) < 0) deckAll.push(m); });
+    var byY = function (a, b) { return deckY[b] - deckY[a]; };
+    deckAll.sort(byY);
+    var deckOrder = stops.filter(function (v, i, a) { return a.indexOf(v) === i; }).sort(byY);
+    /* The car's buttons, one per other stop: ▲ up, ▼ down. */
+    deckOrder.forEach(function (here, hi) {
+      var n = 0;
+      deckOrder.forEach(function (to, ti) {
+        if (to === here) return;
+        items.push({ kind: 'liftbtn', x: CAR_HW - 0.12, z: carZ[0] + 0.35 + n * btnStep(deckOrder.length - 1), deck: here,
+                     label: (ti < hi ? '▲' : '▼') + '  ' + dName(to), to: to, aim: true });
+        n++;
+      });
+    });
+
+    /* The tram, down her trunk. */
+    var tram = null;
+    if (nd.tram) {
+      var pa = mineRoom[nd.tram.a], pb = mineRoom[nd.tram.b], way = mineRoom[nd.tram.way], tx = nd.tram.x;
+      tram = { a: pa.z0 - TRAM_L / 2, b: way.z0 + TRAM_L / 2, offA: pa.z0 + 0.8, offB: pb.z1 - 0.8,
+               z0: way.z0, z1: way.z1, x: tx, deck: id[nd.tram.deck] };
+      items.push({ kind: 'tram', x: tx, z: pa.z0 + 0.45, deck: tram.deck, label: 'Tram  —  aft to engineering', to: 'b',
+                   counter: [tx - TRAM_HW, pa.z0, tx + TRAM_HW, pa.z0 + 0.12] });
+      items.push({ kind: 'tram', x: tx, z: pb.z1 - 0.45, deck: tram.deck, label: 'Tram  —  forward', to: 'a',
+                   counter: [tx - TRAM_HW, pb.z1 - 0.12, tx + TRAM_HW, pb.z1] });
+    }
+
+    /* Her engine room's console, where the engineers' rounds go. */
+    var eng = rooms.filter(function (r) { return r.kind === 'naval' && r.sub === 'engine'; })
+                   .sort(function (a, b) { return a.z0 - b.z0; })[0];
+    if (eng) {
+      var ex = (eng.x0 + eng.x1) / 2;
+      items.push({ kind: 'engine', x: ex, z: eng.z0 + 0.3, deck: eng.deck, label: 'Drive console', yaw: Math.PI,
+                   counter: [ex - 0.7, eng.z0, ex + 0.7, eng.z0 + 0.55] });
+    }
+    /* The Carrier's craft: three pads across her middle bay. */
+    var hangarPads = null, hangarY;
+    var bays = rooms.filter(function (r) { return r.kind === 'naval' && r.sub === 'hangar'; }).sort(function (a, b) { return a.z0 - b.z0; });
+    if (bays.length) {
+      var mb = bays[Math.floor(bays.length / 2)], mzc = (mb.z0 + mb.z1) / 2, mxc = (mb.x0 + mb.x1) / 2;
+      hangarPads = [-8, 0, 8].map(function (dx) { return { x: mxc + dx, z: mzc, r: 4.2 }; });
+      hangarY = deckY[mb.deck];
+      hangarPads.forEach(function (pd) {
+        items.push({ kind: 'pad', x: pd.x, z: pd.z, deck: mb.deck, label: '', silent: true, counter: [pd.x - 3.0, pd.z - 4.0, pd.x + 3.0, pd.z + 4.0] });
+      });
+    }
+
+    doors.forEach(function (d) { if (d.yOff === undefined || d.naval || d.lift) d.yOff = deckY[d.deck] - geom.floorY; });
+    return {
+      deckY: deckY, deckOrder: deckOrder, deckAll: deckAll, tram: tram, hangarPads: hangarPads, hangarY: hangarY, deckName: deckName,
+      naval: { style: naval.style, cx: nd.cx, hw: nd.hw, reactors: nd.reactors.map(function (r) {
+        var o = {}; for (var k in r) o[k] = r[k]; o.room = 'nv-' + r.room; o.control = 'nv-' + r.control;
+        if (r.tunnel) o.tunnel = 'nv-' + r.tunnel;
+        return o;
+      }), links: nd.links.length, doors: nDoor, layout: nd, misfit: misfit, narrowed: narrowed, dropped: dropped, lowered: lowered }
+    };
+  }
+
+  /* ---- THE ENGINEERING FLAT IN HER (2026-11-23) ---------------------------
+   * navaldeck.js's flat, under her own deck: under the aft end of her
+   * passage and her hold on an L hull (her own engine room stays where her
+   * crew work it, off the passage; down here are the reactor, its control
+   * room and the auxiliary machinery), under the far tram platform and the
+   * engine room on the Crawler. Its ladders come up into the passage (the
+   * platform), its trunks into the rooms over them. */
+  /* The L hulls (kestrel, cutter, longhaul, tanker) are laid out
+   * (navaldeck.js FLATS) but not aboard: at their length a 3 m flat does
+   * not fit under their deck, and growing them (fit-hulls: Kestrel 34 to
+   * 51 m, Longhaul 38 to 59) puts their glass 4-8 m ahead of the seat and
+   * turns their ramps into lifts. Astra's call, 2026-11-23. */
+  var FLAT_HULLS = { crawler: 1 };
+  /* The reactor block's own rooms (BLOCK_HULLS, below): the side passage,
+   * the cross passage, the avionics bay (variant B), reactor control and
+   * the reactor; the bridge door; and the reactor's spec for navalMesh. Its
+   * rooms are kind 'naval', so they are drawn as the naval decks' are, wall
+   * by wall round whatever doors they have. */
+  function buildBlock(c) {
+    var g = c.geom, deck = c.deck, ps = c.passage, doors = c.doors, items = c.items, room = c.room;
+    var sx = g.sideX, V = c.variant;
+    function nroom(id, sub, x0, x1, z0, z1, h, label) {
+      var r = room('bk-' + id, 'naval', x0, x1, z0, z1, h, label);
+      r.sub = sub; r.blockRoom = true;
+      return r;
+    }
+    /* A door through the wall `wall` = [low, high] (z for 'z', x for 'x'),
+     * centred at `at` along it; its box reaches 0.8 m into each room. */
+    function ndoor(id, a, b, axis, wall, at, opt) {
+      var d = { id: id, a: a.id, b: b.id, axis: axis, w: DOOR_HW * 2, h: DOOR_H, wall: wall, at: (wall[0] + wall[1]) / 2,
+                naval: true, slide: true, open: 0, shut: true, label: 'Door' };
+      if (axis === 'z') { d.xc = at; d.x0 = at - DOOR_HW; d.x1 = at + DOOR_HW; d.z0 = wall[0] - 0.8; d.z1 = wall[1] + 0.8; }
+      else { d.zc = at; d.z0 = at - DOOR_HW; d.z1 = at + DOOR_HW; d.x0 = wall[0] - 0.8; d.x1 = wall[1] + 0.8; }
+      for (var k in (opt || {})) d[k] = opt[k];
+      if (d.arch) { d.slide = false; d.open = 1; d.shut = false; }
+      doors.push(d);
+      return d;
+    }
+    var cz1 = c.crossZ1, cz0 = cz1 - BLOCK_CROSS, spX0, spX1, spZ0, spZ1, bay = null;
+    if (V === 'A') {
+      /* Down her side outboard of the bridge, its whole length. */
+      spX0 = sx + WALL_T; spX1 = spX0 + c.sideW; spZ0 = deck.z0; spZ1 = deck.z1;
+    } else {
+      /* Inside the bridge's width, beside the avionics bay, up to the
+       * bridge's aft door. */
+      spX1 = sx; spX0 = sx - c.sideW; spZ1 = deck.z0 - WALL_T; spZ0 = cz1 + WALL_T;
+      var bayX1 = spX0 - WALL_T, bayX0 = c.bayW > 0 ? Math.max(-sx, bayX1 - c.bayW) : -sx;
+      bay = nroom('bay', 'aux', bayX0, bayX1, spZ0, spZ1, PASSAGE_H, 'Avionics bay');
+    }
+    var side = nroom('side', 'passage', spX0, spX1, spZ0, spZ1, PASSAGE_H, 'Passage');
+    var ctlX0 = PASSAGE_HW + WALL_T, ctlX1 = ctlX0 + c.ctlW;
+    var cross = nroom('cross', 'cross', ps.x0, Math.max(spX1, ctlX1), cz0, cz1, PASSAGE_H, 'Cross passage');
+    var ctl = nroom('ctl', 'reactorctl', ctlX0, ctlX1, c.p1 - BLOCK_CTL, c.p1, ENGINE_H, 'Reactor control');
+    var rxr = nroom('reactor', 'reactor', ctlX0, ctlX1, ctl.z0 - WALL_T - BLOCK_RL, ctl.z0 - WALL_T, ENGINE_H, 'Reactor');
+    /* The bridge door: through the bridge's side at its forward end (A,
+     * aft of a raised cockpit's stair), or through its aft wall (B). */
+    if (V === 'A') {
+      ndoor('bridge', deck, side, 'x', [sx, spX0], (c.stairFoot !== null ? c.stairFoot : deck.z1) - BLOCK_LANDING / 2, { label: 'Bridge door' });
+    } else {
+      ndoor('bridge', side, deck, 'z', [side.z1, deck.z0], (spX0 + spX1) / 2, { label: 'Bridge door' });
+      ndoor('bk-bay', bay, side, 'x', [bay.x1, spX0], (spZ0 + spZ1) / 2, { label: 'Avionics bay door' });
+    }
+    ndoor('bk-side', cross, side, 'z', [cz1, spZ0], (spX0 + spX1) / 2, { arch: true, label: '' });
+    ndoor('bk-aft', ps, cross, 'z', [ps.z1, cz0], 0, { arch: true, label: '' });
+    ndoor('bk-ctl', ctl, cross, 'z', [ctl.z1, cz0], ctlX0 + 0.65, { label: 'Reactor control door' });
+    var rdX = ctlX1 - 0.6;
+    ndoor('bk-reactor', rxr, ctl, 'z', [rxr.z1, ctl.z0], rdX, { fit: 'X', reactorDoor: true, label: 'Reactor door  (X)' });
+    /* The reactor: lying down on the Cutter, as the Navy's are, the rods in
+     * from the front; standing on the rest, the rods from the top. The
+     * glass inboard of the reactor door, the panel under it. */
+    var military = !!BLOCK_MILITARY[c.hullId], axis = military ? 'h' : 'v';
+    var wx0 = ctlX0 + 0.25, wx1 = rdX - DOOR_HW - 0.2;
+    var cr = Math.min(0.4, BLOCK_RL * 0.08), clen = axis === 'h' ? Math.min(2.4, (wx1 - wx0) * 0.6) : Math.min(2.0, ENGINE_H * 0.6);
+    var cxr = Math.max((wx0 + wx1) / 2, ctlX0 + (axis === 'h' ? clen / 2 : cr) + 0.55);
+    var spec = {
+      id: 'reactor-0', room: rxr.id, control: ctl.id, axis: axis, military: military,
+      core: { x: cxr, y: c.floor + 1.2, z: (rxr.z0 + rxr.z1) / 2, r: cr, len: clen }, jacket: 1.2,
+      rods: axis === 'h' ? { face: 'fwd', n: 5 } : { face: 'top', n: 5 },
+      window: { z: (rxr.z1 + ctl.z0) / 2, x0: wx0, x1: wx1, y0: c.floor + 0.7, y1: c.floor + Math.min(ENGINE_H - 0.3, 2.3), faces: 'fwd' }
+    };
+    /* The tank is in the way: it stands against the bulkhead, across the
+     * window and the core, back past the core by her jacket (reactorTank). */
+    var hx = axis === 'h' ? clen / 2 : cr, hz = cr;
+    var tkx0 = Math.max(rxr.x0 + 0.02, Math.min(wx0 - 0.15, cxr - hx - 0.45)), tkx1 = Math.min(rxr.x1 - 0.02, Math.max(wx1 + 0.15, cxr + hx + 0.45));
+    var tkz0 = Math.max(rxr.z0 + 0.3, Math.min(spec.core.z - hz - spec.jacket, rxr.z1 - 1.2));
+    items.push({ kind: 'core', x: cxr, z: spec.core.z, label: '', silent: true, counter: [tkx0, tkz0, tkx1, rxr.z1] });
+    /* The panel under the glass: the reactor's controls and the drive's,
+     * worked by whoever has the engineering watch. */
+    items.push({ kind: 'engine', x: cxr, z: ctl.z0 + 0.3, yaw: Math.PI, label: 'Reactor and drive control  \u2014  the glass',
+                 counter: [wx0, ctl.z0, wx1, ctl.z0 + 0.45] });
+    return { reactors: [spec], side: side, cross: cross, bay: bay, ctl: ctl, reactor: rxr };
+  }
+  /* THE REACTOR BLOCK (Astra, 2026-11-23, her sketch): "grow the hulls, put
+   * it in a like this space, split the reactor room in two so the crew can
+   * operate panels in the room for controlling the reactor." The L hulls'
+   * one deck, laid out as she drew it: a side passage down the starboard
+   * side to the bridge, a cross passage aft of the bridge's solid aft wall,
+   * the passage on aft to the hold; the reactor's compartment off the cross
+   * passage to starboard (control forward, the reactor aft of the glass),
+   * the airlock and then the bunks to port. Asked whether the block by the
+   * side passage is the bridge itself or a wall with the bridge forward of
+   * it, she said "have both layouts available": variant A, the block IS the
+   * bridge and you come into it through its side at the forward end;
+   * variant B, the bridge is further forward, the block is an avionics bay,
+   * and the side passage runs on to the bridge's aft door. Which one a ship
+   * has is her own seed's (planned by `opts.key`), so a ship is always the
+   * same ship. No engine room or medbay of their own: the reactor's control
+   * room is where the drive is run from, and the medical cabinet is in the
+   * bunks room. */
+  var BLOCK_HULLS = { kestrel: 1, cutter: 1, longhaul: 1, tanker: 1 };
+  var BLOCK_MILITARY = { cutter: 1 };
+  var BLOCK_MIN_W = { engine: 2.4, blockSide: 1.0, blockBay: 1.0 };
+  var BLOCK_LANDING = 1.3, BLOCK_SIDE = 1.3, BLOCK_CROSS = 1.3, BLOCK_BAY = 2.6, BLOCK_RW = 3.0, BLOCK_CTL = 2.8, BLOCK_RL = 3.6;
+  function blockVariant(opts) {
+    if (opts.blockVariant === 'A' || opts.blockVariant === 'B') return opts.blockVariant;
+    return hash('block|' + (opts.key || opts.hullId || '')) % 2 ? 'A' : 'B';
+  }
+  function flatten(c) {
+    var N = global.NavalDeck, out = c.out, opts = c.opts, rooms = c.rooms, doors = c.doors, items = c.items;
+    var hullId = opts.hullId, under = c.decked ? 'junction' : 'main';
+    var stubY = c.decked ? c.deckY.junction : out.floorY;
+    if (stubY === undefined) return null;
+    var up = rooms.filter(function (r) { return r.deck === under && r.walk !== false && r.kind !== 'cockpit'; });
+    var pas = c.decked ? up.filter(function (r) { return r.id === 'platform-aft'; })[0] : up.filter(function (r) { return r.kind === 'passage'; })[0];
+    var hold = c.decked ? up.filter(function (r) { return r.kind === 'engine'; })[0] : (up.filter(function (r) { return r.kind === 'cargo'; })[0] || pas);
+    if (!pas || !hold) return null;
+    var h = 3.0, flatY = stubY - N.SLAB - h, run = (stubY - flatY) / Math.tan(Math.PI / 3);
+    var px = (pas.x0 + pas.x1) / 2;
+    /* The ladders' heads in the passage's aft end (on the platform), one
+     * a little forward of the other; their feet in reactor control. */
+    var headA = Math.min(pas.z1 - 0.4, pas.z0 + (c.decked ? 2.0 : 4.6)), headB = Math.min(pas.z1 - 0.4, pas.z0 + (c.decked ? 2.0 : 3.4));
+    var xA = c.decked ? px + 0.9 : px, xB = c.decked ? px - 0.9 : px;
+    var z1 = Math.max(headA, headB) + 0.6, FL = c.decked ? 14 : 12;
+    var z0 = z1 - FL, zm = (z0 + z1) / 2;
+    var hw = Math.max(2.4, Math.min(3.5, (hold.x1 - hold.x0) / 2 + 0.5));
+    var hz = (hold.z0 + hold.z1) / 2;
+    var nd = N.layout(hullId, {
+      libId: opts.libId, mainY: stubY, z0: z0, z1: z1, hw: hw, key: opts.key,
+      ladderAt: [[xA, headA - run / 2], [xB, headB - run / 2]],
+      /* The reactor's trunk is navaldeck's to place, clear of her tank. */
+      trunkAt: { aux: [(hold.x0 + hold.x1) / 2 + 0.4, Math.max(z0 + 0.8, Math.min(zm - 0.8, hz))] }
+    });
+    if (!nd) return null;
+    var deckY = {}, k;
+    if (c.deckY) for (k in c.deckY) deckY[k] = c.deckY[k];
+    if (!c.decked) deckY.main = out.floorY;
+    deckY.flat = nd.decks.filter(function (d) { return d.id === 'flat'; })[0].y;
+    var deckName = {};
+    if (out.deckName) for (k in out.deckName) deckName[k] = out.deckName[k];
+    var navy = nd.style === 'navy';
+    deckName.flat = (navy ? '2  ' : '') + 'Engineering flat';
+    var ndRoom = {}, mine = {};
+    nd.rooms.forEach(function (r) { ndRoom[r.id] = r; });
+    nd.rooms.forEach(function (r) {
+      if (r.kind === 'stub') return;
+      var m = { id: 'nv-' + r.id, kind: 'naval', sub: r.kind, x0: r.x0, x1: r.x1, z0: r.z0, z1: r.z1, y0: 0, y1: r.y1 - r.y0,
+                label: r.label + (navy ? '   ' + r.comp : ''), deck: 'flat', comp: r.comp };
+      rooms.push(m); mine[r.id] = m;
+    });
+    function roomOver(x, z) {
+      var hit = up.filter(function (r) { return x >= r.x0 && x <= r.x1 && z >= r.z0 && z <= r.z1; })[0];
+      if (hit) return hit;
+      var best = null, bd = Infinity;
+      up.forEach(function (r) {
+        var dx = Math.max(r.x0 - x, 0, x - r.x1), dz = Math.max(r.z0 - z, 0, z - r.z1), d = Math.hypot(dx, dz);
+        if (d < bd) { bd = d; best = r; }
+      });
+      return best;
+    }
+    function inside(r, x, z) {
+      var px2 = Math.min(0.5, (r.x1 - r.x0) / 2 - 0.01), pz2 = Math.min(0.5, (r.z1 - r.z0) / 2 - 0.01);
+      return [Math.max(r.x0 + px2, Math.min(r.x1 - px2, x)), Math.max(r.z0 + pz2, Math.min(r.z1 - pz2, z))];
+    }
+    var VERB = { ladder: 'Ladder', stair: 'Stairs', scuttle: 'Scuttle', trunk: 'Escape trunk' };
+    var dName = function (d) { return deckName[d] || DECK_NAME[d] || (d === 'main' ? 'Main deck' : d); };
+    nd.links.forEach(function (l) {
+      var a = mine[l.a], b = mine[l.b];
+      if (a && b) {
+        /* The watertight door between her two compartments down here. */
+        var A = a.z1 <= b.z0 + 1e-6 ? a : b, F = A === a ? b : a;
+        var xc = Math.max(Math.max(a.x0, b.x0) + DOOR_HW + 0.05, Math.min(Math.min(a.x1, b.x1) - DOOR_HW - 0.05, l.x));
+        doors.push({ id: 'nv-' + l.id, a: a.id, b: b.id, axis: 'z', at: (A.z1 + F.z0) / 2, w: DOOR_HW * 2, h: DOOR_H, xc: xc,
+                     x0: xc - DOOR_HW, x1: xc + DOOR_HW, z0: A.z1 - 0.8, z1: F.z0 + 0.8, wall: [A.z1, F.z0],
+                     slide: true, open: 0, shut: true, deck: 'flat', naval: true, fit: l.fit || null,
+                     label: l.reactorDoor ? 'Reactor door  (X)' : 'Watertight door' + (l.fit ? '  (' + l.fit + ')' : '') });
+        return;
+      }
+      if (!VERB[l.type]) return;
+      var lo = a || b;
+      if (!lo) return;
+      var topX = l.x, topZ = l.headZ !== undefined ? l.headZ : l.z;
+      var hi = roomOver(topX, topZ);
+      if (!hi) return;
+      var zLo = l.footZ !== undefined ? l.footZ - 0.35 : l.z;
+      var pLo = inside(lo, l.x, zLo), pHi = inside(hi, topX, l.headZ !== undefined ? l.headZ + 0.35 : l.z);
+      var sx = pLo[0] - l.x, sz = pLo[1] - zLo, dy = stubY - flatY;
+      var base = { link: l.id, via: l.type, fit: l.fit || null, rule: l.rule || null, side: l.side || 0, aim: true,
+                   foot: [l.x + sx, (l.footZ !== undefined ? l.footZ : l.z) + sz], head: [l.x + sx, (l.headZ !== undefined ? l.headZ : l.z) + sz] };
+      [[pLo, lo, hi, pHi, true], [pHi, hi, lo, pLo, false]].forEach(function (e) {
+        var it = { kind: 'climb', x: e[0][0], z: e[0][1], deck: e[1].deck, to: e[2].deck, tx: e[3][0], tz: e[3][1], up: e[4], dy: e[4] ? dy : -dy,
+                   label: (e[4] ? '▲  ' : '▼  ') + VERB[l.type] + (e[4] ? ' up to ' : ' down to ') + dName(e[2].deck) };
+        for (var q in base) it[q] = base[q];
+        items.push(it);
+      });
+    });
+    /* Reactor control's panel, by the glass. */
+    nd.reactors.forEach(function (rx) {
+      var ctl = mine[rx.control];
+      if (!ctl) return;
+      var cxm = (ctl.x0 + ctl.x1) / 2;
+      items.push({ kind: 'reactorctl', x: cxm, z: ctl.z0 + 0.6, deck: 'flat', label: 'Reactor control  —  the glass',
+                   counter: [cxm - 0.9, ctl.z0, cxm + 0.9, ctl.z0 + 0.45] });
+      /* Her tank: nobody walks into the water. */
+      var rrm = mine[rx.room];
+      if (rrm && rx.window) {
+        var tf = tankFoot(rrm, rx);
+        items.push({ kind: 'core', x: (tf.x0 + tf.x1) / 2, z: (tf.z0 + tf.zb) / 2, deck: 'flat', label: '', silent: true,
+                     counter: [tf.x0, tf.z0, tf.x1, tf.zb] });
+      }
+    });
+    doors.forEach(function (d) { if (d.deck === 'flat') d.yOff = deckY.flat - c.geom.floorY; });
+    var deckAll = c.decked ? (c.deckAll || []).slice() : ['main'];
+    if (c.decked) deckAll = Object.keys(c.deckY);
+    deckAll.push('flat');
+    deckAll.sort(function (p1, p2) { return deckY[p2] - deckY[p1]; });
+    return {
+      deckY: deckY, deckAll: deckAll, deckName: deckName,
+      naval: { style: nd.style, cx: 0, hw: hw, flat: true, layout: nd, misfit: [], narrowed: [], dropped: [], lowered: [],
+               reactors: nd.reactors.map(function (r) { var o = {}; for (var q in r) o[q] = r[q]; o.room = 'nv-' + r.room; o.control = 'nv-' + r.control; return o; }) }
+    };
+  }
+
+  /* Plain walls round the naval rooms, each cut for its doors, the jambs
+   * through the wall's thickness, a light down the ceiling; ladders,
+   * scuttles and trunk hatches where their items are; and the reactor's
+   * core and its glass lit blue (stage 3 builds the real fittings). */
+  var NAVAL_TINT = { engine: 'lockWall', aux: 'lockWall', reactor: 'lockWall', tunnel: 'lockWall', reactorctl: 'console', magazine: 'lockWall',
+                     hangar: 'lockWall', platform: 'lockWall', tramway: 'lockWall', passage: 'passWall', cross: 'passWall', lobby: 'passWall', landing: 'passWall' };
+  /* The reactor window's glass (gl.js '~h': opacity h/15) and the rod
+   * drives' lamps. The glow itself is reactorGlowMesh's. */
+  var ROD_LAMP = '!#7dff9a';
+  function deckFy(p, dk) { return p.deckY && p.deckY[dk] !== undefined ? p.deckY[dk] : p.floorY; }
+  function navalMesh(m, pal, p) {
+    var rs = p.rooms.filter(function (r) { return r.kind === 'naval'; });
+    if (p.naval) p.naval.spill = [];
+    rs.forEach(function (r) {
+      var fy = deckFy(p, r.deck), h = r.y1, cy = fy + h;
+      var wall = pal[NAVAL_TINT[r.sub] || 'wall'] || pal.wall;
+      var floor = r.sub === 'passage' || r.sub === 'cross' || r.sub === 'lobby' || r.sub === 'tunnel' ? pal.passFloor : pal.floor;
+      quad(m, [r.x0, fy, r.z0], [r.x1, fy, r.z0], [r.x1, fy, r.z1], [r.x0, fy, r.z1], floor);
+      quad(m, [r.x0, cy, r.z0], [r.x1, cy, r.z0], [r.x1, cy, r.z1], [r.x0, cy, r.z1], pal.ceil);
+      /* Each wall, round its doorways. */
+      var cuts = { x0: [], x1: [], z0: [], z1: [] };
+      p.doors.forEach(function (d) {
+        if (d.deck !== r.deck || !d.wall) return;
+        if (d.axis === 'x') {
+          if (Math.abs(d.wall[0] - r.x1) < 1e-4 && d.zc > r.z0 && d.zc < r.z1) cuts.x1.push(d.zc);
+          if (Math.abs(d.wall[1] - r.x0) < 1e-4 && d.zc > r.z0 && d.zc < r.z1) cuts.x0.push(d.zc);
+        } else {
+          var xc = d.xc !== undefined ? d.xc : 0;
+          if (Math.abs(d.wall[0] - r.z1) < 1e-4 && xc > r.x0 && xc < r.x1) cuts.z1.push(xc);
+          if (Math.abs(d.wall[1] - r.z0) < 1e-4 && xc > r.x0 && xc < r.x1) cuts.z0.push(xc);
+        }
+      });
+      /* The reactor's window through the bulkhead between reactor and
+       * control: a hole in the reactor's forward wall and in control's aft
+       * one (glowMesh is what is seen through it). */
+      var windows = { x0: [], x1: [], z0: [], z1: [] };
+      ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+        var w = rx.window;
+        if (!w) return;
+        if (rx.room === r.id) windows.z1.push({ u0: w.x0, u1: w.x1, v0: w.y0, v1: w.y1 });
+        if (rx.control === r.id) windows.z0.push({ u0: w.x0, u1: w.x1, v0: w.y0, v1: w.y1 });
+        /* And the tunnel's port onto her tank's side. */
+        var pt = rx.port;
+        if (pt && rx.room === r.id) windows.x1.push({ u0: pt.z0, u1: pt.z1, v0: pt.y0, v1: pt.y1 });
+        if (pt && rx.tunnel === r.id) windows.x0.push({ u0: pt.z0, u1: pt.z1, v0: pt.y0, v1: pt.y1 });
+      });
+      function wallRun(side) {
+        var alongX = side === 'z0' || side === 'z1', fixed = r[side], a0 = alongX ? r.x0 : r.z0, a1 = alongX ? r.x1 : r.z1;
+        var P = function (u, y) { return alongX ? [u, y, fixed] : [fixed, y, u]; };
+        var holes = cuts[side].map(function (cc) { return { u0: cc - DOOR_HW, u1: cc + DOOR_HW, v0: fy, v1: fy + DOOR_H }; })
+          .concat(windows[side]);
+        wallHoles(m, P, a0, a1, fy, cy, holes, wall);
+      }
+      ['x0', 'x1', 'z0', 'z1'].forEach(wallRun);
+      /* The reactor's light spilling into this room through the window (or
+       * a tunnel's port) in its wall (spillOnto). */
+      ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+        var viaWin = rx.control === r.id && rx.window, viaPort = rx.tunnel === r.id && rx.port;
+        if (!viaWin && !viaPort) return;
+        var T = reactorTank(p, rx);
+        if (!T) return;
+        var S = [T.core.x, T.core.y, T.core.z], e = 0.004, ap, N, skip;
+        if (viaWin) {
+          var w = rx.window;
+          ap = [[w.x0, w.y0, r.z0], [w.x1, w.y0, r.z0], [w.x1, w.y1, r.z0], [w.x0, w.y1, r.z0]]; N = [0, 0, 1]; skip = 'z0';
+        } else {
+          var q = rx.port;
+          ap = [[r.x0, q.y0, q.z0], [r.x0, q.y0, q.z1], [r.x0, q.y1, q.z1], [r.x0, q.y1, q.z0]]; N = [1, 0, 0]; skip = 'x0';
+        }
+        var surfs = [
+          { poly: [[r.x0, fy + e, r.z0], [r.x1, fy + e, r.z0], [r.x1, fy + e, r.z1], [r.x0, fy + e, r.z1]], base: floor },
+          { poly: [[r.x0, cy - e, r.z0], [r.x1, cy - e, r.z0], [r.x1, cy - e, r.z1], [r.x0, cy - e, r.z1]], base: pal.ceil }
+        ];
+        ['x0', 'x1', 'z0', 'z1'].forEach(function (side) {
+          if (side === skip) return;
+          var alongX = side === 'z0' || side === 'z1', inward = side === 'x0' || side === 'z0' ? e : -e, fixed = r[side] + inward;
+          var holes = cuts[side].map(function (cc) { return { u0: cc - DOOR_HW, u1: cc + DOOR_HW, v0: fy, v1: fy + DOOR_H }; }).concat(windows[side]);
+          holeRects(alongX ? r.x0 : r.z0, alongX ? r.x1 : r.z1, fy, cy, holes).forEach(function (h) {
+            var P = function (u, y) { return alongX ? [u, y, fixed] : [fixed, y, u]; };
+            surfs.push({ poly: [P(h.u0, h.v0), P(h.u1, h.v0), P(h.u1, h.v1), P(h.u0, h.v1)], base: wall });
+          });
+        });
+        p.naval.spill = p.naval.spill.concat(spillOnto(S, ap, N, surfs));
+      });
+      /* A light down the middle, along the room's length. */
+      var lx = (r.x0 + r.x1) / 2, lz = (r.z0 + r.z1) / 2, alongZ = (r.z1 - r.z0) >= (r.x1 - r.x0);
+      var L2 = Math.max(0.3, (alongZ ? r.z1 - r.z0 : r.x1 - r.x0) / 2 - 0.4);
+      if (r.sub !== 'tramway') {
+        if (alongZ) lightRun(m, [lx - 0.06, cy - 0.01, lz - L2], [lx + 0.06, cy - 0.01, lz - L2], [lx + 0.06, cy - 0.01, lz + L2], [lx - 0.06, cy - 0.01, lz + L2], pal.light, pal.ceil);
+        else lightRun(m, [lx - L2, cy - 0.01, lz - 0.06], [lx + L2, cy - 0.01, lz - 0.06], [lx + L2, cy - 0.01, lz + 0.06], [lx - L2, cy - 0.01, lz + 0.06], pal.light, pal.ceil);
+      }
+      if (r.sub === 'tramway') {
+        /* The rail and its lights strung down the trunk. */
+        box(m, lx - 0.08, fy, r.z0, lx + 0.08, fy + 0.12, r.z1, pal.rib);
+        for (var tz = r.z0 + 2; tz < r.z1 - 1; tz += 6) quad(m, [lx - 0.3, cy - 0.01, tz - 0.3], [lx + 0.3, cy - 0.01, tz - 0.3], [lx + 0.3, cy - 0.01, tz + 0.3], [lx - 0.3, cy - 0.01, tz + 0.3], pal.light);
+      }
+    });
+    /* The jambs, through the wall between a door's two rooms. */
+    p.doors.forEach(function (d) {
+      if (!d.naval || !d.wall) return;
+      var fy = deckFy(p, d.deck), t0 = d.wall[0], t1 = d.wall[1];
+      if (t1 - t0 < 1e-4) return;
+      if (d.axis === 'x') {
+        [d.zc - DOOR_HW, d.zc + DOOR_HW].forEach(function (z) { quad(m, [t0, fy, z], [t1, fy, z], [t1, fy + DOOR_H, z], [t0, fy + DOOR_H, z], pal.jamb); });
+        quad(m, [t0, fy + DOOR_H, d.zc - DOOR_HW], [t1, fy + DOOR_H, d.zc - DOOR_HW], [t1, fy + DOOR_H, d.zc + DOOR_HW], [t0, fy + DOOR_H, d.zc + DOOR_HW], pal.jamb);
+        quad(m, [t0, fy + 0.002, d.zc - DOOR_HW], [t1, fy + 0.002, d.zc - DOOR_HW], [t1, fy + 0.002, d.zc + DOOR_HW], [t0, fy + 0.002, d.zc + DOOR_HW], d.fit === 'Z' ? pal.hazard : pal.passFloor);
+      } else {
+        [d.xc - DOOR_HW, d.xc + DOOR_HW].forEach(function (x) { quad(m, [x, fy, t0], [x, fy, t1], [x, fy + DOOR_H, t1], [x, fy + DOOR_H, t0], pal.jamb); });
+        quad(m, [d.xc - DOOR_HW, fy + DOOR_H, t0], [d.xc + DOOR_HW, fy + DOOR_H, t0], [d.xc + DOOR_HW, fy + DOOR_H, t1], [d.xc - DOOR_HW, fy + DOOR_H, t1], pal.jamb);
+        quad(m, [d.xc - DOOR_HW, fy + 0.002, t0], [d.xc + DOOR_HW, fy + 0.002, t0], [d.xc + DOOR_HW, fy + 0.002, t1], [d.xc - DOOR_HW, fy + 0.002, t1], d.fit === 'Z' ? pal.hazard : pal.passFloor);
+      }
+    });
+    /* Ladders, scuttles and trunk hatches, from their items' lower ends. */
+    p.items.forEach(function (it) {
+      if (it.kind !== 'climb' || !it.up) return;
+      var fy = deckFy(p, it.deck), top = fy + (it.dy || 3);
+      var r = p.rooms.filter(function (q) { return q.id && q.deck === it.deck && it.x >= q.x0 && it.x <= q.x1 && it.z >= q.z0 && it.z <= q.z1; })[0];
+      var ceilY = r ? fy + r.y1 : top;
+      if (it.via === 'ladder' || it.via === 'stair') {
+        /* Two stringers on the incline, foot aft, head forward, and the
+         * treads between them; the hatch's coaming round the head. */
+        var x = it.foot[0], z0 = it.foot[1], z1 = it.head[1], hw = it.via === 'stair' ? 0.5 : 0.36;
+        [-hw, hw].forEach(function (dx) {
+          quad(m, [x + dx - 0.03, fy, z0], [x + dx + 0.03, fy, z0], [x + dx + 0.03, top, z1], [x + dx - 0.03, top, z1], pal.rib);
+        });
+        var nT = Math.max(4, Math.round((top - fy) / 0.24));
+        for (var ti = 1; ti < nT; ti++) {
+          var u = ti / nT, ty = fy + (top - fy) * u, tz2 = z0 + (z1 - z0) * u;
+          quad(m, [x - hw, ty, tz2 - 0.11], [x + hw, ty, tz2 - 0.11], [x + hw, ty, tz2 + 0.11], [x - hw, ty, tz2 + 0.11], it.fit === 'Z' ? pal.hazard : pal.rib);
+        }
+        var hz0 = z1 - 1.0, hz1 = z1 + 0.2;
+        box(m, x - hw - 0.1, ceilY - 0.06, hz0, x + hw + 0.1, ceilY, hz1, it.fit === 'Z' ? pal.hazard : pal.jamb);
+      } else if (it.via === 'scuttle') {
+        var sx = it.x, sz = it.z;
+        [-0.2, 0.2].forEach(function (dx) { box(m, sx + dx - 0.02, fy, sz - 0.02, sx + dx + 0.02, ceilY, sz + 0.02, pal.rib); });
+        for (var ry = fy + 0.3; ry < ceilY - 0.1; ry += 0.3) box(m, sx - 0.2, ry, sz - 0.015, sx + 0.2, ry + 0.03, sz + 0.015, pal.rib);
+        box(m, sx - 0.35, ceilY - 0.05, sz - 0.35, sx + 0.35, ceilY, sz + 0.35, pal.hazardDark);
+      } else {
+        /* An escape trunk's hatch on the wall it is let into, ringed in
+         * hazard yellow. */
+        quad(m, [it.x - 0.4, fy + 0.3, it.z], [it.x + 0.4, fy + 0.3, it.z], [it.x + 0.4, fy + 1.6, it.z], [it.x - 0.4, fy + 1.6, it.z], pal.hazard);
+        quad(m, [it.x - 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 0.38, it.z + 0.003], [it.x + 0.32, fy + 1.52, it.z + 0.003], [it.x - 0.32, fy + 1.52, it.z + 0.003], pal.hatch);
+      }
+    });
+    /* THE REACTORS (2026-11-23, "finish the reactor glow"). The water
+     * jacket's tank stands against the bulkhead, so the window in it looks
+     * straight into the water: control's side sees the core through the
+     * glass, lit by its own Cherenkov light (glowMesh, drawn at whatever
+     * power she is making). Here, the parts that do not glow: the tank's
+     * steel outside, seen in the reactor's room; the window's reveal
+     * through the bulkhead and its bolted frame; the glass, faintly
+     * tinted; the control rods in the water and their drives. */
+    ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+      var T = reactorTank(p, rx);
+      if (!T) return;
+      var w = rx.window, fy = T.fy, zb = T.zb, zc = T.zc;
+      box(m, T.x0, T.y0, T.z0, T.x0 + 0.04, T.y1, zb, pal.bulk);
+      if (!rx.port) box(m, T.x1 - 0.04, T.y0, T.z0, T.x1, T.y1, zb, pal.bulk);
+      else {
+        /* The tunnel's port: the reveal through her wall's thickness, and a
+         * bolted frame on the tunnel's side. */
+        var pt = rx.port, tr = p.rooms.filter(function (q) { return q.id === rx.tunnel; })[0];
+        var xa = T.x1, xt = tr ? tr.x0 : xa + WALL_T, xf = xt + 0.02;
+        quad(m, [xa, pt.y0, pt.z0], [xt, pt.y0, pt.z0], [xt, pt.y0, pt.z1], [xa, pt.y0, pt.z1], pal.jamb);
+        quad(m, [xa, pt.y1, pt.z0], [xt, pt.y1, pt.z0], [xt, pt.y1, pt.z1], [xa, pt.y1, pt.z1], pal.jamb);
+        quad(m, [xa, pt.y0, pt.z0], [xa, pt.y1, pt.z0], [xt, pt.y1, pt.z0], [xt, pt.y0, pt.z0], pal.jamb);
+        quad(m, [xa, pt.y0, pt.z1], [xa, pt.y1, pt.z1], [xt, pt.y1, pt.z1], [xt, pt.y0, pt.z1], pal.jamb);
+        box(m, xt, pt.y0 - 0.12, pt.z0 - 0.12, xf, pt.y0, pt.z1 + 0.12, pal.jamb);
+        box(m, xt, pt.y1, pt.z0 - 0.12, xf, pt.y1 + 0.12, pt.z1 + 0.12, pal.jamb);
+        box(m, xt, pt.y0, pt.z0 - 0.12, xf, pt.y1, pt.z0, pal.jamb);
+        box(m, xt, pt.y0, pt.z1, xf, pt.y1, pt.z1 + 0.12, pal.jamb);
+        for (var pb = 0; pb <= 4; pb++) {
+          var bz = pt.z0 - 0.06 + (pt.z1 - pt.z0 + 0.12) * pb / 4;
+          [pt.y0 - 0.06, pt.y1 + 0.06].forEach(function (by) { box(m, xf, by - 0.015, bz - 0.015, xf + 0.012, by + 0.015, bz + 0.015, pal.rib); });
+        }
+      }
+      box(m, T.x0, T.y0, T.z0, T.x1, T.y1, T.z0 + 0.04, pal.bulk);
+      box(m, T.x0, T.y1 - 0.04, T.z0, T.x1, T.y1, zb, pal.overhead);
+      /* THE PIT, dressed (Astra: "the reactor room needs texture, the pit
+       * there would have more than flat matte walls around it"). Outside:
+       * the tank's stiffening ribs, a flange round her rim, a kick plate in
+       * hazard stripes at her foot, and her coolant pipes aft to the
+       * bulkhead. Inside, dark against the glow: a ladder down her back
+       * wall, and a spent-fuel rack on her floor behind the core. */
+      var rrm = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
+      var ribs = function (a0, a1, f) { for (var a = a0 + 0.3; a < a1 - 0.15; a += 0.6) f(a); };
+      ribs(T.z0, zb, function (z) { box(m, T.x0 - 0.07, T.y0, z - 0.04, T.x0, T.y1 - 0.06, z + 0.04, pal.rib); });
+      if (!rx.port) ribs(T.z0, zb, function (z) { box(m, T.x1, T.y0, z - 0.04, T.x1 + 0.07, T.y1 - 0.06, z + 0.04, pal.rib); });
+      ribs(T.x0, T.x1, function (x) { box(m, x - 0.04, T.y0, T.z0 - 0.07, x + 0.04, T.y1 - 0.06, T.z0, pal.rib); });
+      /* The rim flange. */
+      box(m, T.x0 - 0.09, T.y1 - 0.1, T.z0 - 0.09, T.x0, T.y1, zb, pal.jamb);
+      if (!rx.port) box(m, T.x1, T.y1 - 0.1, T.z0 - 0.09, T.x1 + 0.09, T.y1, zb, pal.jamb);
+      box(m, T.x0 - 0.09, T.y1 - 0.1, T.z0 - 0.09, T.x1 + (rx.port ? 0 : 0.09), T.y1, T.z0, pal.jamb);
+      /* The kick plate, striped. */
+      var kick = function (a0, a1, P) {
+        for (var a = a0, k = 0; a < a1 - 1e-3; a += 0.25, k++) P(a, Math.min(a1, a + 0.25), k % 2 ? pal.hazardDark : pal.hazard);
+      };
+      kick(T.z0 - 0.08, zb, function (a, b, col) { quad(m, [T.x0 - 0.08, T.y0, a], [T.x0 - 0.08, T.y0, b], [T.x0 - 0.08, T.y0 + 0.14, b], [T.x0 - 0.08, T.y0 + 0.14, a], col); });
+      kick(T.x0 - 0.08, T.x1 + (rx.port ? 0 : 0.08), function (a, b, col) { quad(m, [b, T.y0, T.z0 - 0.08], [a, T.y0, T.z0 - 0.08], [a, T.y0 + 0.14, T.z0 - 0.08], [b, T.y0 + 0.14, T.z0 - 0.08], col); });
+      if (!rx.port) kick(T.z0 - 0.08, zb, function (a, b, col) { quad(m, [T.x1 + 0.08, T.y0, b], [T.x1 + 0.08, T.y0, a], [T.x1 + 0.08, T.y0 + 0.14, a], [T.x1 + 0.08, T.y0 + 0.14, b], col); });
+      /* Her coolant pipes: two, out of her back, aft to the bulkhead. */
+      if (rrm && T.z0 - rrm.z0 > 0.2) {
+        var pmx = (T.x0 + T.x1) / 2;
+        [[pmx - 0.5, fy + 0.7], [pmx + 0.5, fy + 1.3]].forEach(function (pp) {
+          box(m, pp[0] - 0.11, pp[1] - 0.11, rrm.z0, pp[0] + 0.11, pp[1] + 0.11, T.z0 - 0.07, pal.console);
+          box(m, pp[0] - 0.15, pp[1] - 0.15, T.z0 - 0.12, pp[0] + 0.15, pp[1] + 0.15, T.z0 - 0.07, pal.jamb);
+        });
+      }
+      /* Inside: the ladder, in her back wall's corner. */
+      var lx0 = T.x0 + 0.3, lzb = T.z0 + 0.05;
+      box(m, lx0, T.y0, lzb, lx0 + 0.04, T.y1 - 0.04, lzb + 0.12, pal.rib);
+      box(m, lx0 + 0.42, T.y0, lzb, lx0 + 0.46, T.y1 - 0.04, lzb + 0.12, pal.rib);
+      for (var ly = T.y0 + 0.3; ly < T.y1 - 0.1; ly += 0.3) box(m, lx0 + 0.04, ly - 0.015, lzb + 0.08, lx0 + 0.42, ly + 0.015, lzb + 0.11, pal.rib);
+      /* And the rack: a grid of square cells on her floor, behind the core
+       * (so the glass's view of her is clear), in the corner away from the
+       * ladder. */
+      var rkz1 = T.core.z - T.core.hz - 0.25, rkz0 = Math.max(T.z0 + 0.1, rkz1 - 0.75);
+      var rkx1 = T.x1 - 0.15, rkx0 = Math.max(lx0 + 0.7, rkx1 - 1.0), rkh = Math.min(0.9, (T.y1 - T.y0) * 0.35);
+      if (rkz1 - rkz0 > 0.3 && rkx1 - rkx0 > 0.3) {
+        for (var gx = rkx0; gx <= rkx1 + 1e-3; gx += (rkx1 - rkx0) / 4) box(m, gx - 0.015, T.y0, rkz0, gx + 0.015, T.y0 + rkh, rkz1, pal.rib);
+        for (var gz = rkz0; gz <= rkz1 + 1e-3; gz += (rkz1 - rkz0) / 3) box(m, rkx0, T.y0, gz - 0.015, rkx1, T.y0 + rkh, gz + 0.015, pal.rib);
+      }
+      /* The window's reveal, through the bulkhead's thickness. */
+      if (zc - zb > 1e-4) {
+        quad(m, [w.x0, w.y0, zb], [w.x1, w.y0, zb], [w.x1, w.y0, zc], [w.x0, w.y0, zc], pal.jamb);
+        quad(m, [w.x0, w.y1, zb], [w.x1, w.y1, zb], [w.x1, w.y1, zc], [w.x0, w.y1, zc], pal.jamb);
+        quad(m, [w.x0, w.y0, zb], [w.x0, w.y1, zb], [w.x0, w.y1, zc], [w.x0, w.y0, zc], pal.jamb);
+        quad(m, [w.x1, w.y0, zb], [w.x1, w.y1, zb], [w.x1, w.y1, zc], [w.x1, w.y0, zc], pal.jamb);
+      }
+      /* The frame on control's face, bolted, and the glass a hand's width
+       * in: thick, and only faintly blue of itself. */
+      var fz = zc + 0.02;
+      box(m, w.x0 - 0.14, w.y0 - 0.14, zc, w.x1 + 0.14, w.y0, fz, pal.jamb);
+      box(m, w.x0 - 0.14, w.y1, zc, w.x1 + 0.14, w.y1 + 0.14, fz, pal.jamb);
+      box(m, w.x0 - 0.14, w.y0, zc, w.x0, w.y1, fz, pal.jamb);
+      box(m, w.x1, w.y0, zc, w.x1 + 0.14, w.y1, fz, pal.jamb);
+      for (var bi = 0; bi <= 6; bi++) {
+        var bx = w.x0 - 0.07 + (w.x1 - w.x0 + 0.14) * bi / 6;
+        [w.y0 - 0.07, w.y1 + 0.07].forEach(function (by) { box(m, bx - 0.015, by - 0.015, fz, bx + 0.015, by + 0.015, fz + 0.012, pal.rib); });
+      }
+      /* No pane drawn: gl.js draws see-through faces by dithering, which
+       * greyed the whole view of the water (2026-11-23 probe). The frame
+       * and the reveal say it is thick glass. */
+      /* The control rods, dark against the glow, in a lattice across the
+       * whole face of the core (reactorRods): a row along one edge would
+       * leave that side cold and the far side hot, the neutron field badly
+       * tilted (Astra, 2026-11-23). Lying down, they come in from the
+       * front, each from its drive on a frame hung in the water between
+       * the core and the glass; standing, down from drives on the lid. A
+       * rod-position panel over the window, a lamp per rod, laid out as
+       * the rods are. */
+      var R = reactorRods(p, rx, T), c = T.core;
+      if (R.face === 'fwd') {
+        var zF = c.z + c.hz, zf = zF + Math.min(0.3, (zb - zF) * 0.45), zh = Math.min(zb - 0.03, zf + 0.15);
+        var xa = Infinity, xb = -Infinity, ys = {};
+        R.at.forEach(function (r) {
+          box(m, r.x - 0.025, r.y - 0.025, c.z + c.hz * 0.2, r.x + 0.025, r.y + 0.025, zf, pal.rib);
+          box(m, r.x - 0.045, r.y - 0.045, zf, r.x + 0.045, r.y + 0.045, zh, pal.console);
+          xa = Math.min(xa, r.x); xb = Math.max(xb, r.x); ys[r.y.toFixed(3)] = r.y;
+        });
+        /* The frame: a light bar behind each row of drives, and a hanger
+         * down from the lid at each end. */
+        Object.keys(ys).forEach(function (k) {
+          var yy = ys[k] + 0.06;
+          box(m, xa - 0.12, yy, zh - 0.04, xb + 0.12, yy + 0.025, zh, pal.rib);
+        });
+        var yLo = Math.min.apply(null, Object.keys(ys).map(function (k) { return ys[k]; })) + 0.06;
+        [xa - 0.12, xb + 0.12].forEach(function (hx) { box(m, hx - 0.02, yLo, zh - 0.04, hx + 0.02, T.y1 - 0.04, zh, pal.rib); });
+      } else {
+        R.at.forEach(function (r) {
+          box(m, r.x - 0.025, c.y + c.hy * 0.3, r.z - 0.025, r.x + 0.025, T.y1 - 0.04, r.z + 0.025, pal.rib);
+          box(m, r.x - 0.05, T.y1, r.z - 0.05, r.x + 0.05, Math.min(fy + T.roomH - 0.05, T.y1 + 0.4), r.z + 0.05, pal.console);
+        });
+      }
+      /* The rod-position panel over the window: the lattice in lamps. */
+      var pw = R.cols * 0.08 + 0.08, ph = R.rows * 0.08 + 0.08, pcx = (w.x0 + w.x1) / 2, py0 = w.y1 + 0.2;
+      if (py0 + ph < fy + T.roomH - 0.05) {
+        box(m, pcx - pw / 2, py0, zc, pcx + pw / 2, py0 + ph, fz + 0.04, pal.console);
+        R.at.forEach(function (r) {
+          var lx = pcx - pw / 2 + 0.08 + r.i * 0.08, ly = py0 + 0.08 + r.j * 0.08, lz = fz + 0.042;
+          quad(m, [lx - 0.025, ly - 0.025, lz], [lx + 0.025, ly - 0.025, lz], [lx + 0.025, ly + 0.025, lz], [lx - 0.025, ly + 0.025, lz], ROD_LAMP);
+        });
+      }
+    });
+  }
+  /* A flat wall from a0 to a1 along it, y0 to y1 up it, with rectangular
+   * holes ({u0, u1, v0, v1}: doors, windows) cut out. Split at every
+   * hole's edges along the wall; each strip is walled wherever no hole
+   * covers it. */
+  function wallHoles(m, P, a0, a1, y0, y1, holes, col) {
+    holeRects(a0, a1, y0, y1, holes).forEach(function (q) {
+      quad(m, P(q.u0, q.v0), P(q.u1, q.v0), P(q.u1, q.v1), P(q.u0, q.v1), col);
+    });
+  }
+  /* The solid rectangles of a wall with holes in it (wallHoles), as
+   * {u0, u1, v0, v1}: the spill of reactor light lands on these and not
+   * in a doorway. */
+  function holeRects(a0, a1, y0, y1, holes) {
+    var out = [];
+    var hs = holes.map(function (h) {
+      return { u0: Math.max(a0, h.u0), u1: Math.min(a1, h.u1), v0: Math.max(y0, h.v0), v1: Math.min(y1, h.v1) };
+    }).filter(function (h) { return h.u1 > h.u0 + 1e-6 && h.v1 > h.v0 + 1e-6; });
+    var cuts = [a0, a1];
+    hs.forEach(function (h) { cuts.push(h.u0, h.u1); });
+    cuts.sort(function (a, b) { return a - b; });
+    for (var i = 0; i + 1 < cuts.length; i++) {
+      var ua = cuts[i], ub = cuts[i + 1];
+      if (ub - ua < 1e-6) continue;
+      var over = hs.filter(function (h) { return h.u0 <= ua + 1e-6 && h.u1 >= ub - 1e-6; })
+        .sort(function (a, b) { return a.v0 - b.v0; });
+      var at = y0;
+      over.forEach(function (h) {
+        if (h.v0 > at + 1e-6) out.push({ u0: ua, u1: ub, v0: at, v1: h.v0 });
+        at = Math.max(at, h.v1);
+      });
+      if (y1 > at + 1e-6) out.push({ u0: ua, u1: ub, v0: at, v1: y1 });
+    }
+    return out;
+  }
+
+  /* THE SPILL (2026-11-23). Astra: "the glow should spill out into the
+   * hallway in straight lines from where it starts." The core's light goes
+   * out through the window (and a tunnel's port) in straight lines, so what
+   * it lights in the room beyond is the wedge from the core through the
+   * opening's four edges: on the floor, the far and side walls and the
+   * ceiling, a patch with straight edges, cut round the doorways. Each
+   * patch is kept here as a polygon on its surface (navalMesh finds them,
+   * with the surface's own colour); reactorGlowMesh tints it by the
+   * reactor's power. Lit like the surface it lies on, not self-lit, so at
+   * no power it is that surface exactly and never shows an edge. */
+  function clipPoly(poly, n, d) {
+    var out = [];
+    for (var i = 0; i < poly.length; i++) {
+      var a = poly[i], b = poly[(i + 1) % poly.length];
+      var da = n[0] * a[0] + n[1] * a[1] + n[2] * a[2] + d, db = n[0] * b[0] + n[1] * b[1] + n[2] * b[2] + d;
+      if (da >= 0) out.push(a);
+      if ((da >= 0) !== (db >= 0)) {
+        var t = da / (da - db);
+        out.push([a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]);
+      }
+    }
+    return out;
+  }
+  function sub3(a, b) { return [a[0] - b[0], a[1] - b[1], a[2] - b[2]]; }
+  function cross3(a, b) { return [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]; }
+  function dot3(a, b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+  /* The light from S through the opening `ap` (four corners, in order
+   * round it, and N, its normal into the room) landing on the room's
+   * surfaces: [{ pts, base }]. `surfs`: [{ poly, base }], each a convex
+   * polygon on a surface of the room, already off it by a few millimetres. */
+  function spillOnto(S, ap, N, surfs) {
+    var ac = [0, 1, 2].map(function (k) { return (ap[0][k] + ap[1][k] + ap[2][k] + ap[3][k]) / 4; });
+    var planes = [];
+    for (var i = 0; i < 4; i++) {
+      var n = cross3(sub3(ap[i], S), sub3(ap[(i + 1) % 4], S));
+      if (dot3(n, sub3(ac, S)) < 0) n = [-n[0], -n[1], -n[2]];
+      planes.push([n, -dot3(n, S)]);
+    }
+    planes.push([N, -dot3(N, ac) - 0.01]);           // beyond the opening
+    var out = [];
+    surfs.forEach(function (s) {
+      var poly = s.poly;
+      for (var j = 0; j < planes.length && poly.length >= 3; j++) poly = clipPoly(poly, planes[j][0], planes[j][1]);
+      if (poly.length >= 3) out.push({ pts: poly, base: s.base, ac: ac });
+    });
+    return out;
+  }
+  /* Where a reactor's tank, core and window are, in the plan's metres. The
+   * tank stands on the reactor room's floor against its forward wall (the
+   * bulkhead the window is in), across the window and the core, and back
+   * past the core by her water jacket. */
+  function reactorTank(p, rx) {
+    var rr = p.rooms.filter(function (q) { return q.id === rx.room; })[0];
+    if (!rr || !rx.window) return null;
+    var ctl = p.rooms.filter(function (q) { return q.id === rx.control; })[0];
+    var fy = deckFy(p, rr.deck), c = rx.core, w = rx.window;
+    var hx = rx.axis === 'h' ? c.len / 2 : c.r, hy = rx.axis === 'h' ? c.r : c.len / 2, hz = c.r;
+    /* Her core stands on a support plate, water under it as round it,
+     * centred on the window so the whole of her is in sight over the
+     * control panel; never closer than 30 cm to the floor, nor so high
+     * her rods' drives would leave the lid no room. */
+    var yc = Math.max(fy + hy + 0.3, Math.min((w.y0 + w.y1) / 2, fy + rr.y1 - 0.45 - hy));
+    var F = tankFoot(rr, rx), x0 = F.x0, x1 = F.x1, zb = F.zb, z0 = F.z0;
+    var y1 = Math.min(fy + rr.y1 - 0.1, Math.max(w.y1, yc + hy) + 0.35);
+    return { fy: fy, roomH: rr.y1, x0: x0, x1: x1, y0: fy, y1: y1, z0: z0, zb: zb,
+             zc: ctl ? ctl.z0 : w.z + (w.z - zb),
+             core: { x: c.x, y: yc, z: Math.min(c.z, zb - hz - 0.5), hx: hx, hy: hy, hz: hz } };
+  }
+
+  /* A reactor tank's footprint in her room ({x0, x1, z0, zb}): against the
+   * forward bulkhead (zb, the window's), across the window and the core,
+   * back past the core by her jacket; to the tunnel's wall where a tunnel's
+   * port is in her side. reactorTank draws it; the walk is kept out of it
+   * (the 'core' items, navalize and the flat). */
+  function tankFoot(rr, rx) {
+    var c = rx.core, w = rx.window;
+    var hx = rx.axis === 'h' ? c.len / 2 : c.r, hz = c.r;
+    var x0 = Math.max(rr.x0 + 0.02, Math.min(w.x0 - 0.15, c.x - hx - 0.45));
+    var x1 = rx.port ? rr.x1 : Math.min(rr.x1 - 0.02, Math.max(w.x1 + 0.15, c.x + hx + 0.45));
+    var zb = rr.z1, z0 = Math.max(rr.z0 + 0.3, Math.min(c.z - hz - (rx.jacket || 1.2), zb - 1.2));
+    return { x0: x0, x1: x1, z0: z0, zb: zb };
+  }
+  /* Where a reactor's control rods go in: a square lattice about 45 cm
+   * apart across the whole face they enter by (lying down, her forward
+   * face, x by y; standing, her head, x by z), centred on the core and
+   * reaching to within an eighth of her edges, so the rods' pull on the
+   * neutrons is even across her. At least 2 by 2, at most 7 by 7.
+   * { face, cols, rows, at: [{ i, j, x, y, z }] }. */
+  var ROD_PITCH = 0.45;
+  function reactorRods(p, rx, T) {
+    T = T || reactorTank(p, rx);
+    var c = T.core, fwd = rx.rods && rx.rods.face === 'fwd';
+    var hu = c.hx, hv = fwd ? c.hy : c.hz;
+    var nOf = function (h) { return Math.max(2, Math.min(7, Math.ceil(2 * h * 0.75 / ROD_PITCH - 1e-9) + 1)); };
+    var cols = nOf(hu), rows = nOf(hv), at = [];
+    for (var j = 0; j < rows; j++) for (var i = 0; i < cols; i++) {
+      var u = c.x + (i / (cols - 1) - 0.5) * 2 * hu * 0.75, v = (j / (rows - 1) - 0.5) * 2 * hv * 0.75;
+      at.push(fwd ? { i: i, j: j, x: u, y: c.y + v, z: c.z + c.hz }
+                  : { i: i, j: j, x: u, y: c.y + c.hy, z: c.z + v });
+    }
+    return { face: fwd ? 'fwd' : 'top', cols: cols, rows: rows, at: at };
+  }
+
+  /* THE GLOW (2026-11-23). The water in a reactor's tank and her core,
+   * lit by the core's Cherenkov light at `level` (0 cold, 1 full power):
+   * the faces seen through the glass, each split into a fine grid so the
+   * light can fall off across it (per-vertex colour, `vcol`, which gl.js
+   * draws; the 2D path takes each face's own colour). Brightest at the
+   * core, a deep blue by the tank's walls, near black when she is cold.
+   * Self-lit throughout: the water's light is its own. One mesh per level,
+   * made when first wanted (render.js queueCockpitRoom). */
+  var GLOW_COLD = [0.02, 0.05, 0.08], GLOW_BLUE = [0.16, 0.52, 1.0], GLOW_HOT = [0.80, 0.94, 1.0];
+  /* How strongly the spill tints what it falls on (before the room's own
+   * shading, which darkens it as it does the surface). */
+  var SPILL_K = 1.6;
+  /* By the square root of her power, as an eye takes light: an afterglow of
+   * a few percent is a faint blue, not black. And spread far enough that a
+   * Capital's three-metre window is lit water, not grey. */
+  function glowColour(level, d) {
+    var I = Math.sqrt(level) * (0.3 + 0.7 * Math.exp(-d / 1.4));
+    var k = Math.min(1, I * 1.5), hot = Math.max(0, I - 0.55) / 0.45;
+    return [0, 1, 2].map(function (i) {
+      var c = GLOW_COLD[i] + (GLOW_BLUE[i] - GLOW_COLD[i]) * k;
+      return Math.min(1, c + (GLOW_HOT[i] - c) * hot);
+    });
+  }
+  function hex3(c) {
+    return '#' + c.map(function (u) { var h = Math.round(Math.max(0, Math.min(1, u)) * 255).toString(16); return h.length < 2 ? '0' + h : h; }).join('');
+  }
+  function reactorGlowMesh(p, level) {
+    var m = mesh();
+    m.vcol = [];
+    level = Math.max(0, Math.min(1, level || 0));
+    ((p.naval && p.naval.reactors) || []).forEach(function (rx) {
+      var T = reactorTank(p, rx);
+      if (!T) return;
+      var c = T.core;
+      function dist(q) {
+        var dx = Math.max(0, Math.abs(q[0] - c.x) - c.hx), dy = Math.max(0, Math.abs(q[1] - c.y) - c.hy), dz = Math.max(0, Math.abs(q[2] - c.z) - c.hz);
+        return Math.sqrt(dx * dx + dy * dy + dz * dz);
+      }
+      /* A face of the water, a grid of cells about 20 cm across. */
+      function sheet(o, U, V, nu, nv, skip) {
+        for (var i = 0; i < nu; i++) for (var j = 0; j < nv; j++) {
+          var P = function (a, b) { return [o[0] + U[0] * a + V[0] * b, o[1] + U[1] * a + V[1] * b, o[2] + U[2] * a + V[2] * b]; };
+          if (skip && skip(P((i + 0.5) / nu, (j + 0.5) / nv))) continue;
+          var q = [P(i / nu, j / nv), P((i + 1) / nu, j / nv), P((i + 1) / nu, (j + 1) / nv), P(i / nu, (j + 1) / nv)];
+          var cols = q.map(function (v) { return glowColour(level, dist(v)); });
+          var mid = [0, 1, 2].map(function (k) { return (cols[0][k] + cols[1][k] + cols[2][k] + cols[3][k]) / 4; });
+          var n0 = m.v.length;
+          q.forEach(function (v, k) { m.v.push(v); m.vcol.push(cols[k]); });
+          m.f.push([n0, n0 + 1, n0 + 2], [n0, n0 + 2, n0 + 3]);
+          m.c.push('!' + hex3(mid), '!' + hex3(mid));
+        }
+      }
+      var e = 0.05, x0 = T.x0 + e, x1 = T.x1 - e, y0 = T.y0 + e, y1 = T.y1 - e, z0 = T.z0 + e, z1 = T.zb - 0.005;
+      var nx = Math.max(2, Math.ceil((x1 - x0) / 0.2)), ny = Math.max(2, Math.ceil((y1 - y0) / 0.2)), nz = Math.max(2, Math.ceil((z1 - z0) / 0.2));
+      sheet([x0, y0, z0], [x1 - x0, 0, 0], [0, y1 - y0, 0], nx, ny);          // the back of the tank
+      sheet([x0, y0, z0], [0, 0, z1 - z0], [0, y1 - y0, 0], nz, ny);          // her sides
+      /* A flat face of the water across x (ax 'z': a is x) or across z (ax
+       * 'x': a is z), b up; with a hole (a window, a port) cut out on its
+       * own edges, as up to four sheets round it. */
+      function plane(ax, val, a0, a1, b0, b1) {
+        if (a1 - a0 < 0.01 || b1 - b0 < 0.01) return;
+        var o = ax === 'x' ? [val, b0, a0] : [a0, b0, val], U = ax === 'x' ? [0, 0, a1 - a0] : [a1 - a0, 0, 0];
+        sheet(o, U, [0, b1 - b0, 0], Math.max(1, Math.ceil((a1 - a0) / 0.2)), Math.max(1, Math.ceil((b1 - b0) / 0.2)));
+      }
+      function holed(ax, val, a0, a1, b0, b1, h) {
+        if (!h) return plane(ax, val, a0, a1, b0, b1);
+        var ha0 = Math.max(a0, h.a0), ha1 = Math.min(a1, h.a1), hb0 = Math.max(b0, h.b0), hb1 = Math.min(b1, h.b1);
+        plane(ax, val, a0, ha0, b0, b1); plane(ax, val, ha1, a1, b0, b1);
+        plane(ax, val, ha0, ha1, b0, hb0); plane(ax, val, ha0, ha1, hb1, b1);
+      }
+      /* Her starboard side, open where the tunnel's port looks in; and her
+       * front against the bulkhead, open where the window does (from the
+       * port, the water reaches the glass, not a dark wall). */
+      var pt = rx.port, wn = rx.window;
+      holed('x', x1, z0, z1, y0, y1, pt && { a0: pt.z0, a1: pt.z1, b0: pt.y0, b1: pt.y1 });
+      holed('z', T.zb - 0.01, x0, x1, y0, y1, { a0: wn.x0, a1: wn.x1, b0: wn.y0, b1: wn.y1 });
+      sheet([x0, y0, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // the floor
+      sheet([x0, y1, z0], [x1 - x0, 0, 0], [0, 0, z1 - z0], nx, nz);          // and the water's surface
+      /* Her liner (Astra: "the pit there would have more than flat matte
+       * walls"): stainless plates a metre square, their welds dark lines
+       * on the lit steel, on her back, her sides and her floor; not across
+       * the window or a port. */
+      function seam(a, b, c, d) {
+        var n0 = m.v.length, q = [a, b, c, d];
+        var cols = q.map(function (v) { return glowColour(level, dist(v)).map(function (u) { return u * 0.45; }); });
+        var mid = [0, 1, 2].map(function (k) { return (cols[0][k] + cols[1][k] + cols[2][k] + cols[3][k]) / 4; });
+        q.forEach(function (v, k) { m.v.push(v); m.vcol.push(cols[k]); });
+        m.f.push([n0, n0 + 1, n0 + 2], [n0, n0 + 2, n0 + 3]);
+        m.c.push('!' + hex3(mid), '!' + hex3(mid));
+      }
+      /* Welds on a face: across it (ax 'x': a along z; 'z': a along x;
+       * 'y': a along x, b along z) at whole metres, split round a hole. */
+      function welds(ax, val, a0, a1, b0, b1, hole) {
+        var W = 0.012, P = function (a, b) {
+          return ax === 'x' ? [val, b, a] : ax === 'z' ? [a, b, val] : [a, val, b];
+        };
+        var runs = function (lo, hi, hlo, hhi, cutIt) {
+          return cutIt && hhi > lo && hlo < hi ? [[lo, Math.max(lo, hlo)], [Math.min(hi, hhi), hi]] : [[lo, hi]];
+        };
+        for (var u = Math.ceil(a0 + 0.3); u < a1 - 0.3; u += 1.0) {
+          var inA = hole && u > hole.a0 && u < hole.a1;
+          runs(b0, b1, hole ? hole.b0 : 0, hole ? hole.b1 : 0, inA).forEach(function (r2) {
+            if (r2[1] - r2[0] > 0.05) seam(P(u - W, r2[0]), P(u + W, r2[0]), P(u + W, r2[1]), P(u - W, r2[1]));
+          });
+        }
+        for (var v = Math.ceil(b0 + 0.3); v < b1 - 0.3; v += 1.0) {
+          var inB = hole && v > hole.b0 && v < hole.b1;
+          runs(a0, a1, hole ? hole.a0 : 0, hole ? hole.a1 : 0, inB).forEach(function (r2) {
+            if (r2[1] - r2[0] > 0.05) seam(P(r2[0], v - W), P(r2[1], v - W), P(r2[1], v + W), P(r2[0], v + W));
+          });
+        }
+      }
+      var so = 0.008;
+      welds('z', z0 + so, x0, x1, y0, y1, null);                                   // her back
+      welds('x', x0 + so, z0, z1, y0, y1, null);                                   // her sides
+      welds('x', x1 - so, z0, z1, y0, y1, pt && { a0: pt.z0, a1: pt.z1, b0: pt.y0, b1: pt.y1 });
+      welds('y', y0 + so, x0, x1, z0, z1, null);                                   // her floor
+      /* The core: white-blue at power, a dull slate when she is cold. */
+      var coreCol = '!' + hex3([0, 1, 2].map(function (k) { return 0.22 + (GLOW_HOT[k] + 0.12 - 0.22) * Math.sqrt(level); }));
+      var b0 = m.f.length;
+      box(m, c.x - c.hx, c.y - c.hy, c.z - c.hz, c.x + c.hx, c.y + c.hy, c.z + c.hz, coreCol);
+      var rgbC = coreCol.slice(2).match(/../g).map(function (h) { return parseInt(h, 16) / 255; });
+      while (m.vcol.length < m.v.length) m.vcol.push(rgbC);
+    });
+    /* The spill (spillOnto): each patch its surface's own colour, tinted
+     * blue by the reactor's light, strongest by the opening and falling off
+     * with the distance from it. Lit as the surface is (no '!'), so at no
+     * power it is the surface. */
+    (p.naval && p.naval.spill || []).forEach(function (s) {
+      var bh = String(s.base).replace(/^[^#]*/, ''), base = [1, 3, 5].map(function (i) { return parseInt(bh.substr(i, 2), 16) / 255; });
+      var n0 = m.v.length;
+      s.pts.forEach(function (v) {
+        var dx = v[0] - s.ac[0], dy = v[1] - s.ac[1], dz = v[2] - s.ac[2], d = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        var I = Math.sqrt(level) * SPILL_K / (1 + (d / 2.5) * (d / 2.5));
+        m.v.push(v);
+        m.vcol.push([0, 1, 2].map(function (k) { return Math.min(1, base[k] + GLOW_BLUE[k] * I); }));
+      });
+      for (var i = 1; i + 1 < s.pts.length; i++) { m.f.push([n0, n0 + i, n0 + i + 1]); m.c.push(bh); }
+    });
+    return m;
+  }
+  /* The leaves of the naval doors, each at its own doorway. */
+  function navalLeaves(pal, p, fy0) {
+    var lv = {};
+    p.doors.forEach(function (d) {
+      if (!d.naval || d.arch || !d.wall) return;
+      var mid = (d.wall[0] + d.wall[1]) / 2, out = [];
+      [-1, 1].forEach(function (s) {
+        var m = mesh();
+        if (d.axis === 'x') {
+          var z0 = s < 0 ? d.zc - DOOR_HW : d.zc, z1 = s < 0 ? d.zc : d.zc + DOOR_HW;
+          box(m, mid - LEAF_T / 2, fy0 + 0.005, z0, mid + LEAF_T / 2, fy0 + DOOR_H - 0.01, z1, d.fit === 'Z' ? pal.hazardDark : pal.leaf);
+        } else {
+          var x0 = s < 0 ? d.xc - DOOR_HW : d.xc, x1 = s < 0 ? d.xc : d.xc + DOOR_HW;
+          box(m, x0, fy0 + 0.005, mid - LEAF_T / 2, x1, fy0 + DOOR_H - 0.01, mid + LEAF_T / 2, d.fit === 'Z' ? pal.hazardDark : pal.leaf);
+        }
+        out.push(m);
+      });
+      lv[d.id] = out;
+    });
+    return lv;
+  }
+
   var FIT_MIN_W = { quarters: BUNK_W + 0.9, turret: 1.5, medbay: 2.0, engine: 2.4, airlock: 0 };
   var FIT_MIN_CARGO_HW = 1.4, FIT_MIN_CARGO_L = 2.6, FIT_MIN_SPINE = 4;
   var FIT_DROP = { turret: 1, engine: 1, medbay: 1, quarters: 1, cargo: 1 };
@@ -1090,7 +2297,8 @@
   function fitRooms(p) {
     var out = [];
     (p.decks ? Object.keys(p.decks).map(function (k) { return p.decks[k]; }) : [p]).forEach(function (dp) {
-      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
+      /* The naval decks fit themselves (navalize: shrink, then drop). */
+      dp.rooms.forEach(function (r) { if (r.kind !== 'cockpit' && (r.kind !== 'naval' || r.blockRoom) && r.walk !== false) out.push({ r: r, fy: dp.floorY }); });
     });
     return out;
   }
@@ -1105,12 +2313,30 @@
       p = plan(geom, o);
       var bad = null;
       fitRooms(p).some(function (e) {
-        if (misfit.indexOf(e.r.kind) >= 0) return false;
+        if (misfit.indexOf(e.r.blockRoom ? e.r.id : e.r.kind) >= 0) return false;
         if (roomInside(fit, e.r, e.fy, e.r.x0, e.r.x1, e.r.z0, e.r.z1)) return false;
         bad = e; return true;
       });
       if (!bad) break;
       var r = bad.r, kind = r.kind, done = false;
+      /* THE REACTOR BLOCK (BLOCK_HULLS): its compartment narrower from her
+       * outboard side, down to what the glass and the reactor door need;
+       * the side passage the same, down to a body's width; the avionics
+       * bay from its port side. They are never left out: what is still
+       * outside her after that is reported (misfit). */
+      if (r.blockRoom) {
+        var bk = r.sub === 'reactorctl' || r.sub === 'reactor' ? 'engine' : r.id === 'bk-side' ? 'blockSide' : r.id === 'bk-bay' ? 'blockBay' : null;
+        if (bk) {
+          var fromX1 = bk !== 'blockBay', w2 = r.x1 - r.x0, bw = 0, minW = BLOCK_MIN_W[bk];
+          for (var t2 = w2 - 0.1; t2 >= minW - 1e-9; t2 -= 0.1) {
+            var a2 = fromX1 ? r.x0 : r.x1 - t2, b2 = fromX1 ? r.x0 + t2 : r.x1;
+            if (roomInside(fit, r, bad.fy, a2 - (fromX1 ? 0 : FIT_MARGIN), b2 + (fromX1 ? FIT_MARGIN : 0), r.z0, r.z1)) { bw = t2; break; }
+          }
+          if (bw) { o.roomW[bk] = bw; done = true; }
+        }
+        if (!done) misfit.push(r.id);
+        continue;
+      }
       /* A side room: as wide as she allows from the passage wall out. */
       if (r.side && FIT_MIN_W[kind] !== undefined) {
         var inb = r.side < 0 ? r.x1 : r.x0, w = r.x1 - r.x0, best = 0;
@@ -1158,6 +2384,19 @@
       if (!done) misfit.push(kind);
     }
     p.fitted = { omitted: Object.keys(o.omit), narrowed: o.roomW, shortened: o.roomL, lowered: o.roomH, misfit: misfit };
+    /* The reactor block's layout B is longer by the avionics bay: where that
+     * would cost her a room (or leave one outside her), she is laid out as
+     * A. Never the other way: A is the shorter. */
+    if (p.block === 'B' && !opts.noFallback && (p.fitted.omitted.length || p.fitted.misfit.length)) {
+      var oa = {};
+      for (var ka in opts) oa[ka] = opts[ka];
+      oa.blockVariant = 'A'; oa.noFallback = true;
+      var pa = planFitted(geom, oa);
+      if (pa.fitted.omitted.length + pa.fitted.misfit.length < p.fitted.omitted.length + p.fitted.misfit.length) {
+        pa.fitted.blockFrom = 'B';
+        return pa;
+      }
+    }
     return p;
   }
 
@@ -1176,7 +2415,7 @@
       if (!d.slide) continue;
       /* The middle of the doorway: on a fore-and-aft wall, the middle of
        * its thickness at x = 0; on a side wall, the same across x at its zc. */
-      var cx = d.axis === 'x' ? (d.wall[0] + d.wall[1]) / 2 : 0;
+      var cx = d.axis === 'x' ? (d.wall[0] + d.wall[1]) / 2 : (d.xc !== undefined ? d.xc : 0);
       var cz = d.axis === 'x' ? d.zc : (d.wall ? (d.wall[0] + d.wall[1]) / 2 : d.at);
       var near = w ? Math.hypot(w.x - cx, w.z - cz) < DOOR_REACH : false;
       /* A sealing door (the airlock's inner one) held by airlock.js stays
@@ -1542,7 +2781,45 @@
      * (below), on a raised cockpit (RAISED) the deck the stair comes down
      * to. Built at the cockpit's floor height like every leaf is. */
     var shipRoom = room, shipPortals = portals, dyMain = 0, rs = p.raised;
-    if (dH && deck) {
+    /* A wall of constant z from x0 to x1, a doorway through it at each xc. */
+    function zWall(m2, x0, x1, z, y0, y1, xcs, col) {
+      var at = x0, dh = y0 + DOOR_H;
+      xcs.slice().sort(function (a, b) { return a - b; }).forEach(function (xc) {
+        var a = xc - DOOR_HW, b = xc + DOOR_HW;
+        if (a > at) quad(m2, [at, y0, z], [a, y0, z], [a, y1, z], [at, y1, z], col);
+        if (y1 > dh) quad(m2, [a, dh, z], [b, dh, z], [b, y1, z], [a, y1, z], col);
+        at = b;
+      });
+      if (x1 > at) quad(m2, [at, y0, z], [x1, y0, z], [x1, y1, z], [at, y1, z], col);
+    }
+    if (p.block && dH && deck) {
+      /* THE REACTOR BLOCK'S BRIDGE (BLOCK_HULLS): the helm's bulkhead as
+       * ever; a raised cockpit's stair just aft of it, down to the deck; the
+       * bridge deck on the deck, its aft wall solid (A) or with the door
+       * through it (B), its starboard wall with the door through it (A). */
+      bulkhead(room, pal, fy, dH.wall[1], g.sideX, cy, dH.wall[0], g.sideX, cy, true, [pal.bulk, pal.wall]);
+      if (rs) {
+        stairMesh(room, pal, g, fy, cy, rs);
+        if (rs.rise > 0) {
+          var ySoff = fy - rs.rise + (cy - fy);
+          quad(room, [-g.sideX, ySoff, rs.doorZ], [g.sideX, ySoff, rs.doorZ], [g.sideX, cy, rs.doorZ], [-g.sideX, cy, rs.doorZ], pal.wall);
+        }
+        dyMain = -rs.rise;
+        room = mesh(); portals = mesh();
+      }
+      var bz1 = rs ? rs.doorZ : deck.z1;
+      quad(room, [deck.x0, fy, deck.z0], [deck.x1, fy, deck.z0], [deck.x1, fy, bz1], [deck.x0, fy, bz1], pal.floor);
+      quad(room, [deck.x0, cy, deck.z0], [deck.x1, cy, deck.z0], [deck.x1, cy, bz1], [deck.x0, cy, bz1], pal.ceil);
+      quad(room, [deck.x0, fy, deck.z0], [deck.x0, fy, bz1], [deck.x0, cy, bz1], [deck.x0, cy, deck.z0], pal.wall);
+      if (dB.axis === 'x') wallDoors(room, deck.x1, deck.z0, bz1, fy, cy, [dB.zc], pal.wall);
+      else quad(room, [deck.x1, fy, deck.z0], [deck.x1, fy, bz1], [deck.x1, cy, bz1], [deck.x1, cy, deck.z0], pal.wall);
+      zWall(room, deck.x0, deck.x1, deck.z0, fy, cy, dB.axis === 'z' ? [dB.xc] : [], pal.bulk);
+      [-1, 1].forEach(function (s) {
+        var x0 = s * 0.50 * k, x1 = s * 0.56 * k, y = cy - 0.006;
+        lightRun(room, [x0, y, deck.z0 + 0.25], [x1, y, deck.z0 + 0.25], [x1, y, bz1 - 0.25], [x0, y, bz1 - 0.25], pal.light, pal.ceil);
+      });
+      p.stations.forEach(function (st) { if (!st.cockpit) station(room, pal, fy, g.sideX, st); });
+    } else if (dH && deck) {
       /* The helm's bulkhead stays where the seat has always had it, rear
        * screens and all, with the doorway open as an arch; the bridge deck
        * is through it, and the sliding door at the deck's aft end. */
@@ -1585,7 +2862,7 @@
      * down to the main deck at the end. Door leaves are moved there by
      * their door's `yOff` (render.js), so they are built here at the
      * bridge's height like every other leaf. */
-    if (p.decks) {
+    if (p.decks && p.carZ) {
       var lob = roomByKind(p, 'lobby'), dLB = doorById(p, 'lift-bridge');
       boxRoom(room, lob.x0, fy, lob.z0, lob.x1, fy + PASSAGE_H, lob.z1, pal.passWall, pal.passFloor, pal.ceil, ['z0', 'z1']);
       lightRun(room, [-0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3], [0.06, fy + PASSAGE_H - 0.01, lob.z0 + 0.3],
@@ -1611,13 +2888,15 @@
     var ps = p.rooms[1];
     /* Every door through the passage's side walls: the quarters' and the
      * turret's to port, the medbay's and the engine room's to starboard. */
-    var sideDoors = p.doors.filter(function (d) { return d.axis === 'x'; });
+    /* Her own deck's side doors (the naval decks' are navalMesh's). */
+    var sideDoors = p.doors.filter(function (d) { return d.axis === 'x' && !d.naval; });
     var portZ = sideDoors.filter(function (d) { return d.wall[1] <= 0; }).map(function (d) { return d.zc; });
     var stbdZ = sideDoors.filter(function (d) { return d.wall[0] >= 0; }).map(function (d) { return d.zc; });
     var skipP = dC ? ['z0', 'z1'] : ['z1'];
     if (portZ.length) skipP.push('x0');
     if (stbdZ.length) skipP.push('x1');
     boxRoom(room, ps.x0, fy, ps.z0, ps.x1, fy + PASSAGE_H, ps.z1, pal.passWall, pal.passFloor, pal.ceil, skipP);
+    if (p.block) zWall(room, ps.x0, ps.x1, ps.z1, fy, fy + PASSAGE_H, [0], pal.passWall);
     /* Each side wall with its doorways through it, into walls as thick as
      * a bulkhead; the rooms behind them are built below. */
     if (portZ.length) wallDoors(room, -PASSAGE_HW, ps.z0, ps.z1, fy, fy + PASSAGE_H, portZ, pal.passWall);
@@ -1685,6 +2964,13 @@
     /* THE QUARTERS, and the leaves of their door, which slide fore and
      * aft into the passage wall. */
     if (dQ && qr) quartersMesh(room, pal, fy, qr, dQ, p);
+    if (p.block) p.items.forEach(function (it) {
+      if (it.kind !== 'medcab') return;
+      var c2 = it.counter;
+      box(room, c2[0], fy, c2[1], c2[2], fy + 1.9, c2[3], MEDCOL.cab);
+      quad(room, [c2[0] + 0.05, fy + 1.55, c2[1] - 0.004], [c2[2] - 0.05, fy + 1.55, c2[1] - 0.004],
+           [c2[2] - 0.05, fy + 1.62, c2[1] - 0.004], [c2[0] + 0.05, fy + 1.62, c2[1] - 0.004], MEDCOL.lit);
+    });
     /* Every side door's leaves, sliding fore and aft into the wall. */
     function sideLeaves(d) {
       var xm = (d.wall[0] + d.wall[1]) / 2;
@@ -1743,13 +3029,14 @@
     /* The main deck goes down to where it is, and the decks below it are
      * built in place. */
     var car = null, tramCar = null;
-    if (p.decks) {
+    if (p.decks && p.carZ) {
       merge(shipRoom, room, dyMain);
       merge(shipPortals, portals, dyMain);
       [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
       room = shipRoom; portals = shipPortals;
-      junctionMesh(room, pal, p);
+      if (p.deckY.junction !== undefined) junctionMesh(room, pal, p);
       if (p.deckY.hangar !== undefined) hangarMesh(room, pal, p);
+      if (p.naval) navalMesh(room, pal, p);
       car = carMesh(pal, p);
       tramCar = tramMesh(pal);
     } else if (rs) {
@@ -1758,15 +3045,18 @@
       [lampOk, lampNo].forEach(function (lm) { lm.v = lm.v.map(function (v) { return [v[0], v[1] + dyMain, v[2]]; }); });
       room = shipRoom; portals = shipPortals;
     }
+    /* An engineering flat with no lift (the L hulls), built in place. */
+    if (p.naval && !p.carZ) navalMesh(room, pal, p);
 
     return {
       room: room, portals: portals, seat: seat, lampOk: lampOk, lampNo: lampNo,
       car: car, tram: tramCar, lampDy: dyMain,
       fittings: fittings.f.length ? fittings : null,
       leaves: (function () {
-        var lv = { bridge: leaves(dB.wall[0], dB.wall[1]) };
+        var lv = dB.naval ? {} : { bridge: leaves(dB.wall[0], dB.wall[1]) };
         if (dC) lv.cargo = leaves(dC.wall[0], dC.wall[1]);
         sideDoors.forEach(function (d) { lv[d.id] = sideLeaves(d); });
+        if (p.naval) { var nl = navalLeaves(pal, p, fy); for (var nk in nl) lv[nk] = nl[nk]; }
         return lv;
       })()
     };
@@ -1836,6 +3126,11 @@
     if (!rs || (p.deck && p.deck !== 'main')) return 0;
     var r = roomByKind(p, 'cockpit'), bd = roomByKind(p, 'bridgedeck');
     var inR = function (q) { return q && x >= q.x0 && x <= q.x1 && z >= q.z0 && z <= q.z1; };
+    /* The helm's doorway, between the bridge deck's forward wall and the
+     * cockpit's aft one, is at the cockpit's floor when the stair is aft of
+     * it in the bridge deck (the reactor block's). */
+    var inGap = rs.block && r && bd && x >= Math.max(r.x0, bd.x0) && x <= Math.min(r.x1, bd.x1) && z > bd.z1 && z < r.z0;
+    if (inGap) return rs.rise;
     if (z < rs.doorZ || !(inR(r) || inR(bd))) return 0;
     if (z >= rs.stepZ) return rs.rise;
     if (rs.stepZ - rs.doorZ < 0.2) return rs.rise;
@@ -2711,10 +4006,10 @@
     lightRun(m, [-0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z0 + 0.4], [0.4, h - 0.01, z1 - 0.4], [-0.4, h - 0.01, z1 - 0.4], pal.light, pal.ceil);
     /* The button panel, and a lit square per button (the buttons are the
      * `liftbtn` items; this is where they are). */
-    var xp = CAR_HW - 0.004, n = (p.deckOrder || []).length - 1;
-    quad(m, [xp, 1.0, z0 + 0.2], [xp, 1.0, z0 + 0.5 + n * 0.4], [xp, 1.5, z0 + 0.5 + n * 0.4], [xp, 1.5, z0 + 0.2], pal.console);
+    var xp = CAR_HW - 0.004, n = (p.deckOrder || []).length - 1, bs = btnStep(n);
+    quad(m, [xp, 1.0, z0 + 0.2], [xp, 1.0, z0 + 0.5 + (n - 1) * bs], [xp, 1.5, z0 + 0.5 + (n - 1) * bs], [xp, 1.5, z0 + 0.2], pal.console);
     for (var i = 0; i < n; i++) {
-      var zb = z0 + 0.35 + i * 0.4;
+      var zb = z0 + 0.35 + i * bs;
       quad(m, [xp - 0.002, 1.18, zb - 0.07], [xp - 0.002, 1.18, zb + 0.07], [xp - 0.002, 1.32, zb + 0.07], [xp - 0.002, 1.32, zb - 0.07], pal.trim);
     }
     box(m, -CAR_HW + 0.02, 0.9, z0 + 0.2, -CAR_HW + 0.06, 0.95, z1 - 0.2, pal.rib);
@@ -2792,10 +4087,47 @@
     if (skip.indexOf('z1') < 0) quad(m, [x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1], wall);
   }
 
+  /* THE REACTOR'S POWER (2026-11-23), 0..1, for the glow. Ticking over on
+   * her hotel load at a berth; at sea, more with the drive's throttle; and
+   * eased, rods moving at the speed rods move. A SCRAM drops her at once
+   * to the afterglow of her decay heat, about 7 % and fading over minutes
+   * to a faint 1.5 %, until she is restarted, when she comes back up slower
+   * than she runs. Kept on the ship (`reactor`, `_rx`), worked out from
+   * the game's clock `t` (s). */
+  var RX_DOCKED = 0.2, RX_IDLE = 0.3, RX_AFTER = 0.06, RX_AFTER_TAU = 300, RX_FLOOR = 0.015;
+  function reactorPower(ship, t) {
+    if (!ship) return 0;
+    var st = ship._rx || (ship._rx = { p: null, t: t, slow: false });
+    var rs = ship.reactor;
+    if (rs && rs.scramAt !== undefined && rs.scramAt !== null) {
+      var age = Math.max(0, t - rs.scramAt);
+      st.p = RX_FLOOR + RX_AFTER * Math.exp(-age / RX_AFTER_TAU);
+      st.t = t; st.slow = true;
+      return st.p;
+    }
+    var target = ship.docked ? RX_DOCKED : Math.min(1, RX_IDLE + (1 - RX_IDLE) * Math.max(0, ship.throttle || 0));
+    if (st.p === null) { st.p = target; st.t = t; return st.p; }
+    var dt = Math.max(0, Math.min(3600, t - st.t));
+    st.t = t;
+    var tau = target > st.p ? (st.slow ? 20 : 4) : 1.5;
+    st.p += (target - st.p) * (1 - Math.exp(-dt / tau));
+    if (st.slow && Math.abs(target - st.p) < 0.01) st.slow = false;
+    return st.p;
+  }
+  function scramReactor(ship, t) { if (ship) ship.reactor = { scramAt: t }; }
+  function restartReactor(ship, t) {
+    if (!ship) return;
+    ship.reactor = null;
+    if (ship._rx) { ship._rx.t = t; ship._rx.slow = true; }
+  }
+
   var ShipDeck = {
     DOOR_HW: DOOR_HW, DOOR_H: DOOR_H, WALL_T: WALL_T, PASSAGE_LEN: PASSAGE_LEN,
     LOCK_HW: LOCK_HW, DOOR_REACH: DOOR_REACH, DOOR_TIME: DOOR_TIME, SEAT: SEAT,
-    PALETTES: PALETTES, SYNDICATE: SYNDICATE, NAVY: NAVY,
+    reactorGlowMesh: reactorGlowMesh, reactorPower: reactorPower, scramReactor: scramReactor, restartReactor: restartReactor,
+    reactorTank: reactorTank,
+    reactorRods: reactorRods,
+    PALETTES: PALETTES, FLAT_HULLS: FLAT_HULLS, BLOCK_HULLS: BLOCK_HULLS, blockVariant: blockVariant, SYNDICATE: SYNDICATE, NAVY: NAVY,
     CRATE_STACK: CRATE_STACK, CRATE_SCALE: CRATE_SCALE,
     paletteFor: paletteFor, plan: plan, planFitted: planFitted, updateDoors: updateDoors, leafTravel: leafTravel,
     meshes: meshes, frame: frame,
